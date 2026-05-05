@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use futures::future::join_all;
@@ -14,7 +14,8 @@ use tokio::sync::Semaphore;
 use crate::config::{ExecToolConfig, WebSearchConfig};
 use crate::cron::CronService;
 use crate::engine::{
-    ContextBuilder, MemoryConsolidator, MemoryEntry, MemoryEntryKind, SkillsLoader, SubagentManager,
+    CompletedSubagentResult, ContextBuilder, MemoryConsolidator, MemoryEntry, MemoryEntryKind,
+    SkillsLoader, SubagentManager,
 };
 use crate::integrations::mcp::register_mcp_tools;
 use crate::providers::{LlmResponse, ProviderModelInfo, SharedProvider, TextStreamCallback};
@@ -23,7 +24,8 @@ use crate::storage::{
 };
 use crate::tools::{
     CronTool, EditFileTool, ExecTool, ListDirTool, MessageSendCallback, MessageTool, ReadFileTool,
-    SpawnTool, ToolOutput, ToolRegistry, WebFetchTool, WebSearchTool, WriteFileTool,
+    SpawnTool, ToolOutput, ToolRegistry, WaitSubagentsTool, WebFetchTool, WebSearchTool,
+    WriteFileTool,
 };
 use crate::util::build_status_content;
 
@@ -36,6 +38,7 @@ const NANOBOT_STYLE_HELP: &str = "Available commands:\n\
   /stop     - Cancel current processing\n\
   /model    - Switch model (e.g. /model gpt-4.1)\n\
   /memorize - Save important facts to long-term memory";
+const SUBAGENT_WAIT_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentSnapshot {
@@ -64,6 +67,7 @@ pub struct AgentLoop {
     message_tool: Arc<MessageTool>,
     progress_sender: Arc<Mutex<Option<MessageSendCallback>>>,
     spawn_tool: Arc<SpawnTool>,
+    wait_subagents_tool: Arc<WaitSubagentsTool>,
     cron_tool: Option<Arc<CronTool>>,
     start_time: Instant,
     last_usage: Mutex<(usize, usize)>,
@@ -147,6 +151,8 @@ impl AgentLoop {
         tools.register(message_tool.clone());
         let spawn_tool = Arc::new(SpawnTool::new(subagents.clone()));
         tools.register(spawn_tool.clone());
+        let wait_subagents_tool = Arc::new(WaitSubagentsTool::new(subagents.clone()));
+        tools.register(wait_subagents_tool.clone());
         let cron_tool = cron_service.map(|service| Arc::new(CronTool::new(service)));
         if let Some(cron_tool) = &cron_tool {
             tools.register(cron_tool.clone());
@@ -169,6 +175,7 @@ impl AgentLoop {
             message_tool,
             progress_sender: Arc::new(Mutex::new(None)),
             spawn_tool,
+            wait_subagents_tool,
             cron_tool,
             start_time: Instant::now(),
             last_usage: Mutex::new((0, 0)),
@@ -581,7 +588,8 @@ impl AgentLoop {
         );
         self.message_tool.start_turn();
         self.spawn_tool
-            .set_context(&msg.channel, &msg.chat_id, &session_key);
+            .set_context(&msg.channel, &msg.chat_id, &session_key, &msg.metadata);
+        self.wait_subagents_tool.set_context(&session_key);
         if let Some(cron_tool) = &self.cron_tool {
             cron_tool.set_context(&msg.channel, &msg.chat_id);
         }
@@ -676,18 +684,29 @@ impl AgentLoop {
     }
 
     async fn process_system_inbound(&self, msg: InboundMessage) -> Result<Option<OutboundMessage>> {
+        if msg.sender_id == "subagent" {
+            if let Some(task_id) = msg.metadata.get("task_id").and_then(Value::as_str) {
+                if self.subagents.take_consumed_result(task_id) {
+                    return Ok(None);
+                }
+            }
+        }
+
         let (channel, chat_id) = msg
             .chat_id
             .split_once(':')
             .map(|(channel, chat_id)| (channel.to_string(), chat_id.to_string()))
             .unwrap_or_else(|| ("cli".to_string(), msg.chat_id.clone()));
-        let session_key = format!("{channel}:{chat_id}");
         let progress_target = ProgressTarget {
             channel: channel.clone(),
             chat_id: chat_id.clone(),
-            session_key: session_key.clone(),
-            metadata: BTreeMap::new(),
+            session_key: msg
+                .session_key_override
+                .clone()
+                .unwrap_or_else(|| format!("{channel}:{chat_id}")),
+            metadata: msg.metadata.clone(),
         };
+        let session_key = progress_target.session_key.clone();
 
         {
             let mut sessions = self.sessions.lock().expect("session manager lock poisoned");
@@ -701,7 +720,8 @@ impl AgentLoop {
         self.message_tool.set_context(&channel, &chat_id, None);
         self.message_tool.start_turn();
         self.spawn_tool
-            .set_context(&channel, &chat_id, &session_key);
+            .set_context(&channel, &chat_id, &session_key, &msg.metadata);
+        self.wait_subagents_tool.set_context(&session_key);
         let history = {
             let mut sessions = self.sessions.lock().expect("session manager lock poisoned");
             sessions.get_or_create(&session_key)?.get_history(0)
@@ -957,6 +977,25 @@ impl AgentLoop {
                     response.reasoning_content.clone(),
                     response.thinking_blocks.clone(),
                 );
+
+                if session_key.starts_with("cli:") {
+                    let (subagent_results, running, timed_out) = self
+                        .subagents
+                        .wait_for_session_results(session_key, SUBAGENT_WAIT_TIMEOUT)
+                        .await;
+                    if !subagent_results.is_empty() || timed_out {
+                        messages.push(ChatMessage::text(
+                            "user",
+                            format_subagent_results_for_context(
+                                &subagent_results,
+                                running,
+                                timed_out,
+                            ),
+                        ));
+                        continue;
+                    }
+                }
+
                 final_content = content;
                 final_reasoning_content = response.reasoning_content.clone();
                 completed_normally = true;
@@ -1885,6 +1924,31 @@ fn latest_assistant_text(messages: &[ChatMessage]) -> Option<String> {
         .rev()
         .find(|message| message.role == "assistant")
         .and_then(ChatMessage::content_as_text)
+}
+
+fn format_subagent_results_for_context(
+    results: &[CompletedSubagentResult],
+    running: usize,
+    timed_out: bool,
+) -> String {
+    let mut text = String::from(
+        "[Subagent results injected into the main task context]\n\nUse these results to continue the original task.",
+    );
+    if results.is_empty() {
+        text.push_str("\n\nNo completed subagent results were available.");
+    }
+    for result in results {
+        text.push_str(&format!(
+            "\n\n[Subagent '{}' completed]\nTask ID: {}\nTask: {}\nResult:\n{}",
+            result.label, result.task_id, result.task, result.result
+        ));
+    }
+    if timed_out {
+        text.push_str(&format!(
+            "\n\nTimed out waiting for subagents; {running} subagent(s) still running."
+        ));
+    }
+    text
 }
 
 fn truncate_plain(text: &str, max_chars: usize) -> String {

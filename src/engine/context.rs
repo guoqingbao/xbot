@@ -63,17 +63,21 @@ impl ContextBuilder {
         chat_id: Option<&str>,
         current_role: &str,
     ) -> Result<Vec<ChatMessage>> {
-        let runtime_ctx = self.build_runtime_context(channel, chat_id);
         let current_content = self.build_user_content(current_message, media)?;
         let suggested_skills = self.skills.suggest_skills(current_message, 3);
-        let merged = match current_content {
-            Value::String(text) => Value::String(format!("{runtime_ctx}\n\n{text}")),
-            Value::Array(mut blocks) => {
-                let mut merged = vec![json!({"type": "text", "text": runtime_ctx})];
-                merged.append(&mut blocks);
-                Value::Array(merged)
+        let merged = if current_role == "user" {
+            let runtime_ctx = self.build_runtime_context(channel, chat_id);
+            match current_content {
+                Value::String(text) => Value::String(format!("{runtime_ctx}\n\n{text}")),
+                Value::Array(mut blocks) => {
+                    let mut merged = vec![json!({"type": "text", "text": runtime_ctx})];
+                    merged.append(&mut blocks);
+                    Value::Array(merged)
+                }
+                other => other,
             }
-            other => other,
+        } else {
+            current_content
         };
 
         let mut messages = Vec::with_capacity(history.len() + 2);

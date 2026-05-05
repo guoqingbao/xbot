@@ -737,12 +737,17 @@ impl App {
             return;
         }
         let mut continuation = String::new();
-        for (_, label, result) in &results {
+        for (task_id, label, result) in &results {
             if !continuation.is_empty() {
                 continuation.push_str("\n\n---\n\n");
             }
+            let task = self
+                .subagents
+                .get(task_id)
+                .map(|info| info.task.as_str())
+                .unwrap_or("unknown task");
             continuation.push_str(&format!(
-                "[Subagent '{label}' completed]\n\nResult:\n{result}\n\n\
+                "[Subagent '{label}' completed]\n\nTask: {task}\n\nResult:\n{result}\n\n\
                  Continue the task using these results. \
                  Summarize for the user what was accomplished."
             ));

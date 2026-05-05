@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use regex::Regex;
@@ -47,6 +48,14 @@ pub const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 3;
 
 pub type SubagentNotificationCallback = Arc<dyn Fn(SubagentNotification) + Send + Sync>;
 
+#[derive(Debug, Clone)]
+pub struct CompletedSubagentResult {
+    pub task_id: String,
+    pub label: String,
+    pub task: String,
+    pub result: String,
+}
+
 #[derive(Clone)]
 pub struct SubagentManager {
     provider: SharedProvider,
@@ -59,6 +68,9 @@ pub struct SubagentManager {
     restrict_to_workspace: bool,
     running_tasks: Arc<Mutex<BTreeMap<String, tokio::task::JoinHandle<()>>>>,
     session_tasks: Arc<Mutex<BTreeMap<String, HashSet<String>>>>,
+    completed_results: Arc<Mutex<BTreeMap<String, Vec<CompletedSubagentResult>>>>,
+    consumed_results: Arc<Mutex<HashSet<String>>>,
+    result_notify: Arc<tokio::sync::Notify>,
     notification_callback: Arc<Mutex<Option<SubagentNotificationCallback>>>,
     max_concurrent: usize,
 }
@@ -85,6 +97,9 @@ impl SubagentManager {
             restrict_to_workspace,
             running_tasks: Arc::new(Mutex::new(BTreeMap::new())),
             session_tasks: Arc::new(Mutex::new(BTreeMap::new())),
+            completed_results: Arc::new(Mutex::new(BTreeMap::new())),
+            consumed_results: Arc::new(Mutex::new(HashSet::new())),
+            result_notify: Arc::new(tokio::sync::Notify::new()),
             notification_callback: Arc::new(Mutex::new(None)),
             max_concurrent: DEFAULT_MAX_CONCURRENT_SUBAGENTS,
         }
@@ -119,6 +134,7 @@ impl SubagentManager {
         origin_channel: String,
         origin_chat_id: String,
         session_key: Option<String>,
+        origin_metadata: BTreeMap<String, serde_json::Value>,
     ) -> String {
         let current_count = self.get_running_count();
         if current_count >= self.max_concurrent {
@@ -146,6 +162,7 @@ impl SubagentManager {
         let task_id_for_spawn = task_id.clone();
         let display_label_for_spawn = display_label.clone();
         let session_key_for_cleanup = session_key.clone();
+        let session_key_for_result = session_key.clone();
         let task_for_spawn = task.clone();
         let handle = tokio::spawn(async move {
             let _ = manager
@@ -155,6 +172,8 @@ impl SubagentManager {
                     display_label_for_spawn,
                     origin_channel,
                     origin_chat_id,
+                    session_key_for_result,
+                    origin_metadata,
                 )
                 .await;
             manager.cleanup_task(&task_id_for_spawn, session_key_for_cleanup.as_deref());
@@ -210,6 +229,7 @@ impl SubagentManager {
             .lock()
             .expect("subagent session lock poisoned")
             .remove(session_key);
+        self.result_notify.notify_waiters();
         cancelled
     }
 
@@ -224,6 +244,90 @@ impl SubagentManager {
         *self.bus.lock().expect("subagent bus lock poisoned") = bus;
     }
 
+    pub async fn wait_for_session_results(
+        &self,
+        session_key: &str,
+        timeout: Duration,
+    ) -> (Vec<CompletedSubagentResult>, usize, bool) {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let running = self.running_for_session(session_key);
+            if running == 0 {
+                let results = self.take_completed_results(session_key);
+                return (results, 0, false);
+            }
+
+            let now = Instant::now();
+            if now >= deadline {
+                let results = self.take_completed_results(session_key);
+                return (results, running, true);
+            }
+
+            let remaining = deadline.saturating_duration_since(now);
+            let _ = tokio::time::timeout(remaining, self.result_notify.notified()).await;
+        }
+    }
+
+    fn running_for_session(&self, session_key: &str) -> usize {
+        self.session_tasks
+            .lock()
+            .expect("subagent session lock poisoned")
+            .get(session_key)
+            .map(HashSet::len)
+            .unwrap_or(0)
+    }
+
+    fn take_completed_results(&self, session_key: &str) -> Vec<CompletedSubagentResult> {
+        let results = self
+            .completed_results
+            .lock()
+            .expect("subagent results lock poisoned")
+            .remove(session_key)
+            .unwrap_or_default();
+        if !results.is_empty() {
+            let mut consumed = self
+                .consumed_results
+                .lock()
+                .expect("subagent consumed results lock poisoned");
+            for result in &results {
+                consumed.insert(result.task_id.clone());
+            }
+        }
+        results
+    }
+
+    pub fn take_consumed_result(&self, task_id: &str) -> bool {
+        self.consumed_results
+            .lock()
+            .expect("subagent consumed results lock poisoned")
+            .remove(task_id)
+    }
+
+    fn record_completed_result(
+        &self,
+        session_key: Option<&str>,
+        task_id: String,
+        label: String,
+        task: String,
+        result: String,
+    ) {
+        let Some(session_key) = session_key else {
+            return;
+        };
+        self.completed_results
+            .lock()
+            .expect("subagent results lock poisoned")
+            .entry(session_key.to_string())
+            .or_default()
+            .push(CompletedSubagentResult {
+                task_id,
+                label,
+                task,
+                result,
+            });
+        self.result_notify.notify_waiters();
+    }
+
     async fn run_subagent(
         &self,
         task_id: String,
@@ -231,6 +335,8 @@ impl SubagentManager {
         label: String,
         origin_channel: String,
         origin_chat_id: String,
+        origin_session_key: Option<String>,
+        origin_metadata: BTreeMap<String, serde_json::Value>,
     ) -> Result<()> {
         let tools = self.build_tools();
         let think_re = Regex::new(r"(?s)<think>.*?</think>").expect("valid think regex");
@@ -320,6 +426,19 @@ impl SubagentManager {
             result_preview: preview,
             full_result: result.clone(),
         });
+        self.record_completed_result(
+            origin_session_key.as_deref(),
+            task_id.clone(),
+            label.clone(),
+            task.clone(),
+            result.clone(),
+        );
+
+        let mut metadata = origin_metadata;
+        metadata.insert(
+            "task_id".to_string(),
+            serde_json::Value::String(task_id.clone()),
+        );
 
         let bus = self.bus.lock().expect("subagent bus lock poisoned").clone();
         bus
@@ -332,11 +451,8 @@ impl SubagentManager {
                 ),
                 timestamp: chrono::Utc::now(),
                 media: Vec::new(),
-                metadata: BTreeMap::from([(
-                    "task_id".to_string(),
-                    serde_json::Value::String(task_id),
-                )]),
-                session_key_override: None,
+                metadata,
+                session_key_override: origin_session_key,
             })
             .await?;
         Ok(())

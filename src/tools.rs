@@ -1496,7 +1496,7 @@ impl Tool for MessageTool {
 
 #[derive(Clone)]
 pub struct SpawnTool {
-    origin: Arc<Mutex<(String, String, String)>>,
+    origin: Arc<Mutex<(String, String, String, BTreeMap<String, Value>)>>,
     manager: SubagentManager,
 }
 
@@ -1507,18 +1507,109 @@ impl SpawnTool {
                 "cli".to_string(),
                 "direct".to_string(),
                 "cli:direct".to_string(),
+                BTreeMap::new(),
             ))),
             manager,
         }
     }
 
-    pub fn set_context(&self, channel: &str, chat_id: &str, session_key: &str) {
+    pub fn set_context(
+        &self,
+        channel: &str,
+        chat_id: &str,
+        session_key: &str,
+        metadata: &BTreeMap<String, Value>,
+    ) {
         let mut origin = self.origin.lock().expect("spawn context lock poisoned");
         *origin = (
             channel.to_string(),
             chat_id.to_string(),
             session_key.to_string(),
+            metadata.clone(),
         );
+    }
+}
+
+#[derive(Clone)]
+pub struct WaitSubagentsTool {
+    session_key: Arc<Mutex<String>>,
+    manager: SubagentManager,
+}
+
+impl WaitSubagentsTool {
+    pub fn new(manager: SubagentManager) -> Self {
+        Self {
+            session_key: Arc::new(Mutex::new("cli:direct".to_string())),
+            manager,
+        }
+    }
+
+    pub fn set_context(&self, session_key: &str) {
+        *self
+            .session_key
+            .lock()
+            .expect("wait subagents context lock poisoned") = session_key.to_string();
+    }
+}
+
+#[async_trait]
+impl Tool for WaitSubagentsTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "wait_subagents".to_string(),
+            description: "Wait for background subagents spawned in the current session and return their final text results. Call this after spawning subagents before continuing or giving a final answer.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "timeout_seconds": {
+                        "type": "integer",
+                        "description": "Maximum time to wait for currently running subagents. Defaults to 300 seconds."
+                    }
+                }
+            }),
+        }
+    }
+
+    async fn execute(&self, params: Value) -> ToolOutput {
+        let timeout_seconds = params
+            .get("timeout_seconds")
+            .and_then(Value::as_u64)
+            .unwrap_or(300)
+            .clamp(1, 3600);
+        let session_key = self
+            .session_key
+            .lock()
+            .expect("wait subagents context lock poisoned")
+            .clone();
+        let (results, running, timed_out) = self
+            .manager
+            .wait_for_session_results(&session_key, Duration::from_secs(timeout_seconds))
+            .await;
+
+        if results.is_empty() {
+            if timed_out {
+                return ToolOutput::Text(format!(
+                    "Timed out waiting for subagents in session {session_key}; {running} still running and no completed results were available."
+                ));
+            }
+            return ToolOutput::Text(format!(
+                "No pending subagent results for session {session_key}."
+            ));
+        }
+
+        let mut text = String::from("Subagent results for the current session:");
+        for result in &results {
+            text.push_str(&format!(
+                "\n\n[Subagent '{}' completed]\nTask ID: {}\nTask: {}\nResult:\n{}",
+                result.label, result.task_id, result.task, result.result
+            ));
+        }
+        if timed_out {
+            text.push_str(&format!(
+                "\n\nTimed out with {running} subagent(s) still running."
+            ));
+        }
+        ToolOutput::Text(text)
     }
 }
 
@@ -1527,7 +1618,7 @@ impl Tool for SpawnTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "spawn".to_string(),
-            description: "Spawn a background subagent.".to_string(),
+            description: "Spawn a background subagent. After spawning one or more subagents, call wait_subagents to receive their final text results before continuing the main task.".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -1549,7 +1640,14 @@ impl Tool for SpawnTool {
             .clone();
         let message = self
             .manager
-            .spawn(task, Some(label), origin.0, origin.1, Some(origin.2))
+            .spawn(
+                task,
+                Some(label),
+                origin.0,
+                origin.1,
+                Some(origin.2),
+                origin.3,
+            )
             .await;
         ToolOutput::Text(message)
     }

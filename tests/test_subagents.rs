@@ -49,12 +49,42 @@ impl LlmProvider for DeterministicSubagentProvider {
             .next()
             .unwrap_or_default();
 
+        if last_text.contains("check subagent context") {
+            let has_subagent_result = messages
+                .iter()
+                .filter_map(ChatMessage::content_as_text)
+                .any(|text| {
+                    text.contains("[Subagent 'delegate' completed]")
+                        && text.contains("Subagent finished the delegated work.")
+                });
+            return Ok(stop_response(if has_subagent_result {
+                "Subagent context present."
+            } else {
+                "Subagent context missing."
+            }));
+        }
+
+        if last_text.contains("Subagent results for the current session")
+            && last_text.contains("Subagent finished the delegated work.")
+        {
+            return Ok(stop_response("Main task continued with subagent result."));
+        }
+
         if last_text.contains("[Subagent 'delegate' completed]") {
             return Ok(stop_response("Background summary."));
         }
 
+        let should_wait_for_subagent = messages
+            .iter()
+            .filter_map(ChatMessage::content_as_text)
+            .any(|text| text.contains("delegate and wait"));
+
         if last_text.contains("delegate work") {
             return Ok(tool_response("spawn_1", "collect report", "delegate"));
+        }
+
+        if last_text.contains("delegate and wait") {
+            return Ok(tool_response("spawn_wait_1", "collect report", "delegate"));
         }
 
         if last_text.contains("delegate slow work") {
@@ -62,6 +92,9 @@ impl LlmProvider for DeterministicSubagentProvider {
         }
 
         if last_text.starts_with("Subagent [") {
+            if should_wait_for_subagent {
+                return Ok(wait_subagents_response("wait_1"));
+            }
             return Ok(stop_response("Background task started."));
         }
 
@@ -162,6 +195,23 @@ fn tool_response(id: &str, task: &str, label: &str) -> LlmResponse {
     }
 }
 
+fn wait_subagents_response(id: &str) -> LlmResponse {
+    LlmResponse {
+        content: Some("Waiting for subagent results.".to_string()),
+        tool_calls: vec![ToolCallRequest {
+            id: id.to_string(),
+            name: "wait_subagents".to_string(),
+            arguments: json!({
+                "timeout_seconds": 5,
+            }),
+        }],
+        finish_reason: "tool_calls".to_string(),
+        usage: LlmUsage::default(),
+        reasoning_content: None,
+        thinking_blocks: None,
+    }
+}
+
 #[tokio::test]
 async fn runtime_routes_completed_subagent_back_to_origin_chat() {
     let dir = tempdir().unwrap();
@@ -206,17 +256,137 @@ async fn runtime_routes_completed_subagent_back_to_origin_chat() {
     .await
     .unwrap();
 
-    let started = consume_non_progress(&bus, 2).await;
-    assert_eq!(started.channel, "cli");
-    assert_eq!(started.chat_id, "direct");
-    assert_eq!(started.content, "Background task started.");
-
     let completed = consume_non_progress(&bus, 2).await;
     assert_eq!(completed.channel, "cli");
     assert_eq!(completed.chat_id, "direct");
     assert_eq!(completed.content, "Background summary.");
 
     runtime.stop().await;
+}
+
+#[tokio::test]
+async fn runtime_saves_completed_subagent_result_to_origin_session_history() {
+    let dir = tempdir().unwrap();
+    let provider = Arc::new(DeterministicSubagentProvider::new(SubagentMode::Complete));
+    let agent = Arc::new(
+        AgentLoop::new(
+            provider,
+            dir.path(),
+            Some("test-model".to_string()),
+            6,
+            5,
+            8_000,
+            32 * 1024,
+            Default::default(),
+            None,
+            ExecToolConfig {
+                enable: false,
+                timeout: 60,
+                path_append: String::new(),
+            },
+            false,
+            None,
+            &Default::default(),
+        )
+        .await
+        .unwrap(),
+    );
+    let bus = MessageBus::new(16);
+    let runtime = AgentRuntime::new(agent, bus.clone(), 3);
+    runtime.start().await.unwrap();
+
+    let metadata = BTreeMap::from([(
+        "slack".to_string(),
+        json!({
+            "thread_ts": "1700000000.000100",
+            "channel_type": "channel",
+        }),
+    )]);
+    let session_key = "slack:C123:1700000000.000100".to_string();
+
+    bus.publish_inbound(InboundMessage {
+        channel: "slack".to_string(),
+        sender_id: "u1".to_string(),
+        chat_id: "C123".to_string(),
+        content: "delegate work".to_string(),
+        timestamp: chrono::Utc::now(),
+        media: Vec::new(),
+        metadata: metadata.clone(),
+        session_key_override: Some(session_key.clone()),
+    })
+    .await
+    .unwrap();
+
+    let session_notice = consume_content(&bus, "Session: started new session", 2).await;
+    assert_eq!(session_notice.channel, "slack");
+
+    let started = consume_content(&bus, "Background task started.", 3).await;
+    assert_eq!(started.channel, "slack");
+
+    let completed = consume_content(&bus, "Background summary.", 3).await;
+    assert_eq!(completed.channel, "slack");
+    assert_eq!(
+        completed
+            .metadata
+            .get("_session_key")
+            .and_then(Value::as_str),
+        Some(session_key.as_str())
+    );
+
+    bus.publish_inbound(InboundMessage {
+        channel: "slack".to_string(),
+        sender_id: "u1".to_string(),
+        chat_id: "C123".to_string(),
+        content: "check subagent context".to_string(),
+        timestamp: chrono::Utc::now(),
+        media: Vec::new(),
+        metadata,
+        session_key_override: Some(session_key.clone()),
+    })
+    .await
+    .unwrap();
+
+    consume_content(&bus, "Subagent context present.", 2).await;
+
+    runtime.stop().await;
+}
+
+#[tokio::test]
+async fn main_turn_can_wait_for_subagent_results_in_same_context() {
+    let dir = tempdir().unwrap();
+    let provider = Arc::new(DeterministicSubagentProvider::new(SubagentMode::Complete));
+    let agent = AgentLoop::new(
+        provider,
+        dir.path(),
+        Some("test-model".to_string()),
+        8,
+        5,
+        8_000,
+        32 * 1024,
+        Default::default(),
+        None,
+        ExecToolConfig {
+            enable: false,
+            timeout: 60,
+            path_append: String::new(),
+        },
+        false,
+        None,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+
+    let response = agent
+        .process_direct("delegate and wait", "cli:direct", "cli", "direct")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        response.content,
+        "Main task continued with subagent result."
+    );
 }
 
 #[tokio::test]
@@ -245,19 +415,25 @@ async fn stop_command_cancels_active_subagent_tasks() {
     .await
     .unwrap();
 
-    let started = agent
-        .process_direct("delegate slow work", "cli:direct", "cli", "direct")
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(started.content, "Background task started.");
+    let agent = Arc::new(agent);
+    let active = {
+        let agent = agent.clone();
+        tokio::spawn(async move {
+            agent
+                .process_direct("delegate slow work", "cli:direct", "cli", "direct")
+                .await
+        })
+    };
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
 
     let stopped = agent
         .process_direct("/stop", "cli:direct", "cli", "direct")
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(stopped.content, "Stopped 1 task(s).");
+    assert_eq!(stopped.content, "Stopping current turn and 1 task(s)...");
+    assert!(active.await.unwrap().unwrap().is_none());
 
     let stopped_again = agent
         .process_direct("/stop", "cli:direct", "cli", "direct")
