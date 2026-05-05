@@ -45,6 +45,7 @@ pub enum SubagentNotification {
 }
 
 pub const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 3;
+const SUBAGENT_MAX_ITERATIONS: usize = 100;
 
 pub type SubagentNotificationCallback = Arc<dyn Fn(SubagentNotification) + Send + Sync>;
 
@@ -347,7 +348,7 @@ impl SubagentManager {
 
         let mut final_result = None;
         let mut step: u32 = 0;
-        for _ in 0..15 {
+        for _ in 0..SUBAGENT_MAX_ITERATIONS {
             let response = self
                 .provider
                 .chat_with_retry(
@@ -410,6 +411,29 @@ impl SubagentManager {
                     .map(|text| think_re.replace_all(&text, "").trim().to_string())
                     .filter(|text| !text.is_empty());
                 break;
+            }
+        }
+
+        if final_result.is_none() {
+            messages.push(ChatMessage::text(
+                "user",
+                format!(
+                    "You have reached the subagent tool-iteration budget ({SUBAGENT_MAX_ITERATIONS}). \
+                     Stop using tools now and write the final text result for the delegated task. \
+                     Synthesize findings from the work already done. If you did not find bugs or \
+                     could not complete part of the review, say that explicitly. Do not paste raw \
+                     truncated tool output as the final result."
+                ),
+            ));
+            if let Ok(response) = self
+                .provider
+                .chat_with_retry(&messages, None, Some(&self.model), None, None)
+                .await
+            {
+                final_result = response
+                    .content
+                    .map(|text| think_re.replace_all(&text, "").trim().to_string())
+                    .filter(|text| !text.is_empty());
             }
         }
 
@@ -502,11 +526,19 @@ impl SubagentManager {
              You are a focused background subagent working on a delegated subtask.\n\n\
              ## Instructions\n\
              - Read the task description carefully and complete it using the available tools.\n\
-             - When finished, write a clear, concise summary of what you accomplished and \
-             any important findings. This summary is your final response and will be reported \
-             back to the parent agent.\n\
+             - Keep the investigation focused. Prefer targeted searches and concise file reads \
+             over broad commands that dump large output.\n\
+             - When finished, write a clear, concise final response tailored to the delegated \
+             task. State the outcome, what you checked or changed, and any important findings, \
+             blockers, or follow-up needed. This final response will be reported back to the \
+             parent agent.\n\
+             - Match the task type: for research, report the answer and sources/paths used; \
+             for implementation, report changed files and behavior; for analysis, report \
+             conclusions and evidence; for bug review, explicitly say whether bugs were found. \
+             If no issues/findings apply for the requested task, say so.\n\
              - IMPORTANT: You MUST end with a text response (not a tool call). Your final \
-             message should summarize the result.\n\n\
+             message should summarize the result. Never rely on raw or truncated tool output as \
+             your final answer.\n\n\
              ## Workspace\n{}",
             self.workspace.display()
         );

@@ -37,7 +37,7 @@ impl LlmProvider for DeterministicSubagentProvider {
     async fn chat(
         &self,
         messages: &[ChatMessage],
-        _tools: Option<&[Value]>,
+        tools: Option<&[Value]>,
         _model: Option<&str>,
         _max_tokens: Option<usize>,
         _temperature: Option<f32>,
@@ -78,6 +78,22 @@ impl LlmProvider for DeterministicSubagentProvider {
             .iter()
             .filter_map(ChatMessage::content_as_text)
             .any(|text| text.contains("delegate and wait"));
+        let is_budget_subagent = messages
+            .iter()
+            .filter_map(ChatMessage::content_as_text)
+            .any(|text| text.contains("loop until budget"));
+
+        if last_text.contains("Budget final synthesized.") {
+            return Ok(stop_response("Main saw synthesized budget result."));
+        }
+
+        if last_text.contains("delegate budget test") {
+            return Ok(tool_response(
+                "spawn_budget_1",
+                "loop until budget",
+                "budget",
+            ));
+        }
 
         if last_text.contains("delegate work") {
             return Ok(tool_response("spawn_1", "collect report", "delegate"));
@@ -96,6 +112,15 @@ impl LlmProvider for DeterministicSubagentProvider {
                 return Ok(wait_subagents_response("wait_1"));
             }
             return Ok(stop_response("Background task started."));
+        }
+
+        if is_budget_subagent {
+            if tools.is_none() || last_text.contains("reached the subagent tool-iteration budget") {
+                return Ok(stop_response(
+                    "Budget final synthesized. Bugs found: none. Reviewed repeated directory observations and stopped with a final report instead of raw truncated tool output.",
+                ));
+            }
+            return Ok(list_dir_response(format!("budget_{}", messages.len())));
         }
 
         if last_text.contains("collect report") {
@@ -203,6 +228,23 @@ fn wait_subagents_response(id: &str) -> LlmResponse {
             name: "wait_subagents".to_string(),
             arguments: json!({
                 "timeout_seconds": 5,
+            }),
+        }],
+        finish_reason: "tool_calls".to_string(),
+        usage: LlmUsage::default(),
+        reasoning_content: None,
+        thinking_blocks: None,
+    }
+}
+
+fn list_dir_response(id: String) -> LlmResponse {
+    LlmResponse {
+        content: Some("Inspecting another slice.".to_string()),
+        tool_calls: vec![ToolCallRequest {
+            id,
+            name: "list_dir".to_string(),
+            arguments: json!({
+                "path": ".",
             }),
         }],
         finish_reason: "tool_calls".to_string(),
@@ -387,6 +429,41 @@ async fn main_turn_can_wait_for_subagent_results_in_same_context() {
         response.content,
         "Main task continued with subagent result."
     );
+}
+
+#[tokio::test]
+async fn subagent_iteration_budget_gets_final_synthesis_not_tool_snippets() {
+    let dir = tempdir().unwrap();
+    let provider = Arc::new(DeterministicSubagentProvider::new(SubagentMode::Complete));
+    let agent = AgentLoop::new(
+        provider,
+        dir.path(),
+        Some("test-model".to_string()),
+        64,
+        5,
+        8_000,
+        32 * 1024,
+        Default::default(),
+        None,
+        ExecToolConfig {
+            enable: false,
+            timeout: 60,
+            path_append: String::new(),
+        },
+        false,
+        None,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+
+    let response = agent
+        .process_direct("delegate budget test", "cli:direct", "cli", "direct")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(response.content, "Main saw synthesized budget result.");
 }
 
 #[tokio::test]
