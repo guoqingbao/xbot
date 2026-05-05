@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -107,7 +109,10 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ),
         sep.clone(),
-        Span::styled(app.model.clone(), Style::default().fg(TEXT_PRIMARY)),
+        Span::styled(
+            format!("main {}", app.model),
+            Style::default().fg(TEXT_PRIMARY),
+        ),
         sep.clone(),
         Span::styled(app.provider.clone(), Style::default().fg(TEXT_MUTED)),
         sep.clone(),
@@ -118,6 +123,15 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
         sep.clone(),
         Span::styled(status_icon, Style::default().fg(status_color)),
     ];
+
+    let subagent_models = distinct_subagent_models(app);
+    if !subagent_models.is_empty() {
+        spans.push(sep.clone());
+        spans.push(Span::styled(
+            format!("agents {}", subagent_models.join(", ")),
+            Style::default().fg(SUBAGENT_RUNNING),
+        ));
+    }
 
     let running = app.running_subagent_count();
     if running > 0 {
@@ -314,6 +328,14 @@ fn render_sidebar(f: &mut Frame, area: Rect, app: &App) {
                 ),
             ]));
 
+            if let Some(model) = subagent_model_label(&info.model, &app.model) {
+                let model: String = model.chars().take(inner_w.saturating_sub(10)).collect();
+                lines.push(Line::from(Span::styled(
+                    format!("   model {model}"),
+                    Style::default().fg(TEXT_DIM),
+                )));
+            }
+
             if info.status == SubagentStatus::Running {
                 let elapsed = info.started_at.elapsed();
                 let elapsed_str = super::app::format_elapsed(elapsed);
@@ -449,20 +471,27 @@ fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             HistoryEntry::SubagentCard {
                 task_id,
                 label,
+                model,
                 status,
                 actions,
                 result_preview,
             } => {
-                let (live_status, live_actions, live_preview) =
+                let (live_status, live_actions, live_preview, live_model) =
                     if let Some(info) = app.subagents.get(task_id) {
-                        (&info.status, &info.actions, info.result_preview.as_deref())
+                        (
+                            &info.status,
+                            &info.actions,
+                            info.result_preview.as_deref(),
+                            info.model.as_str(),
+                        )
                     } else {
-                        (status, actions, result_preview.as_deref())
+                        (status, actions, result_preview.as_deref(), model.as_str())
                     };
                 push_blank(&mut lines);
                 render_subagent_card(
                     &mut lines,
                     label,
+                    subagent_model_label(live_model, &app.model),
                     live_status,
                     live_actions,
                     live_preview,
@@ -509,6 +538,7 @@ fn render_reasoning_block(lines: &mut Vec<Line<'static>>, reasoning: Option<&str
 fn render_subagent_card(
     lines: &mut Vec<Line<'static>>,
     label: &str,
+    model: Option<&str>,
     status: &SubagentStatus,
     actions: &[String],
     result_preview: Option<&str>,
@@ -543,6 +573,13 @@ fn render_subagent_card(
         Span::styled(format!(" {state_text} "), Style::default().fg(TEXT_DIM)),
         Span::styled(header_fill, Style::default().fg(BORDER_DIM)),
     ]));
+
+    if let Some(model) = model {
+        lines.push(Line::from(vec![
+            Span::styled("    │ ", Style::default().fg(BORDER_DIM)),
+            Span::styled(format!("model {model}"), Style::default().fg(TEXT_DIM)),
+        ]));
+    }
 
     for action in actions.iter().rev().take(3).rev() {
         let truncated: String = action.chars().take(w.saturating_sub(8)).collect();
@@ -619,24 +656,18 @@ fn build_active_lines(
                 );
             }
             StreamSegment::Subagent { task_id, label } => {
-                let status = app
-                    .subagents
-                    .get(task_id)
+                let info = app.subagents.get(task_id);
+                let status = info
                     .map(|i| i.status.clone())
                     .unwrap_or(SubagentStatus::Running);
-                let actions: Vec<String> = app
-                    .subagents
-                    .get(task_id)
-                    .map(|i| i.actions.clone())
-                    .unwrap_or_default();
-                let preview = app
-                    .subagents
-                    .get(task_id)
-                    .and_then(|i| i.result_preview.clone());
+                let actions: Vec<String> = info.map(|i| i.actions.clone()).unwrap_or_default();
+                let preview = info.and_then(|i| i.result_preview.clone());
+                let model = info.and_then(|i| subagent_model_label(&i.model, &app.model));
                 push_blank(&mut lines);
                 render_subagent_card(
                     &mut lines,
                     label,
+                    model,
                     &status,
                     &actions,
                     preview.as_deref(),
@@ -648,6 +679,101 @@ fn build_active_lines(
     }
 
     lines
+}
+
+fn should_show_subagent_model(subagent_model: &str, main_model: &str) -> bool {
+    let subagent_model = subagent_model.trim();
+    !subagent_model.is_empty() && subagent_model != main_model.trim()
+}
+
+fn subagent_model_label<'a>(subagent_model: &'a str, main_model: &str) -> Option<&'a str> {
+    should_show_subagent_model(subagent_model, main_model).then_some(subagent_model.trim())
+}
+
+fn distinct_subagent_models(app: &App) -> Vec<String> {
+    app.configured_subagent_model
+        .iter()
+        .filter_map(|model| subagent_model_label(model, &app.model))
+        .chain(
+            app.subagents
+                .values()
+                .filter_map(|info| subagent_model_label(&info.model, &app.model)),
+        )
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::super::app::EngineEvent;
+    use super::*;
+
+    #[test]
+    fn distinct_subagent_models_keeps_same_provider_different_model_visible() {
+        let mut app = App::new(
+            "Qwen3.6-27B-FP8".into(),
+            "vllmrs".into(),
+            PathBuf::from("/tmp"),
+            0,
+            "0/262144".into(),
+            None,
+        );
+
+        app.handle_engine_event(EngineEvent::SubagentStarted {
+            task_id: "sub1".into(),
+            label: "scan bugs".into(),
+            task: "scan folder".into(),
+            model: "Qwen3.5-35B-A3B-FP8".into(),
+        });
+
+        assert_eq!(app.model, "Qwen3.6-27B-FP8");
+        assert_eq!(
+            distinct_subagent_models(&app),
+            vec!["Qwen3.5-35B-A3B-FP8".to_string()]
+        );
+    }
+
+    #[test]
+    fn distinct_subagent_models_hides_inherited_model() {
+        let mut app = App::new(
+            "Qwen3.6-27B-FP8".into(),
+            "vllmrs".into(),
+            PathBuf::from("/tmp"),
+            0,
+            "0/262144".into(),
+            None,
+        );
+
+        app.handle_engine_event(EngineEvent::SubagentStarted {
+            task_id: "sub1".into(),
+            label: "scan bugs".into(),
+            task: "scan folder".into(),
+            model: "Qwen3.6-27B-FP8".into(),
+        });
+
+        assert!(distinct_subagent_models(&app).is_empty());
+    }
+
+    #[test]
+    fn distinct_subagent_models_uses_configured_model_before_any_subagent_starts() {
+        let app = App::new(
+            "Qwen3.6-27B-FP8".into(),
+            "vllmrs".into(),
+            PathBuf::from("/tmp"),
+            0,
+            "0/262144".into(),
+            Some("Qwen3.5-35B-A3B-FP8".into()),
+        );
+
+        assert_eq!(
+            distinct_subagent_models(&app),
+            vec!["Qwen3.5-35B-A3B-FP8".to_string()]
+        );
+    }
 }
 
 fn render_tool_card(

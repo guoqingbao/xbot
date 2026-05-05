@@ -22,6 +22,13 @@ The runtime already includes the main components required for unattended operati
 - OpenAI-compatible local or remote providers
 - admin API/UI and metrics
 
+Subagents:
+
+- By default, subagents inherit the main task provider and model.
+- Set `agents.subagents.model` and `agents.subagents.provider` to run subagents on a cheaper/faster model.
+- Set `agents.subagents.apiBase`, or the matching `providers.<name>.apiBase`, to point subagents at a different OpenAI-compatible API server.
+- If `agents.subagents.model` is empty, subagents keep using the main task model.
+
 Memory behavior:
 
 - `MEMORY.md` is permanent memory and is trimmed to `agents.defaults.memoryMaxBytes`

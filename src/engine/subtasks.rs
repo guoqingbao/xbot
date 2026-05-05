@@ -21,6 +21,7 @@ pub enum SubagentNotification {
         task_id: String,
         label: String,
         task: String,
+        model: String,
     },
     Progress {
         task_id: String,
@@ -195,6 +196,7 @@ impl SubagentManager {
             task_id: task_id.clone(),
             label: display_label.clone(),
             task: task.chars().take(120).collect(),
+            model: self.model.clone(),
         });
         format!(
             "Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."

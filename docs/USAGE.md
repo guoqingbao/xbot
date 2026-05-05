@@ -34,6 +34,7 @@ The CLI will guide you through:
 2. Entering your API key (if required).
 3. Fetching and selecting from available models.
 4. Setting the default model and provider for the agent.
+5. Optionally configuring a separate provider/API base or model for background subagents.
 
 ### 2.2 Channel Configuration
 
@@ -167,6 +168,39 @@ Notes:
 - Known local providers such as `ollama` and `vllm` do not require an API key.
 - Custom providers can use an empty API key when the upstream server does not require auth.
 - The model string can be any identifier accepted by the target backend.
+
+### Subagent model/provider override
+
+By default, background subagents use the same provider and model as the main task. You can run subagents on a cheaper or faster model by setting `agents.subagents`.
+
+Example: main task uses a heavier OpenAI model, while subagents use a local OpenAI-compatible server:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": "openai/gpt-4.1",
+      "provider": "openai"
+    },
+    "subagents": {
+      "model": "qwen2.5-coder:7b",
+      "provider": "subagent-fast",
+      "apiBase": "http://127.0.0.1:8001/v1"
+    }
+  },
+  "providers": {
+    "openai": {
+      "apiKey": "sk-..."
+    },
+    "subagent-fast": {
+      "apiKey": "",
+      "apiBase": "http://127.0.0.1:8001/v1"
+    }
+  }
+}
+```
+
+`agents.subagents.model` is optional. If it is empty or omitted, subagents inherit the main task model. `agents.subagents.provider` defaults to `"auto"`. For an OpenAI-compatible local or remote backend, use a provider key such as `subagent-fast` and set `apiBase` either under `agents.subagents` or in the matching `providers` entry.
 
 ## 3. Run Modes
 
@@ -468,6 +502,10 @@ Usage notes:
       "provider": "ollama",
       "maxToolIterations": 0,
       "contextWindowTokens": 65536
+    },
+    "subagents": {
+      "model": "",
+      "provider": "auto"
     }
   },
   "providers": {

@@ -81,6 +81,7 @@ pub async fn run_tui_repl(
     chat_id: String,
     session_msg_count: usize,
     context_status: String,
+    subagent_model: Option<String>,
 ) -> Result<()> {
     install_panic_hook();
 
@@ -105,6 +106,7 @@ pub async fn run_tui_repl(
         workspace,
         session_msg_count,
         context_status,
+        subagent_model,
     );
 
     let (engine_tx, mut engine_rx) = mpsc::unbounded_channel::<EngineEvent>();
@@ -116,10 +118,12 @@ pub async fn run_tui_repl(
                 task_id,
                 label,
                 task,
+                model,
             } => EngineEvent::SubagentStarted {
                 task_id,
                 label,
                 task,
+                model,
             },
             SubagentNotification::Progress {
                 task_id,

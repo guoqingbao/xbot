@@ -46,10 +46,30 @@ impl Default for AgentDefaults {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SubagentConfig {
+    pub model: String,
+    pub provider: String,
+    #[serde(alias = "apiBase")]
+    pub api_base: Option<String>,
+}
+
+impl Default for SubagentConfig {
+    fn default() -> Self {
+        Self {
+            model: String::new(),
+            provider: "auto".to_string(),
+            api_base: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct AgentsConfig {
     pub defaults: AgentDefaults,
+    pub subagents: SubagentConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -375,6 +395,11 @@ impl Config {
                     "maxConcurrentTools": self.agents.defaults.max_concurrent_tools,
                     "memoryMaxBytes": self.agents.defaults.memory_max_bytes,
                     "maxConcurrentRequests": self.agents.defaults.max_concurrent_requests,
+                },
+                "subagents": {
+                    "model": self.agents.subagents.model,
+                    "provider": self.agents.subagents.provider,
+                    "apiBase": self.agents.subagents.api_base,
                 }
             },
             "providers": providers,
@@ -423,7 +448,49 @@ impl Config {
     }
 
     pub fn provider_name_for_model(&self, model: Option<&str>) -> Option<String> {
-        let forced = normalize_provider_name(self.agents.defaults.provider.trim());
+        self.provider_name_for_model_with_forced(
+            model,
+            Some(self.agents.defaults.provider.as_str()),
+        )
+    }
+
+    pub fn subagent_model(&self, main_model: &str) -> String {
+        let model = self.agents.subagents.model.trim();
+        if model.is_empty() {
+            main_model.to_string()
+        } else {
+            model.to_string()
+        }
+    }
+
+    pub fn subagent_provider_for_model(
+        &self,
+        model: Option<&str>,
+    ) -> Option<(String, ProviderConfig)> {
+        let name = self.provider_name_for_model_with_forced(
+            model,
+            Some(self.agents.subagents.provider.as_str()),
+        )?;
+        let cfg = self.providers.get(&name)?.clone();
+        Some((name, cfg))
+    }
+
+    pub fn provider_api_base_for_provider(&self, provider_name: &str) -> Option<String> {
+        let cfg = self.providers.get(provider_name)?;
+        if let Some(api_base) = &cfg.api_base {
+            return Some(api_base.clone());
+        }
+        find_by_name(provider_name).and_then(|spec| {
+            (!spec.default_api_base.is_empty()).then(|| spec.default_api_base.to_string())
+        })
+    }
+
+    fn provider_name_for_model_with_forced(
+        &self,
+        model: Option<&str>,
+        forced_provider: Option<&str>,
+    ) -> Option<String> {
+        let forced = normalize_provider_name(forced_provider.unwrap_or("auto").trim());
         if forced != "auto" {
             return self.find_provider_key(&forced);
         }

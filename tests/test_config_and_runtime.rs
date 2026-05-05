@@ -84,6 +84,32 @@ fn provider_matching_prefers_keyword_and_local_base_detection() {
     );
 }
 
+#[test]
+fn subagent_config_can_select_separate_model_provider_and_api_base() {
+    let mut config = Config::default();
+    config.providers.insert(
+        "subagent-fast".to_string(),
+        rbot::config::ProviderConfig {
+            api_key: String::new(),
+            api_base: Some("http://127.0.0.1:8001/v1".to_string()),
+            extra_headers: Default::default(),
+            reasoning_effort: None,
+        },
+    );
+    config.agents.subagents.model = "qwen2.5-coder:7b".to_string();
+    config.agents.subagents.provider = "subagent-fast".to_string();
+
+    assert_eq!(config.subagent_model("openai/gpt-4.1"), "qwen2.5-coder:7b");
+    let (provider_name, provider_cfg) = config
+        .subagent_provider_for_model(Some("qwen2.5-coder:7b"))
+        .unwrap();
+    assert_eq!(provider_name, "subagent-fast");
+    assert_eq!(
+        provider_cfg.api_base.as_deref(),
+        Some("http://127.0.0.1:8001/v1")
+    );
+}
+
 #[tokio::test]
 async fn runtime_processes_bus_messages_and_message_tool_delivers_outbound() {
     let dir = tempdir().unwrap();

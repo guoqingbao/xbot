@@ -7,7 +7,7 @@ use inquire::{Confirm, Password, Select, Text};
 use serde_json::Value;
 
 use rbot::channels::discover_all;
-use rbot::config::Config;
+use rbot::config::{Config, SubagentConfig};
 use rbot::providers::registry::{PROVIDERS, find_by_name};
 
 pub async fn run_config_provider(config_path: Option<&Path>) -> Result<()> {
@@ -140,7 +140,14 @@ pub async fn run_config_provider(config_path: Option<&Path>) -> Result<()> {
     }
 
     config.providers.insert(provider_key.clone(), provider_cfg);
-    config.agents.defaults.provider = provider_key;
+    config.agents.defaults.provider = provider_key.clone();
+
+    if Confirm::new("Configure subagent provider/model now?")
+        .with_default(false)
+        .prompt()?
+    {
+        configure_subagent_provider(&mut config, &provider_key).await?;
+    }
 
     let path = config.save(config_path)?;
     println!(
@@ -163,6 +170,137 @@ pub async fn run_config_provider(config_path: Option<&Path>) -> Result<()> {
     );
 
     Ok(())
+}
+
+async fn configure_subagent_provider(config: &mut Config, main_provider_key: &str) -> Result<()> {
+    let mode = Select::new(
+        "Subagent provider mode:",
+        vec![
+            "Inherit main provider/model".to_string(),
+            "Use main provider with a different model".to_string(),
+            "Use a separate provider/API base".to_string(),
+        ],
+    )
+    .prompt()?;
+
+    match mode.as_str() {
+        "Inherit main provider/model" => {
+            config.agents.subagents = SubagentConfig::default();
+        }
+        "Use main provider with a different model" => {
+            config.agents.subagents.provider = main_provider_key.to_string();
+            config.agents.subagents.api_base = None;
+            config.agents.subagents.model = Text::new("Subagent model:")
+                .with_default(if config.agents.subagents.model.trim().is_empty() {
+                    &config.agents.defaults.model
+                } else {
+                    &config.agents.subagents.model
+                })
+                .prompt()?;
+        }
+        "Use a separate provider/API base" => {
+            let (provider_key, model) = prompt_provider_entry(
+                config,
+                "Select subagent provider to configure:",
+                "Subagent model:",
+            )
+            .await?;
+            let api_base = config
+                .providers
+                .get(&provider_key)
+                .and_then(|cfg| cfg.api_base.clone());
+            config.agents.subagents.provider = provider_key;
+            config.agents.subagents.model = model;
+            config.agents.subagents.api_base = api_base;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+async fn prompt_provider_entry(
+    config: &mut Config,
+    provider_prompt: &str,
+    model_prompt: &str,
+) -> Result<(String, String)> {
+    let provider_names: Vec<String> = PROVIDERS.iter().map(|p| p.name.to_string()).collect();
+    let selected_provider_name = Select::new(provider_prompt, provider_names).prompt()?;
+    let spec =
+        find_by_name(&selected_provider_name).ok_or_else(|| anyhow!("Provider not found"))?;
+
+    let mut provider_key = selected_provider_name.clone();
+    if selected_provider_name == "custom" {
+        provider_key = Text::new("Enter a unique name for this custom provider:").prompt()?;
+    }
+
+    let mut provider_cfg = config
+        .providers
+        .get(&provider_key)
+        .cloned()
+        .unwrap_or_default();
+
+    let model = if !spec.is_local && selected_provider_name != "custom" {
+        if !spec.is_oauth {
+            let new_api_key = Password::new("Enter API Key (leave blank to keep current):")
+                .without_confirmation()
+                .prompt()?;
+            if !new_api_key.is_empty() {
+                provider_cfg.api_key = new_api_key;
+            }
+        }
+
+        if spec.default_api_base.is_empty() {
+            provider_cfg.api_base = Some(
+                Text::new("Enter API Base URL:")
+                    .with_default(provider_cfg.api_base.as_deref().unwrap_or(""))
+                    .with_validator(|value: &str| {
+                        if value.trim().is_empty() {
+                            Ok(Validation::Invalid("Cannot be empty".into()))
+                        } else {
+                            Ok(Validation::Valid)
+                        }
+                    })
+                    .prompt()?,
+            );
+        }
+
+        Text::new(model_prompt)
+            .with_default(&config.agents.defaults.model)
+            .prompt()?
+    } else {
+        let hint = if selected_provider_name == "ollama" {
+            "(e.g. http://localhost:11434/v1)"
+        } else if selected_provider_name == "vllm" {
+            "(e.g. http://localhost:8000/v1)"
+        } else {
+            "(e.g. https://api.yourprovider.com/v1)"
+        };
+
+        provider_cfg.api_base = Some(
+            Text::new(&format!("Enter API Base URL {}:", hint))
+                .with_default(
+                    provider_cfg
+                        .api_base
+                        .as_deref()
+                        .unwrap_or(spec.default_api_base),
+                )
+                .prompt()?,
+        );
+
+        if Confirm::new("Enter API Key? (Optional for local/custom)")
+            .with_default(false)
+            .prompt()?
+        {
+            provider_cfg.api_key = Text::new("Enter API Key:").prompt()?;
+        }
+
+        Text::new(model_prompt)
+            .with_default(&config.agents.defaults.model)
+            .prompt()?
+    };
+
+    config.providers.insert(provider_key.clone(), provider_cfg);
+    Ok((provider_key, model))
 }
 
 pub async fn run_config_channel(config_path: Option<&Path>) -> Result<()> {

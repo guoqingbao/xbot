@@ -29,6 +29,18 @@ pub fn validate_run_config(config: &Config, model: &str) -> Result<()> {
     if config.provider_for_model(Some(model)).is_none() {
         bail!("no configured provider matched model '{model}'");
     }
+    let subagent_model = config.subagent_model(model);
+    if (!config.agents.subagents.model.trim().is_empty()
+        || crate::providers::registry::normalize_provider_name(
+            config.agents.subagents.provider.trim(),
+        ) != "auto"
+        || config.agents.subagents.api_base.is_some())
+        && config
+            .subagent_provider_for_model(Some(&subagent_model))
+            .is_none()
+    {
+        bail!("no configured provider matched subagent model '{subagent_model}'");
+    }
 
     let mut webhook_paths = BTreeMap::<String, String>::new();
 

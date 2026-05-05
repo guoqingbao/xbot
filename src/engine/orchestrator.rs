@@ -95,6 +95,43 @@ impl AgentLoop {
         cron_service: Option<CronService>,
         mcp_servers: &BTreeMap<String, crate::config::McpServerConfig>,
     ) -> Result<Self> {
+        Self::new_with_subagent_provider(
+            provider,
+            workspace,
+            model,
+            None,
+            None,
+            max_iterations,
+            max_concurrent_tools,
+            context_window_tokens,
+            max_memory_bytes,
+            web_search,
+            web_proxy,
+            exec,
+            restrict_to_workspace,
+            cron_service,
+            mcp_servers,
+        )
+        .await
+    }
+
+    pub async fn new_with_subagent_provider(
+        provider: SharedProvider,
+        workspace: impl AsRef<Path>,
+        model: Option<String>,
+        subagent_provider: Option<SharedProvider>,
+        subagent_model: Option<String>,
+        max_iterations: usize,
+        max_concurrent_tools: usize,
+        context_window_tokens: usize,
+        max_memory_bytes: usize,
+        web_search: WebSearchConfig,
+        web_proxy: Option<String>,
+        exec: ExecToolConfig,
+        restrict_to_workspace: bool,
+        cron_service: Option<CronService>,
+        mcp_servers: &BTreeMap<String, crate::config::McpServerConfig>,
+    ) -> Result<Self> {
         let workspace = workspace.as_ref().to_path_buf();
         let context = ContextBuilder::new(&workspace, max_memory_bytes)?;
         let sessions = SessionManager::new(&workspace)?;
@@ -109,10 +146,10 @@ impl AgentLoop {
             .and_then(|models| find_model_context_window_tokens(&models, &resolved_model))
             .unwrap_or(context_window_tokens);
         let subagents = SubagentManager::new(
-            provider.clone(),
+            subagent_provider.unwrap_or_else(|| provider.clone()),
             workspace.clone(),
             MessageBus::new(64),
-            resolved_model.clone(),
+            subagent_model.unwrap_or_else(|| resolved_model.clone()),
             web_search.clone(),
             web_proxy.clone(),
             exec.clone(),

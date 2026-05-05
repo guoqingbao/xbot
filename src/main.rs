@@ -23,6 +23,7 @@ use rbot::config::Config;
 use rbot::cron::CronService;
 use rbot::engine::AgentLoop;
 use rbot::observability::{InstrumentedProvider, RuntimeTelemetry};
+use rbot::providers::registry::normalize_provider_name;
 use rbot::providers::{ProviderModelInfo, SharedProvider};
 use rbot::runtime::{
     AgentRuntime, HeartbeatService, build_gateway_router, build_provider_client,
@@ -226,6 +227,7 @@ async fn repl(config_path: Option<&Path>, model: Option<String>) -> Result<()> {
         session_key,
         chat_id,
         startup_notice,
+        subagent_model,
     } = built;
     let session_message_count = repl_session_message_count(&workspace, &session_key)?;
     let context_status = repl_session_context_status(&agent, &session_key).await?;
@@ -249,6 +251,7 @@ async fn repl(config_path: Option<&Path>, model: Option<String>) -> Result<()> {
         chat_id,
         session_message_count,
         context_status,
+        subagent_model,
     )
     .await
 }
@@ -532,6 +535,7 @@ struct BuiltAgent {
     session_key: String,
     chat_id: String,
     startup_notice: Option<String>,
+    subagent_model: Option<String>,
 }
 
 async fn build_agent(
@@ -554,6 +558,8 @@ async fn build_agent(
         config.tools.web.proxy.as_deref(),
     )?;
     let startup_model = resolve_startup_model(&provider, &model).await;
+    let subagent_model = config.agents.subagents.model.trim();
+    let subagent_model = (!subagent_model.is_empty()).then(|| subagent_model.to_string());
     let workspace = resolve_cli_workspace(&config, &cwd);
     sync_workspace_templates(&workspace)?;
     let agent = build_agent_for_workspace(
@@ -580,6 +586,7 @@ async fn build_agent(
         session_key,
         chat_id,
         startup_notice: startup_model.notice,
+        subagent_model,
     })
 }
 
@@ -686,10 +693,17 @@ async fn build_agent_for_workspace(
     model: Option<String>,
     cron_service: Option<CronService>,
 ) -> Result<AgentLoop> {
-    AgentLoop::new(
+    let main_model = model
+        .clone()
+        .unwrap_or_else(|| provider.default_model().to_string());
+    let subagent = build_subagent_provider_from_config(config, provider.clone(), &main_model)?;
+
+    AgentLoop::new_with_subagent_provider(
         provider,
         workspace,
         model,
+        subagent.provider,
+        subagent.model,
         config.agents.defaults.max_tool_iterations,
         config.agents.defaults.max_concurrent_tools,
         config.agents.defaults.context_window_tokens,
@@ -702,6 +716,62 @@ async fn build_agent_for_workspace(
         &config.tools.mcp_servers,
     )
     .await
+}
+
+struct BuiltSubagentProvider {
+    provider: Option<SharedProvider>,
+    model: Option<String>,
+}
+
+fn build_subagent_provider_from_config(
+    config: &Config,
+    main_provider: SharedProvider,
+    main_model: &str,
+) -> Result<BuiltSubagentProvider> {
+    let subagent_model = config.subagent_model(main_model);
+    let inherits_main = config.agents.subagents.model.trim().is_empty()
+        && normalize_provider_name(config.agents.subagents.provider.trim()) == "auto"
+        && config.agents.subagents.api_base.is_none();
+    if inherits_main {
+        return Ok(BuiltSubagentProvider {
+            provider: None,
+            model: None,
+        });
+    }
+
+    let Some((provider_name, provider_cfg)) =
+        config.subagent_provider_for_model(Some(&subagent_model))
+    else {
+        return Err(anyhow!(
+            "no configured provider matched subagent model '{subagent_model}'"
+        ));
+    };
+    let api_base = config
+        .agents
+        .subagents
+        .api_base
+        .clone()
+        .or_else(|| config.provider_api_base_for_provider(&provider_name));
+    let provider = build_provider_client(
+        &provider_name,
+        &provider_cfg,
+        &subagent_model,
+        api_base,
+        config.tools.web.proxy.as_deref(),
+    )?;
+
+    if provider.default_model() == main_provider.default_model()
+        && config.agents.subagents.model.trim().is_empty()
+    {
+        return Ok(BuiltSubagentProvider {
+            provider: Some(provider),
+            model: None,
+        });
+    }
+    Ok(BuiltSubagentProvider {
+        provider: Some(provider),
+        model: Some(subagent_model),
+    })
 }
 
 fn turn_summary(agent: &AgentLoop, elapsed: std::time::Duration) -> Result<TurnSummary> {

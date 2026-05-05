@@ -47,6 +47,7 @@ pub enum EngineEvent {
         task_id: String,
         label: String,
         task: String,
+        model: String,
     },
     SubagentProgress {
         task_id: String,
@@ -99,6 +100,7 @@ pub enum HistoryEntry {
     SubagentCard {
         task_id: String,
         label: String,
+        model: String,
         status: SubagentStatus,
         actions: Vec<String>,
         result_preview: Option<String>,
@@ -170,6 +172,7 @@ pub struct SubagentInfo {
     pub task_id: String,
     pub label: String,
     pub task: String,
+    pub model: String,
     pub status: SubagentStatus,
     pub actions: Vec<String>,
     pub result_preview: Option<String>,
@@ -383,6 +386,7 @@ pub struct App {
     pub exit_after_turn: bool,
 
     pub model: String,
+    pub configured_subagent_model: Option<String>,
     pub provider: String,
     #[allow(dead_code)]
     pub workspace: PathBuf,
@@ -410,6 +414,7 @@ impl App {
         workspace: PathBuf,
         session_msg_count: usize,
         context_status: String,
+        configured_subagent_model: Option<String>,
     ) -> Self {
         Self {
             history: Vec::new(),
@@ -428,6 +433,7 @@ impl App {
             pending: VecDeque::new(),
             exit_after_turn: false,
             model,
+            configured_subagent_model,
             provider,
             workspace,
             session_msg_count,
@@ -600,11 +606,13 @@ impl App {
                 task_id,
                 label,
                 task,
+                model,
             } => {
                 let info = SubagentInfo {
                     task_id: task_id.clone(),
                     label: label.clone(),
                     task: task.clone(),
+                    model: model.clone(),
                     status: SubagentStatus::Running,
                     actions: Vec::new(),
                     result_preview: None,
@@ -618,6 +626,7 @@ impl App {
                     self.history.push(HistoryEntry::SubagentCard {
                         task_id,
                         label,
+                        model,
                         status: SubagentStatus::Running,
                         actions: Vec::new(),
                         result_preview: None,
@@ -831,9 +840,15 @@ impl App {
                             .subagents
                             .get(&task_id)
                             .and_then(|i| i.result_preview.clone());
+                        let model = self
+                            .subagents
+                            .get(&task_id)
+                            .map(|i| i.model.clone())
+                            .unwrap_or_default();
                         self.history.push(HistoryEntry::SubagentCard {
                             task_id,
                             label,
+                            model,
                             status,
                             actions,
                             result_preview: preview,
@@ -912,9 +927,15 @@ impl App {
                             .subagents
                             .get(&task_id)
                             .and_then(|i| i.result_preview.clone());
+                        let model = self
+                            .subagents
+                            .get(&task_id)
+                            .map(|i| i.model.clone())
+                            .unwrap_or_default();
                         self.history.push(HistoryEntry::SubagentCard {
                             task_id,
                             label,
+                            model,
                             status,
                             actions,
                             result_preview: preview,
@@ -1520,6 +1541,7 @@ mod tests {
             PathBuf::from("/tmp"),
             0,
             "0/1000".into(),
+            None,
         );
         assert_eq!(app.agent_state, AgentState::Ready);
         assert!(!app.is_busy());
@@ -1533,14 +1555,18 @@ mod tests {
             PathBuf::from("/tmp"),
             0,
             "0/1000".into(),
+            None,
         );
         app.handle_engine_event(EngineEvent::SubagentStarted {
             task_id: "abc".into(),
             label: "test task".into(),
             task: "do something".into(),
+            model: "sub-model".into(),
         });
         assert_eq!(app.subagents.len(), 1);
         assert_eq!(app.running_subagent_count(), 1);
+        assert_eq!(app.model, "test");
+        assert_eq!(app.subagents.get("abc").unwrap().model, "sub-model");
 
         app.handle_engine_event(EngineEvent::SubagentCompleted {
             task_id: "abc".into(),

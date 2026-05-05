@@ -8,6 +8,7 @@
 - 📝 **Permanent Memory Capture** - LLM-driven memory consolidation, automatic task summaries, explicit `/memorize` support, and topic-relevant memory lookup
 - 🛠️ **Rich Toolset** - Filesystem, shell, web fetch, web search, messaging, cron, and background-task tools
 - 🌐 **Provider Integration** - OpenAI-compatible, Anthropic, GitHub Copilot (OAuth), Cursor, and local engines
+- 🧵 **Configurable Subagents** - Background subagents can inherit the main model or use a separate faster model/provider/API base
 - 🔌 **MCP Support** - MCP stdio tool integration for external tool servers
 - 🧩 **Built-in Skills** - Software engineering, research/reporting, GitHub/CI, scheduled operations, memory management, cron, and clawhub marketplace
 - 📬 **Multi-Channel** - 13 channel backends: `email`, `slack`, `telegram`, `feishu`, `dingtalk`, `discord`, `matrix`, `whatsapp`, `qq`, `wecom`, `weixin`, `mochat`, and extensible plugin channels
@@ -16,7 +17,7 @@
 - 🪝 **Hook System** - Extensible `AgentHook` trait for lifecycle callbacks without modifying the core agent loop
 
 ## Overview
-<img src="docs/rbot.png" alt="rbot terminal" width="800">
+<img src="docs/rbot.png" alt="rbot terminal" width="600">
 
 ## 📚 Documentation
 
