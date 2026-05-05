@@ -1,0 +1,1076 @@
+use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
+use serde_json::Value;
+
+use rbot::util::tool_emoji;
+
+const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+#[derive(Clone)]
+pub struct TurnSummary {
+    pub prompt_tokens: usize,
+    pub completion_tokens: usize,
+    pub elapsed: Duration,
+}
+
+pub enum EngineEvent {
+    StreamDelta(String),
+    ToolHint {
+        tool_name: Option<String>,
+        tool_args: Option<Value>,
+    },
+    TurnComplete {
+        content: String,
+        reasoning: Option<String>,
+        summary: TurnSummary,
+    },
+    TurnEmpty {
+        note: String,
+        summary: TurnSummary,
+    },
+    TurnError(String),
+    ContextUpdate(String),
+}
+
+#[derive(Clone)]
+pub struct EditDiff {
+    pub path: String,
+    pub removals: Vec<String>,
+    pub additions: Vec<String>,
+}
+
+#[derive(Clone)]
+pub enum HistoryEntry {
+    User(String),
+    Assistant {
+        content: String,
+        reasoning: Option<String>,
+    },
+    ToolCall {
+        name: String,
+        emoji: String,
+        detail: String,
+        diff: Option<EditDiff>,
+    },
+    Error(String),
+    System(String),
+    Separator {
+        summary: TurnSummary,
+    },
+}
+
+pub struct ToolActivity {
+    pub name: String,
+    pub emoji: String,
+    pub detail: String,
+    pub diff: Option<EditDiff>,
+}
+
+pub enum StreamSegment {
+    Text(String),
+    Tool(ToolActivity),
+}
+
+pub struct ActiveStreaming {
+    pub segments: Vec<StreamSegment>,
+}
+
+impl Default for ActiveStreaming {
+    fn default() -> Self {
+        Self {
+            segments: Vec::new(),
+        }
+    }
+}
+
+impl ActiveStreaming {
+    pub fn push_text(&mut self, text: &str) {
+        if let Some(StreamSegment::Text(s)) = self.segments.last_mut() {
+            s.push_str(text);
+        } else {
+            self.segments.push(StreamSegment::Text(text.to_string()));
+        }
+    }
+
+    pub fn push_tool(&mut self, tool: ToolActivity) {
+        self.segments.push(StreamSegment::Tool(tool));
+    }
+
+    pub fn has_content(&self) -> bool {
+        self.segments.iter().any(|s| match s {
+            StreamSegment::Text(t) => !t.is_empty(),
+            StreamSegment::Tool(_) => true,
+        })
+    }
+}
+
+pub struct LineBuffer {
+    pending: String,
+}
+
+impl LineBuffer {
+    pub fn new() -> Self {
+        Self {
+            pending: String::new(),
+        }
+    }
+
+    pub fn push(&mut self, text: &str) {
+        self.pending.push_str(text);
+    }
+
+    pub fn take_committable(&mut self) -> String {
+        let Some(last_nl) = self.pending.rfind('\n') else {
+            return String::new();
+        };
+        self.pending.drain(..=last_nl).collect()
+    }
+
+    pub fn flush(&mut self) -> String {
+        std::mem::take(&mut self.pending)
+    }
+
+    pub fn pending_preview(&self) -> &str {
+        &self.pending
+    }
+}
+
+pub struct ComposerState {
+    pub input: String,
+    pub cursor: usize,
+    pub history: Vec<String>,
+    pub history_index: Option<usize>,
+    pub draft: Option<String>,
+}
+
+impl ComposerState {
+    fn new() -> Self {
+        Self {
+            input: String::new(),
+            cursor: 0,
+            history: Vec::new(),
+            history_index: None,
+            draft: None,
+        }
+    }
+
+    pub fn insert_char(&mut self, ch: char) {
+        let byte_pos = self.char_to_byte(self.cursor);
+        self.input.insert(byte_pos, ch);
+        self.cursor += 1;
+    }
+
+    pub fn insert_newline(&mut self) {
+        self.insert_char('\n');
+    }
+
+    pub fn backspace(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+            let byte_pos = self.char_to_byte(self.cursor);
+            self.input.remove(byte_pos);
+        }
+    }
+
+    pub fn delete(&mut self) {
+        let total = self.input.chars().count();
+        if self.cursor < total {
+            let byte_pos = self.char_to_byte(self.cursor);
+            self.input.remove(byte_pos);
+        }
+    }
+
+    pub fn move_left(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+        }
+    }
+
+    pub fn move_right(&mut self) {
+        let total = self.input.chars().count();
+        if self.cursor < total {
+            self.cursor += 1;
+        }
+    }
+
+    pub fn move_home(&mut self) {
+        let before = &self.input[..self.char_to_byte(self.cursor)];
+        if let Some(pos) = before.rfind('\n') {
+            self.cursor = self.input[..=pos].chars().count();
+        } else {
+            self.cursor = 0;
+        }
+    }
+
+    pub fn move_end(&mut self) {
+        let byte_pos = self.char_to_byte(self.cursor);
+        let after = &self.input[byte_pos..];
+        if let Some(pos) = after.find('\n') {
+            self.cursor += after[..pos].chars().count();
+        } else {
+            self.cursor = self.input.chars().count();
+        }
+    }
+
+    pub fn delete_word_back(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let byte_pos = self.char_to_byte(self.cursor);
+        let before = &self.input[..byte_pos];
+        let trimmed = before.trim_end();
+        let word_start = trimmed
+            .rfind(|c: char| c.is_whitespace() || c == '/' || c == '.')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let new_cursor = self.input[..word_start].chars().count();
+        self.input.replace_range(word_start..byte_pos, "");
+        self.cursor = new_cursor;
+    }
+
+    pub fn clear_line(&mut self) {
+        self.input.clear();
+        self.cursor = 0;
+    }
+
+    pub fn take_input(&mut self) -> String {
+        let text = std::mem::take(&mut self.input);
+        self.cursor = 0;
+        self.history_index = None;
+        self.draft = None;
+        if !text.trim().is_empty() {
+            self.history.push(text.clone());
+        }
+        text
+    }
+
+    pub fn history_up(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+        match self.history_index {
+            None => {
+                self.draft = Some(self.input.clone());
+                self.history_index = Some(self.history.len() - 1);
+            }
+            Some(0) => return,
+            Some(ref mut idx) => *idx -= 1,
+        }
+        if let Some(idx) = self.history_index {
+            self.input = self.history[idx].clone();
+            self.cursor = self.input.chars().count();
+        }
+    }
+
+    pub fn history_down(&mut self) {
+        let Some(idx) = self.history_index else {
+            return;
+        };
+        if idx + 1 >= self.history.len() {
+            self.history_index = None;
+            self.input = self.draft.take().unwrap_or_default();
+        } else {
+            self.history_index = Some(idx + 1);
+            self.input = self.history[idx + 1].clone();
+        }
+        self.cursor = self.input.chars().count();
+    }
+
+    pub fn insert_paste(&mut self, text: &str) {
+        for ch in text.chars() {
+            self.insert_char(ch);
+        }
+    }
+
+    fn char_to_byte(&self, char_idx: usize) -> usize {
+        self.input
+            .char_indices()
+            .nth(char_idx)
+            .map(|(i, _)| i)
+            .unwrap_or(self.input.len())
+    }
+}
+
+pub struct App {
+    pub history: Vec<HistoryEntry>,
+    pub active: Option<ActiveStreaming>,
+    pub composer: ComposerState,
+    pub line_buffer: LineBuffer,
+
+    pub scroll_offset: usize,
+    pub auto_scroll: bool,
+    pub total_lines: usize,
+
+    pub show_help: bool,
+    pub should_quit: bool,
+    pub is_busy: bool,
+    pub needs_redraw: bool,
+    pub cancel_requested: bool,
+    pub pending: VecDeque<String>,
+    pub exit_after_turn: bool,
+
+    pub model: String,
+    pub provider: String,
+    #[allow(dead_code)]
+    pub workspace: PathBuf,
+    pub session_msg_count: usize,
+    pub context_status: String,
+    pub last_summary: Option<TurnSummary>,
+    pub animation_frame: u16,
+}
+
+impl App {
+    pub fn new(
+        model: String,
+        provider: String,
+        workspace: PathBuf,
+        session_msg_count: usize,
+        context_status: String,
+    ) -> Self {
+        Self {
+            history: Vec::new(),
+            active: None,
+            composer: ComposerState::new(),
+            line_buffer: LineBuffer::new(),
+            scroll_offset: 0,
+            auto_scroll: true,
+            total_lines: 0,
+            show_help: false,
+            should_quit: false,
+            is_busy: false,
+            needs_redraw: true,
+            cancel_requested: false,
+            pending: VecDeque::new(),
+            exit_after_turn: false,
+            model,
+            provider,
+            workspace,
+            session_msg_count,
+            context_status,
+            last_summary: None,
+            animation_frame: 0,
+        }
+    }
+
+    pub fn spinner_char(&self) -> char {
+        let idx = (self.animation_frame / 3) as usize % SPINNER.len();
+        SPINNER[idx]
+    }
+
+    pub fn tick_animation(&mut self) {
+        let prev = self.animation_frame;
+        self.animation_frame = self.animation_frame.wrapping_add(1);
+        if self.is_busy && (prev / 3) != (self.animation_frame / 3) {
+            self.needs_redraw = true;
+        }
+    }
+
+    pub fn handle_engine_event(&mut self, event: EngineEvent) {
+        self.needs_redraw = true;
+        match event {
+            EngineEvent::StreamDelta(delta) => {
+                let clean = strip_ansi(&delta);
+                self.line_buffer.push(&clean);
+                let committable = self.line_buffer.take_committable();
+                if !committable.is_empty() {
+                    let streaming = self.active.get_or_insert_with(ActiveStreaming::default);
+                    streaming.push_text(&committable);
+                }
+                self.auto_scroll = true;
+            }
+            EngineEvent::ToolHint {
+                tool_name,
+                tool_args,
+            } => {
+                let name = tool_name.as_deref().unwrap_or("tool");
+                let detail = tool_args
+                    .as_ref()
+                    .map(summarize_tool_args)
+                    .unwrap_or_default();
+                let diff = if name == "edit_file" {
+                    extract_edit_diff(tool_args.as_ref())
+                } else {
+                    None
+                };
+                let streaming = self.active.get_or_insert_with(ActiveStreaming::default);
+                streaming.push_tool(ToolActivity {
+                    name: name.to_string(),
+                    emoji: tool_emoji(name).to_string(),
+                    detail,
+                    diff,
+                });
+                self.auto_scroll = true;
+            }
+            EngineEvent::TurnComplete {
+                content,
+                reasoning,
+                summary,
+            } => {
+                self.flush_line_buffer();
+                let clean_content = strip_ansi(&content);
+                let clean_reasoning = reasoning.map(|r| strip_ansi(&r));
+                self.finalize_turn(Some(clean_content), clean_reasoning, Some(summary), None);
+            }
+            EngineEvent::TurnEmpty { note, summary } => {
+                self.flush_line_buffer();
+                self.finalize_turn(None, None, Some(summary), Some(note));
+            }
+            EngineEvent::TurnError(err) => {
+                self.flush_line_buffer();
+                self.flush_active_to_history();
+                self.history.push(HistoryEntry::Error(strip_ansi(&err)));
+                self.is_busy = false;
+                self.auto_scroll = true;
+                self.maybe_dequeue();
+            }
+            EngineEvent::ContextUpdate(ctx) => {
+                self.context_status = ctx;
+            }
+        }
+    }
+
+    fn flush_line_buffer(&mut self) {
+        let remaining = self.line_buffer.flush();
+        if !remaining.is_empty() {
+            let clean = strip_ansi(&remaining);
+            let streaming = self.active.get_or_insert_with(ActiveStreaming::default);
+            streaming.push_text(&clean);
+        }
+    }
+
+    fn finalize_turn(
+        &mut self,
+        content: Option<String>,
+        reasoning: Option<String>,
+        summary: Option<TurnSummary>,
+        note: Option<String>,
+    ) {
+        if let Some(streaming) = self.active.take() {
+            let mut accumulated_text = String::new();
+            for seg in streaming.segments {
+                match seg {
+                    StreamSegment::Text(text) => {
+                        accumulated_text.push_str(&text);
+                    }
+                    StreamSegment::Tool(tool) => {
+                        if !accumulated_text.trim().is_empty() {
+                            self.history.push(HistoryEntry::Assistant {
+                                content: std::mem::take(&mut accumulated_text),
+                                reasoning: None,
+                            });
+                        } else {
+                            accumulated_text.clear();
+                        }
+                        self.history.push(HistoryEntry::ToolCall {
+                            name: tool.name,
+                            emoji: tool.emoji,
+                            detail: tool.detail,
+                            diff: tool.diff,
+                        });
+                    }
+                }
+            }
+
+            let final_text = if accumulated_text.trim().is_empty() {
+                content.unwrap_or_default()
+            } else {
+                accumulated_text
+            };
+
+            if !final_text.trim().is_empty() {
+                self.history.push(HistoryEntry::Assistant {
+                    content: final_text,
+                    reasoning,
+                });
+            } else if let Some(note) = note {
+                self.history.push(HistoryEntry::System(format!("· {note}")));
+            }
+        } else {
+            let final_text = content.unwrap_or_default();
+            if !final_text.trim().is_empty() {
+                self.history.push(HistoryEntry::Assistant {
+                    content: final_text,
+                    reasoning,
+                });
+            } else if let Some(note) = note {
+                self.history.push(HistoryEntry::System(format!("· {note}")));
+            }
+        }
+
+        if let Some(summary) = summary.clone() {
+            self.history.push(HistoryEntry::Separator { summary });
+        }
+        self.last_summary = summary;
+        self.is_busy = false;
+        self.auto_scroll = true;
+        self.maybe_dequeue();
+    }
+
+    fn flush_active_to_history(&mut self) {
+        if let Some(streaming) = self.active.take() {
+            for seg in streaming.segments {
+                match seg {
+                    StreamSegment::Text(text) => {
+                        if !text.trim().is_empty() {
+                            self.history.push(HistoryEntry::Assistant {
+                                content: text,
+                                reasoning: None,
+                            });
+                        }
+                    }
+                    StreamSegment::Tool(tool) => {
+                        self.history.push(HistoryEntry::ToolCall {
+                            name: tool.name,
+                            emoji: tool.emoji,
+                            detail: tool.detail,
+                            diff: tool.diff,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn flush_active_as_cancelled(&mut self) {
+        self.flush_line_buffer();
+        self.flush_active_to_history();
+        self.history
+            .push(HistoryEntry::System("⏹ turn cancelled".into()));
+        self.auto_scroll = true;
+    }
+
+    fn maybe_dequeue(&mut self) {
+        if self.exit_after_turn {
+            self.should_quit = true;
+        }
+    }
+
+    pub fn handle_crossterm_event(&mut self, event: Event) {
+        match event {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                self.handle_key(key);
+            }
+            Event::Mouse(mouse) => {
+                if matches!(mouse.kind, MouseEventKind::ScrollUp) {
+                    self.scroll_up(3);
+                } else if matches!(mouse.kind, MouseEventKind::ScrollDown) {
+                    self.scroll_down(3);
+                }
+            }
+            Event::Paste(text) => {
+                if !self.show_help {
+                    self.composer.insert_paste(&text);
+                    self.needs_redraw = true;
+                }
+            }
+            Event::Resize(_, _) => {
+                self.needs_redraw = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) {
+        self.needs_redraw = true;
+
+        if self.show_help {
+            match key.code {
+                KeyCode::Esc | KeyCode::F(1) | KeyCode::Char('q') | KeyCode::Char('?') => {
+                    self.show_help = false;
+                }
+                KeyCode::Up | KeyCode::Char('k') => self.scroll_up(1),
+                KeyCode::Down | KeyCode::Char('j') => self.scroll_down(1),
+                KeyCode::PageUp => self.scroll_up(20),
+                KeyCode::PageDown => self.scroll_down(20),
+                _ => {}
+            }
+            return;
+        }
+
+        match key.code {
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.is_busy {
+                    self.cancel_requested = true;
+                } else if self.composer.input.trim().is_empty() {
+                    self.should_quit = true;
+                } else {
+                    self.composer.clear_line();
+                }
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.composer.input.is_empty() && !self.is_busy {
+                    self.should_quit = true;
+                }
+            }
+            KeyCode::Enter => {
+                if key.modifiers.contains(KeyModifiers::ALT)
+                    || key.modifiers.contains(KeyModifiers::SHIFT)
+                {
+                    self.composer.insert_newline();
+                    return;
+                }
+                let text = self.composer.input.trim().to_string();
+                if text.is_empty() {
+                    return;
+                }
+                if let Some(local) = parse_local_command(&text) {
+                    self.handle_local_command(local);
+                    return;
+                }
+                let prompt = self.composer.take_input();
+                self.history.push(HistoryEntry::User(prompt.clone()));
+                self.auto_scroll = true;
+                self.pending.push_back(prompt);
+            }
+            KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.composer.insert_newline();
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.composer.clear_line();
+            }
+            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.composer.delete_word_back();
+            }
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.composer.move_home();
+            }
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.composer.move_end();
+            }
+            KeyCode::Backspace => self.composer.backspace(),
+            KeyCode::Delete => self.composer.delete(),
+            KeyCode::Left => self.composer.move_left(),
+            KeyCode::Right => self.composer.move_right(),
+            KeyCode::Home => self.composer.move_home(),
+            KeyCode::End => self.composer.move_end(),
+            KeyCode::Up => {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    self.scroll_up(1);
+                } else if !self.composer.history.is_empty() && !self.composer.input.contains('\n') {
+                    self.composer.history_up();
+                } else {
+                    self.scroll_up(1);
+                }
+            }
+            KeyCode::Down => {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    self.scroll_down(1);
+                } else if self.composer.history_index.is_some() {
+                    self.composer.history_down();
+                } else {
+                    self.scroll_down(1);
+                }
+            }
+            KeyCode::PageUp => self.scroll_up(20),
+            KeyCode::PageDown => self.scroll_down(20),
+            KeyCode::F(1) => self.show_help = !self.show_help,
+            KeyCode::Char('?')
+                if self.composer.input.is_empty()
+                    && !key.modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.show_help = !self.show_help;
+            }
+            KeyCode::Esc => {
+                if !self.composer.input.is_empty() {
+                    self.composer.clear_line();
+                }
+            }
+            KeyCode::Tab => {}
+            KeyCode::Char(ch) => self.composer.insert_char(ch),
+            _ => {}
+        }
+    }
+
+    fn handle_local_command(&mut self, cmd: LocalCommand) {
+        self.composer.take_input();
+        match cmd {
+            LocalCommand::Help => self.show_help = true,
+            LocalCommand::Exit => {
+                if self.is_busy {
+                    self.exit_after_turn = true;
+                    self.pending.clear();
+                    self.history.push(HistoryEntry::System(
+                        "⏳ exit requested · finishing current turn…".into(),
+                    ));
+                } else {
+                    self.should_quit = true;
+                }
+            }
+            LocalCommand::Stop => {
+                if self.is_busy {
+                    self.cancel_requested = true;
+                }
+            }
+            LocalCommand::Clear => {
+                self.history.clear();
+                self.active = None;
+                self.line_buffer = LineBuffer::new();
+                self.scroll_offset = 0;
+                self.auto_scroll = true;
+                self.last_summary = None;
+                self.pending.push_back("/new".to_string());
+            }
+            LocalCommand::Agent(text) => {
+                self.history.push(HistoryEntry::User(text.clone()));
+                self.auto_scroll = true;
+                self.pending.push_back(text);
+            }
+        }
+    }
+
+    pub fn scroll_up(&mut self, lines: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+        self.auto_scroll = false;
+        self.needs_redraw = true;
+    }
+
+    pub fn scroll_down(&mut self, lines: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_add(lines);
+        self.auto_scroll = false;
+        self.needs_redraw = true;
+    }
+
+    pub fn clamp_scroll(&mut self, visible_height: usize) {
+        if self.total_lines <= visible_height {
+            self.scroll_offset = 0;
+            return;
+        }
+        let max = self.total_lines.saturating_sub(visible_height);
+        if self.auto_scroll {
+            self.scroll_offset = max;
+        } else if self.scroll_offset > max {
+            self.scroll_offset = max;
+        }
+        if self.scroll_offset >= max {
+            self.auto_scroll = true;
+        }
+    }
+
+    pub fn status_line(&self) -> String {
+        let state = if self.is_busy { "working" } else { "ready" };
+        let mut parts = vec![state.to_string()];
+        if let Some(ref s) = self.last_summary {
+            if s.prompt_tokens > 0 || s.completion_tokens > 0 {
+                parts.push(format!("↑{} ↓{}", s.prompt_tokens, s.completion_tokens));
+            }
+            parts.push(format_elapsed(s.elapsed));
+        }
+        parts.join(" · ")
+    }
+}
+
+enum LocalCommand {
+    Help,
+    Exit,
+    Stop,
+    Clear,
+    Agent(String),
+}
+
+fn parse_local_command(input: &str) -> Option<LocalCommand> {
+    let t = input.trim();
+    let lower = t.to_lowercase();
+    match lower.as_str() {
+        "/help" | "help" | "?" => Some(LocalCommand::Help),
+        "/exit" | "/quit" | "exit" | "quit" => Some(LocalCommand::Exit),
+        "/stop" | "stop" | "[stop]" => Some(LocalCommand::Stop),
+        "/clear" | "clear" => Some(LocalCommand::Clear),
+        _ => {
+            if lower.starts_with("/new")
+                || lower.starts_with("/memorize")
+                || lower.starts_with("/model")
+                || lower.starts_with("/status")
+            {
+                Some(LocalCommand::Agent(t.to_string()))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+pub fn strip_ansi(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    if !bytes.contains(&0x1b) {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(len);
+    let mut i = 0;
+    while i < len {
+        if bytes[i] == 0x1b {
+            i += 1;
+            if i < len && bytes[i] == b'[' {
+                i += 1;
+                while i < len && !(bytes[i].is_ascii_alphabetic() || bytes[i] == b'm') {
+                    i += 1;
+                }
+                if i < len {
+                    i += 1;
+                }
+            } else if i < len && bytes[i] == b']' {
+                i += 1;
+                while i < len {
+                    if bytes[i] == 0x07 {
+                        i += 1;
+                        break;
+                    }
+                    if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'\\' {
+                        i += 2;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+        } else {
+            let ch = text[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
+fn extract_edit_diff(args: Option<&Value>) -> Option<EditDiff> {
+    let obj = args?.as_object()?;
+    let path = obj
+        .get("target_file")
+        .or_else(|| obj.get("path"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let old = obj.get("old_string").and_then(|v| v.as_str())?;
+    let new = obj.get("new_string").and_then(|v| v.as_str())?;
+    if old.is_empty() && new.is_empty() {
+        return None;
+    }
+    Some(EditDiff {
+        path,
+        removals: old.lines().map(String::from).collect(),
+        additions: new.lines().map(String::from).collect(),
+    })
+}
+
+fn summarize_tool_args(args: &Value) -> String {
+    match args {
+        Value::Object(map) => {
+            let preferred = [
+                "path",
+                "target_file",
+                "file",
+                "command",
+                "cmd",
+                "url",
+                "query",
+                "pattern",
+                "task",
+            ];
+            let mut parts = Vec::new();
+            for key in preferred {
+                if let Some(val) = map.get(key) {
+                    let s = summarize_value(val);
+                    if !s.is_empty() {
+                        parts.push(format!("{key}={s}"));
+                    }
+                }
+            }
+            if parts.is_empty() {
+                map.iter()
+                    .take(2)
+                    .filter_map(|(k, v)| {
+                        let s = summarize_value(v);
+                        (!s.is_empty()).then(|| format!("{k}={s}"))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            } else {
+                parts.join(" · ")
+            }
+        }
+        _ => summarize_value(args),
+    }
+}
+
+fn summarize_value(val: &Value) -> String {
+    match val {
+        Value::String(s) => truncate_mid(s.trim(), 48),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Array(a) => {
+            let items: Vec<_> = a.iter().take(3).map(summarize_value).collect();
+            if a.len() > 3 {
+                format!("{} …", items.join(", "))
+            } else {
+                items.join(", ")
+            }
+        }
+        Value::Null => String::new(),
+        Value::Object(_) => "{…}".to_string(),
+    }
+}
+
+fn truncate_mid(text: &str, max: usize) -> String {
+    let len = text.chars().count();
+    if len <= max {
+        return text.to_string();
+    }
+    let head = max / 2 - 1;
+    let tail = max - head - 1;
+    let start: String = text.chars().take(head).collect();
+    let end: String = text
+        .chars()
+        .rev()
+        .take(tail)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    format!("{start}…{end}")
+}
+
+pub fn format_elapsed(d: Duration) -> String {
+    let s = d.as_secs();
+    if s < 60 {
+        format!("{s}s")
+    } else {
+        format!("{}m {}s", s / 60, s % 60)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn composer_basic_editing() {
+        let mut c = ComposerState::new();
+        c.insert_char('h');
+        c.insert_char('i');
+        assert_eq!(c.input, "hi");
+        assert_eq!(c.cursor, 2);
+        c.backspace();
+        assert_eq!(c.input, "h");
+        assert_eq!(c.cursor, 1);
+    }
+
+    #[test]
+    fn composer_multiline() {
+        let mut c = ComposerState::new();
+        c.insert_char('a');
+        c.insert_newline();
+        c.insert_char('b');
+        assert_eq!(c.input, "a\nb");
+        assert_eq!(c.cursor, 3);
+    }
+
+    #[test]
+    fn composer_history() {
+        let mut c = ComposerState::new();
+        c.input = "first".into();
+        c.cursor = 5;
+        c.take_input();
+        c.input = "second".into();
+        c.cursor = 6;
+        c.take_input();
+        assert_eq!(c.history.len(), 2);
+        c.history_up();
+        assert_eq!(c.input, "second");
+        c.history_up();
+        assert_eq!(c.input, "first");
+        c.history_down();
+        assert_eq!(c.input, "second");
+    }
+
+    #[test]
+    fn local_commands_parsed() {
+        assert!(matches!(
+            parse_local_command("/help"),
+            Some(LocalCommand::Help)
+        ));
+        assert!(matches!(
+            parse_local_command("/exit"),
+            Some(LocalCommand::Exit)
+        ));
+        assert!(matches!(
+            parse_local_command("/stop"),
+            Some(LocalCommand::Stop)
+        ));
+        assert!(matches!(
+            parse_local_command("/clear"),
+            Some(LocalCommand::Clear)
+        ));
+        assert!(matches!(
+            parse_local_command("/model gpt-4"),
+            Some(LocalCommand::Agent(_))
+        ));
+        assert!(parse_local_command("hello world").is_none());
+    }
+
+    #[test]
+    fn line_buffer_gates_until_newline() {
+        let mut lb = LineBuffer::new();
+        lb.push("hello ");
+        assert_eq!(lb.take_committable(), "");
+        lb.push("world\nfoo");
+        assert_eq!(lb.take_committable(), "hello world\n");
+        assert_eq!(lb.flush(), "foo");
+    }
+
+    #[test]
+    fn line_buffer_multiple_newlines() {
+        let mut lb = LineBuffer::new();
+        lb.push("a\nb\nc\npartial");
+        let committed = lb.take_committable();
+        assert_eq!(committed, "a\nb\nc\n");
+        assert_eq!(lb.flush(), "partial");
+    }
+
+    #[test]
+    fn edit_diff_extraction() {
+        let args = serde_json::json!({
+            "target_file": "src/main.rs",
+            "old_string": "let x = 1;",
+            "new_string": "let x = 2;\nlet y = 3;"
+        });
+        let diff = extract_edit_diff(Some(&args)).unwrap();
+        assert_eq!(diff.path, "src/main.rs");
+        assert_eq!(diff.removals, vec!["let x = 1;"]);
+        assert_eq!(diff.additions, vec!["let x = 2;", "let y = 3;"]);
+    }
+
+    #[test]
+    fn strip_ansi_removes_escape_codes() {
+        assert_eq!(strip_ansi("hello \x1b[1mworld\x1b[0m"), "hello world");
+        assert_eq!(strip_ansi("no escapes"), "no escapes");
+        assert_eq!(strip_ansi("\x1b[31mred\x1b[0m"), "red");
+    }
+
+    #[test]
+    fn stream_segments_maintain_order() {
+        let mut active = ActiveStreaming::default();
+        active.push_text("hello ");
+        active.push_tool(ToolActivity {
+            name: "read_file".into(),
+            emoji: "📖".into(),
+            detail: "path=foo".into(),
+            diff: None,
+        });
+        active.push_text("world");
+        assert_eq!(active.segments.len(), 3);
+        assert!(matches!(&active.segments[0], StreamSegment::Text(s) if s == "hello "));
+        assert!(matches!(&active.segments[1], StreamSegment::Tool(_)));
+        assert!(matches!(&active.segments[2], StreamSegment::Text(s) if s == "world"));
+    }
+
+    #[test]
+    fn push_text_merges_adjacent() {
+        let mut active = ActiveStreaming::default();
+        active.push_text("hello ");
+        active.push_text("world");
+        assert_eq!(active.segments.len(), 1);
+        assert!(matches!(&active.segments[0], StreamSegment::Text(s) if s == "hello world"));
+    }
+}

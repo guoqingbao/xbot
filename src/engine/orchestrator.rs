@@ -1043,6 +1043,7 @@ impl AgentLoop {
         let _ = callback(outbound).await;
     }
 
+    #[allow(dead_code)]
     async fn send_backend_tool_hint(
         &self,
         target: Option<&ProgressTarget>,
@@ -1249,6 +1250,7 @@ impl AgentLoop {
         }
     }
 
+    #[allow(unused)]
     async fn record_completed_task_memory(
         &self,
         task_text: &str,

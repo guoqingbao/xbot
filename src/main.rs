@@ -1,9 +1,8 @@
 mod cli;
+mod tui;
 
-use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use std::{
     collections::hash_map::DefaultHasher,
@@ -13,13 +12,11 @@ use std::{
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use cli::{
-    CliOutput, CliShell, InputEvent, TurnSummary, run_channels_list, run_channels_login,
-    run_channels_setup, run_channels_status, run_config_channel, run_config_provider,
-    run_skills_init, run_skills_list,
+    CliShell, TurnSummary, run_channels_list, run_channels_login, run_channels_setup,
+    run_channels_status, run_config_channel, run_config_provider, run_skills_init, run_skills_list,
 };
 use colored::*;
 use local_ip_address::local_ip;
-use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 use rbot::channels::ChannelManager;
 use rbot::config::Config;
@@ -234,220 +231,26 @@ async fn repl(config_path: Option<&Path>, model: Option<String>) -> Result<()> {
     let context_status = repl_session_context_status(&agent, &session_key).await?;
     let display_model =
         repl_session_model(&workspace, &session_key)?.unwrap_or_else(|| model.clone());
+
+    if let Some(notice) = &startup_notice {
+        eprintln!("{notice}");
+    }
+
     let agent = Arc::new(agent);
-    let mut shell = CliShell::new(&workspace, &cwd, &display_model, &provider_name)?;
-    shell.print_welcome(session_message_count, &context_status);
-    if let Some(notice) = startup_notice {
-        println!("{notice}");
-    }
-    let output = shell.create_output()?;
-    let (tx, mut rx) = unbounded_channel::<ReplEvent>();
-    let input_tx = tx.clone();
-    let busy_flag = Arc::new(AtomicBool::new(false));
-    let input_busy_flag = Arc::clone(&busy_flag);
-    std::thread::spawn(move || {
-        let mut shell = shell;
-        loop {
-            match shell.read_event() {
-                Ok(InputEvent::Prompt(prompt)) => {
-                    if input_tx
-                        .send(ReplEvent::Input(InputEvent::Prompt(prompt)))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Ok(InputEvent::Exit) => {
-                    let _ = input_tx.send(ReplEvent::Input(InputEvent::Exit));
-                    break;
-                }
-                Ok(InputEvent::Interrupt) => {
-                    if input_busy_flag.load(Ordering::SeqCst) {
-                        if input_tx
-                            .send(ReplEvent::Input(InputEvent::Interrupt))
-                            .is_err()
-                        {
-                            break;
-                        }
-                    } else {
-                        let _ = input_tx.send(ReplEvent::Input(InputEvent::Exit));
-                        break;
-                    }
-                }
-                Ok(InputEvent::Stop) => {
-                    if input_tx.send(ReplEvent::Input(InputEvent::Stop)).is_err() {
-                        break;
-                    }
-                }
-                Err(err) => {
-                    eprintln!("error: {err}");
-                    let _ = input_tx.send(ReplEvent::Input(InputEvent::Exit));
-                    break;
-                }
-            }
-        }
-    });
+    configure_model_switch_persistence(&agent, config_path);
 
-    let mut pending = VecDeque::new();
-    let mut busy = false;
-    let mut exit_requested = false;
-    let mut active_task = None::<tokio::task::JoinHandle<()>>;
-    while let Some(event) = rx.recv().await {
-        match event {
-            ReplEvent::Input(InputEvent::Prompt(prompt)) => {
-                if busy {
-                    pending.push_back(prompt.clone());
-                    output.print_queue_notice(pending.len(), &prompt);
-                } else {
-                    active_task = Some(spawn_repl_turn(
-                        agent.clone(),
-                        session_key.clone(),
-                        chat_id.clone(),
-                        prompt,
-                        output.clone(),
-                        tx.clone(),
-                    ));
-                    busy = true;
-                    busy_flag.store(true, Ordering::SeqCst);
-                }
-            }
-            ReplEvent::Input(InputEvent::Interrupt) => {
-                if busy {
-                    if let Some(handle) = active_task.take() {
-                        handle.abort();
-                        agent.set_progress_sender(None);
-                        output.print_interrupt_notice(pending.len());
-                        busy = false;
-                        busy_flag.store(false, Ordering::SeqCst);
-                        if exit_requested {
-                            break;
-                        }
-                        if let Some(next) = pending.pop_front() {
-                            output.print_dequeue_notice(pending.len(), &next);
-                            active_task = Some(spawn_repl_turn(
-                                agent.clone(),
-                                session_key.clone(),
-                                chat_id.clone(),
-                                next,
-                                output.clone(),
-                                tx.clone(),
-                            ));
-                            busy = true;
-                            busy_flag.store(true, Ordering::SeqCst);
-                        } else {
-                            // Ready for next input
-                        }
-                    }
-                } else {
-                    break;
-                }
-            }
-            ReplEvent::Input(InputEvent::Stop) => {
-                if busy {
-                    if let Some(handle) = active_task.take() {
-                        handle.abort();
-                        agent.set_progress_sender(None);
-                        output.print_interrupt_notice(pending.len());
-                        busy = false;
-                        busy_flag.store(false, Ordering::SeqCst);
-                        if exit_requested {
-                            break;
-                        }
-                        if let Some(next) = pending.pop_front() {
-                            output.print_dequeue_notice(pending.len(), &next);
-                            active_task = Some(spawn_repl_turn(
-                                agent.clone(),
-                                session_key.clone(),
-                                chat_id.clone(),
-                                next,
-                                output.clone(),
-                                tx.clone(),
-                            ));
-                            busy = true;
-                            busy_flag.store(true, Ordering::SeqCst);
-                        } else {
-                            // Ready for next input
-                        }
-                    }
-                } else {
-                    output.print_interrupt_notice(0);
-                }
-            }
-            ReplEvent::Input(InputEvent::Exit) => {
-                if busy {
-                    exit_requested = true;
-                    pending.clear();
-                    output.print_exit_notice();
-                } else {
-                    break;
-                }
-            }
-            ReplEvent::TurnFinished => {
-                busy = false;
-                busy_flag.store(false, Ordering::SeqCst);
-                if exit_requested {
-                    break;
-                }
-                if let Some(next) = pending.pop_front() {
-                    output.print_dequeue_notice(pending.len(), &next);
-                    active_task = Some(spawn_repl_turn(
-                        agent.clone(),
-                        session_key.clone(),
-                        chat_id.clone(),
-                        next,
-                        output.clone(),
-                        tx.clone(),
-                    ));
-                    busy = true;
-                    busy_flag.store(true, Ordering::SeqCst);
-                } else {
-                    // Ready for next input
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn spawn_repl_turn(
-    agent: Arc<AgentLoop>,
-    session_key: String,
-    chat_id: String,
-    prompt: String,
-    output: CliOutput,
-    tx: UnboundedSender<ReplEvent>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let stream = output.stream_renderer();
-        agent.set_progress_sender(Some(cli_progress_callback(stream.clone())));
-        let started = Instant::now();
-        stream.start_waiting();
-        match agent
-            .process_direct_stream(
-                &prompt,
-                &session_key,
-                "cli",
-                &chat_id,
-                Some(stream.callback()),
-            )
-            .await
-        {
-            Ok(Some(response)) => match turn_summary(&agent, started.elapsed()) {
-                Ok(summary) => stream.finish(
-                    &response.content,
-                    response.reasoning_content.as_deref(),
-                    &summary,
-                ),
-                Err(err) => stream.finish_error(&err.to_string()),
-            },
-            Ok(None) => match turn_summary(&agent, started.elapsed()) {
-                Ok(summary) => stream.finish_empty("no direct reply", &summary),
-                Err(err) => stream.finish_error(&err.to_string()),
-            },
-            Err(err) => stream.finish_error(&err.to_string()),
-        }
-        let _ = tx.send(ReplEvent::TurnFinished);
-    })
+    tui::run_tui_repl(
+        agent,
+        display_model,
+        provider_name,
+        workspace,
+        cwd,
+        session_key,
+        chat_id,
+        session_message_count,
+        context_status,
+    )
+    .await
 }
 
 async fn run(config_path: Option<&Path>, model_override: Option<String>) -> Result<()> {
@@ -729,11 +532,6 @@ struct BuiltAgent {
     session_key: String,
     chat_id: String,
     startup_notice: Option<String>,
-}
-
-enum ReplEvent {
-    Input(InputEvent),
-    TurnFinished,
 }
 
 async fn build_agent(

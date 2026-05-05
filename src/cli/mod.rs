@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::borrow::Cow;
 use std::env;
 use std::io::{self, IsTerminal, Write};

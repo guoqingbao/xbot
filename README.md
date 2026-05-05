@@ -15,6 +15,9 @@
 - 🔄 **Streaming** - Stream delta support with per-channel streaming, retry logic with exponential backoff
 - 🪝 **Hook System** - Extensible `AgentHook` trait for lifecycle callbacks without modifying the core agent loop
 
+## Overview
+<img src="docs/rbot.png" alt="rbot terminal" width="800">
+
 ## 📚 Documentation
 
 - [🚀 Getting Started](./docs/USAGE.md)
