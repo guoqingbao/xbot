@@ -192,6 +192,13 @@ impl AgentLoop {
             .expect("progress callback lock poisoned") = callback;
     }
 
+    pub fn set_subagent_notification_callback(
+        &self,
+        callback: Option<crate::engine::subtasks::SubagentNotificationCallback>,
+    ) {
+        self.subagents.set_notification_callback(callback);
+    }
+
     pub fn set_model_switch_callback(&self, callback: Option<ModelSwitchCallback>) {
         *self
             .model_switch_callback
@@ -1043,7 +1050,6 @@ impl AgentLoop {
         let _ = callback(outbound).await;
     }
 
-    #[allow(dead_code)]
     async fn send_backend_tool_hint(
         &self,
         target: Option<&ProgressTarget>,
@@ -1250,7 +1256,6 @@ impl AgentLoop {
         }
     }
 
-    #[allow(unused)]
     async fn record_completed_task_memory(
         &self,
         task_text: &str,
@@ -1262,12 +1267,12 @@ impl AgentLoop {
             .map(ToOwned::to_owned)
             .or_else(|| latest_assistant_text(messages))
             .unwrap_or_else(|| task_text.to_string());
-        // self.send_backend_tool_hint(
-        //     target,
-        //     "memory_summary",
-        //     serde_json::json!({"task":"summarize completed task memory"}),
-        // )
-        // .await;
+        self.send_backend_tool_hint(
+            target,
+            "memory_summary",
+            serde_json::json!({"task":"summarize completed task memory","_summarizing":true}),
+        )
+        .await;
         let entry = self
             .build_memory_entry_with_skill(
                 MemoryEntryKind::TaskSummary,
@@ -1286,6 +1291,12 @@ impl AgentLoop {
         if let Err(err) = self.memory.store().append_memory_entry(&entry) {
             eprintln!("failed to append task summary to memory: {err}");
         }
+        self.send_backend_tool_hint(
+            target,
+            "memory_summary_done",
+            serde_json::json!({"task":"memory summary complete","_summarizing_done":true}),
+        )
+        .await;
     }
 
     async fn build_memory_entry_with_skill(

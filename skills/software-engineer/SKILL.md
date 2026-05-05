@@ -28,4 +28,3 @@ Apply this workflow for autonomous software development tasks.
 - For bug fixes: reproduce, isolate, patch, verify regression coverage.
 - For features: inspect existing patterns, implement incrementally, test the public behavior.
 - For release readiness: run build/test/lint, inspect failures, and summarize blockers.
-- DO NOT use subagents at the current stage.

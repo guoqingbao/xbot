@@ -21,8 +21,9 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
 
-use app::App;
+use app::{AgentState as AS, App};
 use rbot::engine::AgentLoop;
+use rbot::engine::subtasks::SubagentNotification;
 use rbot::providers::TextStreamCallback;
 use rbot::storage::OutboundMessage;
 use rbot::tools::MessageSendCallback;
@@ -108,6 +109,56 @@ pub async fn run_tui_repl(
 
     let (engine_tx, mut engine_rx) = mpsc::unbounded_channel::<EngineEvent>();
 
+    let subagent_tx = engine_tx.clone();
+    agent.set_subagent_notification_callback(Some(Arc::new(move |notif| {
+        let event = match notif {
+            SubagentNotification::Started {
+                task_id,
+                label,
+                task,
+            } => EngineEvent::SubagentStarted {
+                task_id,
+                label,
+                task,
+            },
+            SubagentNotification::Progress {
+                task_id,
+                tool_name,
+                detail,
+                step,
+            } => EngineEvent::SubagentProgress {
+                task_id,
+                tool_name,
+                detail,
+                step,
+            },
+            SubagentNotification::Completed {
+                task_id,
+                label,
+                result_preview,
+                full_result,
+            } => EngineEvent::SubagentCompleted {
+                task_id,
+                label,
+                result_preview,
+                full_result,
+            },
+            SubagentNotification::Failed {
+                task_id,
+                label,
+                error,
+            } => EngineEvent::SubagentFailed {
+                task_id,
+                label,
+                error,
+            },
+            SubagentNotification::Cancelled { task_id } => {
+                EngineEvent::SubagentCancelled { task_id }
+            }
+        };
+        let _ = subagent_tx.send(event);
+    })));
+
     let (input_tx, mut input_rx) = mpsc::unbounded_channel::<crossterm::event::Event>();
     std::thread::spawn(move || {
         loop {
@@ -129,31 +180,27 @@ pub async fn run_tui_repl(
     let mut frame_limiter = FrameRateLimiter::default();
 
     loop {
-        // 1. Drain ALL engine events (non-blocking)
         while let Ok(event) = engine_rx.try_recv() {
             app.handle_engine_event(event);
         }
 
-        // 2. Drain ALL input events (non-blocking)
         while let Ok(event) = input_rx.try_recv() {
             app.handle_crossterm_event(event);
         }
 
-        // 3. Handle cancel request from user input
         if app.cancel_requested {
             app.cancel_requested = false;
             if let Some(handle) = active_turn.take() {
                 handle.abort();
                 agent.set_progress_sender(None);
             }
-            app.is_busy = false;
+            app.agent_state = AS::Ready;
             app.pending.clear();
             app.flush_active_as_cancelled();
             app.needs_redraw = true;
         }
 
-        // 4. Start next pending turn if idle
-        if !app.is_busy {
+        if !app.is_busy() {
             if let Some(prompt) = app.pending.pop_front() {
                 active_turn = Some(spawn_turn(
                     agent.clone(),
@@ -162,15 +209,13 @@ pub async fn run_tui_repl(
                     chat_id.clone(),
                     engine_tx.clone(),
                 ));
-                app.is_busy = true;
+                app.agent_state = AS::Working;
                 app.needs_redraw = true;
             }
         }
 
-        // 5. Advance animation counter
         app.tick_animation();
 
-        // 6. Draw if needed (capped at ~120 FPS)
         let now = Instant::now();
         if app.needs_redraw {
             if frame_limiter.time_until_next_draw(now).is_none() {
@@ -180,13 +225,11 @@ pub async fn run_tui_repl(
             }
         }
 
-        // 7. Quit check
         if app.should_quit {
             break;
         }
 
-        // 8. Yield to engine tasks and sleep
-        let poll_ms = if app.is_busy {
+        let poll_ms = if app.is_busy() || app.running_subagent_count() > 0 {
             ACTIVE_POLL_MS
         } else {
             IDLE_POLL_MS
@@ -199,6 +242,7 @@ pub async fn run_tui_repl(
         tokio::time::sleep(sleep_dur).await;
     }
 
+    agent.set_subagent_notification_callback(None);
     drop(_guard);
     Ok(())
 }
@@ -212,7 +256,11 @@ fn spawn_turn(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let stream_callback = make_stream_callback(tx.clone());
-        agent.set_progress_sender(Some(make_progress_callback(tx.clone())));
+        agent.set_progress_sender(Some(make_progress_callback(
+            tx.clone(),
+            agent.clone(),
+            session_key.clone(),
+        )));
         let started = Instant::now();
 
         let result = agent
@@ -280,9 +328,15 @@ fn make_stream_callback(tx: mpsc::UnboundedSender<EngineEvent>) -> TextStreamCal
     })))
 }
 
-fn make_progress_callback(tx: mpsc::UnboundedSender<EngineEvent>) -> MessageSendCallback {
+fn make_progress_callback(
+    tx: mpsc::UnboundedSender<EngineEvent>,
+    agent: Arc<AgentLoop>,
+    session_key: String,
+) -> MessageSendCallback {
     Arc::new(move |msg: OutboundMessage| {
         let tx = tx.clone();
+        let agent = agent.clone();
+        let session_key = session_key.clone();
         Box::pin(async move {
             if msg
                 .metadata
@@ -290,14 +344,45 @@ fn make_progress_callback(tx: mpsc::UnboundedSender<EngineEvent>) -> MessageSend
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false)
             {
-                let _ = tx.send(EngineEvent::ToolHint {
-                    tool_name: msg
-                        .metadata
-                        .get("_tool_name")
-                        .and_then(serde_json::Value::as_str)
-                        .map(String::from),
-                    tool_args: msg.metadata.get("_tool_args").cloned(),
-                });
+                let tool_name = msg
+                    .metadata
+                    .get("_tool_name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(String::from);
+
+                let is_summarizing = msg
+                    .metadata
+                    .get("_tool_args")
+                    .and_then(|v| v.get("_summarizing"))
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+
+                let is_summarizing_done = msg
+                    .metadata
+                    .get("_tool_args")
+                    .and_then(|v| v.get("_summarizing_done"))
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+
+                if is_summarizing {
+                    let _ = tx.send(EngineEvent::Summarizing);
+                } else if is_summarizing_done {
+                    let _ = tx.send(EngineEvent::SummarizingDone);
+                } else {
+                    let _ = tx.send(EngineEvent::ToolHint {
+                        tool_name,
+                        tool_args: msg.metadata.get("_tool_args").cloned(),
+                    });
+                }
+
+                if let Ok(status_content) = agent.session_status_content(&session_key).await {
+                    if let Some(ctx) = status_content
+                        .lines()
+                        .find_map(|line| line.strip_prefix("Context: ").map(ToOwned::to_owned))
+                    {
+                        let _ = tx.send(EngineEvent::ContextUpdate(ctx));
+                    }
+                }
             }
             Ok(())
         })

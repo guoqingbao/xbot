@@ -14,6 +14,39 @@ use crate::tools::{
     WriteFileTool,
 };
 
+#[derive(Debug, Clone)]
+pub enum SubagentNotification {
+    Started {
+        task_id: String,
+        label: String,
+        task: String,
+    },
+    Progress {
+        task_id: String,
+        tool_name: String,
+        detail: String,
+        step: u32,
+    },
+    Completed {
+        task_id: String,
+        label: String,
+        result_preview: String,
+        full_result: String,
+    },
+    Failed {
+        task_id: String,
+        label: String,
+        error: String,
+    },
+    Cancelled {
+        task_id: String,
+    },
+}
+
+pub const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 3;
+
+pub type SubagentNotificationCallback = Arc<dyn Fn(SubagentNotification) + Send + Sync>;
+
 #[derive(Clone)]
 pub struct SubagentManager {
     provider: SharedProvider,
@@ -26,6 +59,8 @@ pub struct SubagentManager {
     restrict_to_workspace: bool,
     running_tasks: Arc<Mutex<BTreeMap<String, tokio::task::JoinHandle<()>>>>,
     session_tasks: Arc<Mutex<BTreeMap<String, HashSet<String>>>>,
+    notification_callback: Arc<Mutex<Option<SubagentNotificationCallback>>>,
+    max_concurrent: usize,
 }
 
 impl SubagentManager {
@@ -50,6 +85,30 @@ impl SubagentManager {
             restrict_to_workspace,
             running_tasks: Arc::new(Mutex::new(BTreeMap::new())),
             session_tasks: Arc::new(Mutex::new(BTreeMap::new())),
+            notification_callback: Arc::new(Mutex::new(None)),
+            max_concurrent: DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+        }
+    }
+
+    pub fn set_max_concurrent(&mut self, max: usize) {
+        self.max_concurrent = max;
+    }
+
+    pub fn set_notification_callback(&self, callback: Option<SubagentNotificationCallback>) {
+        *self
+            .notification_callback
+            .lock()
+            .expect("subagent notification lock poisoned") = callback;
+    }
+
+    fn notify(&self, event: SubagentNotification) {
+        if let Some(cb) = self
+            .notification_callback
+            .lock()
+            .expect("subagent notification lock poisoned")
+            .clone()
+        {
+            cb(event);
         }
     }
 
@@ -61,6 +120,14 @@ impl SubagentManager {
         origin_chat_id: String,
         session_key: Option<String>,
     ) -> String {
+        let current_count = self.get_running_count();
+        if current_count >= self.max_concurrent {
+            return format!(
+                "Cannot spawn subagent: concurrency limit reached ({}/{}). \
+                 Wait for existing subagents to complete before spawning more.",
+                current_count, self.max_concurrent
+            );
+        }
         let task_id = uuid::Uuid::new_v4()
             .simple()
             .to_string()
@@ -79,11 +146,12 @@ impl SubagentManager {
         let task_id_for_spawn = task_id.clone();
         let display_label_for_spawn = display_label.clone();
         let session_key_for_cleanup = session_key.clone();
+        let task_for_spawn = task.clone();
         let handle = tokio::spawn(async move {
             let _ = manager
                 .run_subagent(
                     task_id_for_spawn.clone(),
-                    task,
+                    task_for_spawn,
                     display_label_for_spawn,
                     origin_channel,
                     origin_chat_id,
@@ -103,6 +171,11 @@ impl SubagentManager {
                 .or_default()
                 .insert(task_id.clone());
         }
+        self.notify(SubagentNotification::Started {
+            task_id: task_id.clone(),
+            label: display_label.clone(),
+            task: task.chars().take(120).collect(),
+        });
         format!(
             "Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
         )
@@ -119,14 +192,17 @@ impl SubagentManager {
             .into_iter()
             .collect::<Vec<_>>();
         let mut cancelled = 0;
-        for task_id in task_ids {
+        for task_id in &task_ids {
             if let Some(handle) = self
                 .running_tasks
                 .lock()
                 .expect("subagent running lock poisoned")
-                .remove(&task_id)
+                .remove(task_id)
             {
                 handle.abort();
+                self.notify(SubagentNotification::Cancelled {
+                    task_id: task_id.clone(),
+                });
                 cancelled += 1;
             }
         }
@@ -164,6 +240,7 @@ impl SubagentManager {
         ];
 
         let mut final_result = None;
+        let mut step: u32 = 0;
         for _ in 0..15 {
             let response = self
                 .provider
@@ -174,7 +251,15 @@ impl SubagentManager {
                     None,
                     None,
                 )
-                .await?;
+                .await
+                .map_err(|e| {
+                    self.notify(SubagentNotification::Failed {
+                        task_id: task_id.clone(),
+                        label: label.clone(),
+                        error: format!("{e:#}"),
+                    });
+                    e
+                })?;
             if response.has_tool_calls() {
                 let tool_calls = response
                     .tool_calls
@@ -193,6 +278,13 @@ impl SubagentManager {
                     metadata: None,
                 });
                 for tool_call in response.tool_calls {
+                    step += 1;
+                    self.notify(SubagentNotification::Progress {
+                        task_id: task_id.clone(),
+                        tool_name: tool_call.name.clone(),
+                        detail: summarize_tool_args_for_notify(&tool_call.arguments),
+                        step,
+                    });
                     let output = tools.execute(&tool_call.name, tool_call.arguments).await;
                     messages.push(ChatMessage {
                         role: "tool".to_string(),
@@ -215,8 +307,20 @@ impl SubagentManager {
             }
         }
 
-        let result = final_result
-            .unwrap_or_else(|| "Task completed but no final response was generated.".to_string());
+        let result = final_result.unwrap_or_else(|| {
+            extract_fallback_result(&messages).unwrap_or_else(|| {
+                "Task completed but no final response was generated.".to_string()
+            })
+        });
+
+        let preview: String = result.chars().take(200).collect();
+        self.notify(SubagentNotification::Completed {
+            task_id: task_id.clone(),
+            label: label.clone(),
+            result_preview: preview,
+            full_result: result.clone(),
+        });
+
         let bus = self.bus.lock().expect("subagent bus lock poisoned").clone();
         bus
             .publish_inbound(InboundMessage {
@@ -277,17 +381,23 @@ impl SubagentManager {
     fn build_subagent_prompt(&self) -> String {
         let runtime_ctx = ContextBuilder::RUNTIME_CONTEXT_TAG;
         let skills_summary = SkillsLoader::new(&self.workspace, None).build_skills_summary();
+        let core = format!(
+            "# Subagent\n\n{runtime_ctx}\n\n\
+             You are a focused background subagent working on a delegated subtask.\n\n\
+             ## Instructions\n\
+             - Read the task description carefully and complete it using the available tools.\n\
+             - When finished, write a clear, concise summary of what you accomplished and \
+             any important findings. This summary is your final response and will be reported \
+             back to the parent agent.\n\
+             - IMPORTANT: You MUST end with a text response (not a tool call). Your final \
+             message should summarize the result.\n\n\
+             ## Workspace\n{}",
+            self.workspace.display()
+        );
         if skills_summary.is_empty() {
-            format!(
-                "# Subagent\n\n{runtime_ctx}\n\nYou are a focused background subagent. Stay on the assigned task and return a concise final result.\n\n## Workspace\n{}",
-                self.workspace.display()
-            )
+            core
         } else {
-            format!(
-                "# Subagent\n\n{runtime_ctx}\n\nYou are a focused background subagent. Stay on the assigned task and return a concise final result.\n\n## Workspace\n{}\n\n## Skills\n{}\n",
-                self.workspace.display(),
-                skills_summary
-            )
+            format!("{core}\n\n## Skills\n{skills_summary}\n")
         }
     }
 
@@ -309,4 +419,68 @@ impl SubagentManager {
             }
         }
     }
+}
+
+fn extract_fallback_result(messages: &[ChatMessage]) -> Option<String> {
+    for msg in messages.iter().rev() {
+        if msg.role == "assistant" {
+            if let Some(text) = msg.content_as_text() {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    let tool_results: Vec<String> = messages
+        .iter()
+        .rev()
+        .filter(|m| m.role == "tool")
+        .filter_map(|m| {
+            let text = m.content_as_text()?;
+            let name = m.name.as_deref().unwrap_or("tool");
+            let summary: String = text.chars().take(200).collect();
+            Some(format!("{name}: {summary}"))
+        })
+        .take(3)
+        .collect();
+    if tool_results.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "Subagent completed its work. Recent tool outputs:\n{}",
+        tool_results
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n")
+    ))
+}
+
+fn summarize_tool_args_for_notify(args: &serde_json::Value) -> String {
+    let preferred = [
+        "path",
+        "target_file",
+        "file",
+        "command",
+        "cmd",
+        "url",
+        "query",
+    ];
+    if let Some(map) = args.as_object() {
+        for key in preferred {
+            if let Some(val) = map.get(key).and_then(|v| v.as_str()) {
+                let truncated: String = val.chars().take(60).collect();
+                return format!("{key}={truncated}");
+            }
+        }
+        if let Some((key, val)) = map.iter().next() {
+            let s = val
+                .as_str()
+                .map(|s| s.chars().take(40).collect::<String>())
+                .unwrap_or_else(|| format!("{val}").chars().take(40).collect());
+            return format!("{key}={s}");
+        }
+    }
+    String::new()
 }

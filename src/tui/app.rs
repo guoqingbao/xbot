@@ -1,6 +1,6 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
 use serde_json::Value;
@@ -8,6 +8,14 @@ use serde_json::Value;
 use rbot::util::tool_emoji;
 
 const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AgentState {
+    Ready,
+    Working,
+    WaitingSubagents,
+    Summarizing,
+}
 
 #[derive(Clone)]
 pub struct TurnSummary {
@@ -33,6 +41,34 @@ pub enum EngineEvent {
     },
     TurnError(String),
     ContextUpdate(String),
+    Summarizing,
+    SummarizingDone,
+    SubagentStarted {
+        task_id: String,
+        label: String,
+        task: String,
+    },
+    SubagentProgress {
+        task_id: String,
+        tool_name: String,
+        detail: String,
+        step: u32,
+    },
+    SubagentCompleted {
+        task_id: String,
+        label: String,
+        result_preview: String,
+        full_result: String,
+    },
+    SubagentFailed {
+        task_id: String,
+        #[allow(dead_code)]
+        label: String,
+        error: String,
+    },
+    SubagentCancelled {
+        task_id: String,
+    },
 }
 
 #[derive(Clone)]
@@ -60,6 +96,21 @@ pub enum HistoryEntry {
     Separator {
         summary: TurnSummary,
     },
+    SubagentCard {
+        task_id: String,
+        label: String,
+        status: SubagentStatus,
+        actions: Vec<String>,
+        result_preview: Option<String>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubagentStatus {
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
 }
 
 pub struct ToolActivity {
@@ -72,6 +123,7 @@ pub struct ToolActivity {
 pub enum StreamSegment {
     Text(String),
     Tool(ToolActivity),
+    Subagent { task_id: String, label: String },
 }
 
 pub struct ActiveStreaming {
@@ -99,12 +151,29 @@ impl ActiveStreaming {
         self.segments.push(StreamSegment::Tool(tool));
     }
 
+    pub fn push_subagent(&mut self, task_id: String, label: String) {
+        self.segments
+            .push(StreamSegment::Subagent { task_id, label });
+    }
+
     pub fn has_content(&self) -> bool {
         self.segments.iter().any(|s| match s {
             StreamSegment::Text(t) => !t.is_empty(),
-            StreamSegment::Tool(_) => true,
+            StreamSegment::Tool(_) | StreamSegment::Subagent { .. } => true,
         })
     }
+}
+
+#[derive(Clone)]
+#[allow(dead_code)]
+pub struct SubagentInfo {
+    pub task_id: String,
+    pub label: String,
+    pub task: String,
+    pub status: SubagentStatus,
+    pub actions: Vec<String>,
+    pub result_preview: Option<String>,
+    pub started_at: Instant,
 }
 
 pub struct LineBuffer {
@@ -305,8 +374,9 @@ pub struct App {
     pub total_lines: usize,
 
     pub show_help: bool,
+    pub show_sidebar: bool,
     pub should_quit: bool,
-    pub is_busy: bool,
+    pub agent_state: AgentState,
     pub needs_redraw: bool,
     pub cancel_requested: bool,
     pub pending: VecDeque<String>,
@@ -320,6 +390,17 @@ pub struct App {
     pub context_status: String,
     pub last_summary: Option<TurnSummary>,
     pub animation_frame: u16,
+
+    pub subagents: BTreeMap<String, SubagentInfo>,
+    pub pending_subagent_results: Vec<(String, String, String)>,
+    held_turn: Option<HeldTurn>,
+}
+
+struct HeldTurn {
+    content: Option<String>,
+    reasoning: Option<String>,
+    summary: Option<TurnSummary>,
+    note: Option<String>,
 }
 
 impl App {
@@ -339,8 +420,9 @@ impl App {
             auto_scroll: true,
             total_lines: 0,
             show_help: false,
+            show_sidebar: false,
             should_quit: false,
-            is_busy: false,
+            agent_state: AgentState::Ready,
             needs_redraw: true,
             cancel_requested: false,
             pending: VecDeque::new(),
@@ -352,7 +434,33 @@ impl App {
             context_status,
             last_summary: None,
             animation_frame: 0,
+            subagents: BTreeMap::new(),
+            pending_subagent_results: Vec::new(),
+            held_turn: None,
         }
+    }
+
+    pub fn is_busy(&self) -> bool {
+        !matches!(self.agent_state, AgentState::Ready)
+    }
+
+    #[allow(dead_code)]
+    pub fn is_waiting_subagents(&self) -> bool {
+        self.agent_state == AgentState::WaitingSubagents
+    }
+
+    pub fn running_subagent_count(&self) -> usize {
+        self.subagents
+            .values()
+            .filter(|s| s.status == SubagentStatus::Running)
+            .count()
+    }
+
+    pub fn waiting_subagent_lines(&self) -> Vec<(String, SubagentStatus)> {
+        self.subagents
+            .values()
+            .map(|s| (s.label.clone(), s.status.clone()))
+            .collect()
     }
 
     pub fn spinner_char(&self) -> char {
@@ -363,7 +471,8 @@ impl App {
     pub fn tick_animation(&mut self) {
         let prev = self.animation_frame;
         self.animation_frame = self.animation_frame.wrapping_add(1);
-        if self.is_busy && (prev / 3) != (self.animation_frame / 3) {
+        let has_animation = self.is_busy() || self.running_subagent_count() > 0;
+        if has_animation && (prev / 3) != (self.animation_frame / 3) {
             self.needs_redraw = true;
         }
     }
@@ -372,14 +481,16 @@ impl App {
         self.needs_redraw = true;
         match event {
             EngineEvent::StreamDelta(delta) => {
-                let clean = strip_ansi(&delta);
+                let clean = strip_tool_xml(&strip_ansi(&delta));
+                if clean.is_empty() {
+                    return;
+                }
                 self.line_buffer.push(&clean);
                 let committable = self.line_buffer.take_committable();
                 if !committable.is_empty() {
                     let streaming = self.active.get_or_insert_with(ActiveStreaming::default);
                     streaming.push_text(&committable);
                 }
-                self.auto_scroll = true;
             }
             EngineEvent::ToolHint {
                 tool_name,
@@ -402,7 +513,6 @@ impl App {
                     detail,
                     diff,
                 });
-                self.auto_scroll = true;
             }
             EngineEvent::TurnComplete {
                 content,
@@ -412,22 +522,244 @@ impl App {
                 self.flush_line_buffer();
                 let clean_content = strip_ansi(&content);
                 let clean_reasoning = reasoning.map(|r| strip_ansi(&r));
-                self.finalize_turn(Some(clean_content), clean_reasoning, Some(summary), None);
+                if self.running_subagent_count() > 0 {
+                    self.flush_active_to_history();
+                    if !clean_content.trim().is_empty() {
+                        self.history.push(HistoryEntry::Assistant {
+                            content: clean_content.clone(),
+                            reasoning: clean_reasoning.clone(),
+                        });
+                    }
+                    self.held_turn = Some(HeldTurn {
+                        content: Some(clean_content),
+                        reasoning: clean_reasoning,
+                        summary: Some(summary),
+                        note: None,
+                    });
+                    self.agent_state = AgentState::WaitingSubagents;
+                    self.auto_scroll = true;
+                } else if !self.pending_subagent_results.is_empty() {
+                    self.flush_active_to_history();
+                    if !clean_content.trim().is_empty() {
+                        self.history.push(HistoryEntry::Assistant {
+                            content: clean_content,
+                            reasoning: clean_reasoning,
+                        });
+                    }
+                    self.build_and_push_continuation();
+                } else {
+                    self.finalize_turn(Some(clean_content), clean_reasoning, Some(summary), None);
+                }
             }
             EngineEvent::TurnEmpty { note, summary } => {
                 self.flush_line_buffer();
-                self.finalize_turn(None, None, Some(summary), Some(note));
+                if self.running_subagent_count() > 0 {
+                    self.flush_active_to_history();
+                    self.held_turn = Some(HeldTurn {
+                        content: None,
+                        reasoning: None,
+                        summary: Some(summary),
+                        note: Some(note),
+                    });
+                    self.agent_state = AgentState::WaitingSubagents;
+                    self.auto_scroll = true;
+                } else if !self.pending_subagent_results.is_empty() {
+                    self.flush_active_to_history();
+                    self.build_and_push_continuation();
+                } else {
+                    self.finalize_turn(None, None, Some(summary), Some(note));
+                }
             }
             EngineEvent::TurnError(err) => {
                 self.flush_line_buffer();
                 self.flush_active_to_history();
                 self.history.push(HistoryEntry::Error(strip_ansi(&err)));
-                self.is_busy = false;
-                self.auto_scroll = true;
-                self.maybe_dequeue();
+                if self.running_subagent_count() > 0 {
+                    self.agent_state = AgentState::WaitingSubagents;
+                    self.auto_scroll = true;
+                } else if !self.pending_subagent_results.is_empty() {
+                    self.build_and_push_continuation();
+                } else {
+                    self.agent_state = AgentState::Ready;
+                    self.auto_scroll = true;
+                    self.maybe_dequeue();
+                }
             }
             EngineEvent::ContextUpdate(ctx) => {
                 self.context_status = ctx;
+            }
+            EngineEvent::Summarizing => {
+                self.agent_state = AgentState::Summarizing;
+            }
+            EngineEvent::SummarizingDone => {
+                if self.agent_state == AgentState::Summarizing {
+                    self.agent_state = AgentState::Working;
+                }
+            }
+            EngineEvent::SubagentStarted {
+                task_id,
+                label,
+                task,
+            } => {
+                let info = SubagentInfo {
+                    task_id: task_id.clone(),
+                    label: label.clone(),
+                    task: task.clone(),
+                    status: SubagentStatus::Running,
+                    actions: Vec::new(),
+                    result_preview: None,
+                    started_at: Instant::now(),
+                };
+                self.subagents.insert(task_id.clone(), info);
+                if self.active.is_some() {
+                    let streaming = self.active.get_or_insert_with(ActiveStreaming::default);
+                    streaming.push_subagent(task_id.clone(), label.clone());
+                } else {
+                    self.history.push(HistoryEntry::SubagentCard {
+                        task_id,
+                        label,
+                        status: SubagentStatus::Running,
+                        actions: Vec::new(),
+                        result_preview: None,
+                    });
+                }
+                if !self.show_sidebar {
+                    self.show_sidebar = true;
+                }
+            }
+            EngineEvent::SubagentProgress {
+                task_id,
+                tool_name,
+                detail,
+                step,
+            } => {
+                let action = format!("{tool_name} {detail}");
+                if let Some(info) = self.subagents.get_mut(&task_id) {
+                    info.actions.push(action.clone());
+                    if info.actions.len() > 3 {
+                        info.actions.remove(0);
+                    }
+                }
+                self.update_subagent_card(&task_id, |card| {
+                    if let HistoryEntry::SubagentCard { actions, .. } = card {
+                        actions.push(format!("[{step}] {action}"));
+                        if actions.len() > 3 {
+                            actions.remove(0);
+                        }
+                    }
+                });
+            }
+            EngineEvent::SubagentCompleted {
+                task_id,
+                label,
+                result_preview,
+                full_result,
+            } => {
+                if let Some(info) = self.subagents.get_mut(&task_id) {
+                    info.status = SubagentStatus::Completed;
+                    info.result_preview = Some(result_preview.clone());
+                }
+                self.update_subagent_card(&task_id, |card| {
+                    if let HistoryEntry::SubagentCard {
+                        status,
+                        result_preview: rp,
+                        ..
+                    } = card
+                    {
+                        *status = SubagentStatus::Completed;
+                        *rp = Some(result_preview.clone());
+                    }
+                });
+                self.pending_subagent_results
+                    .push((task_id, label, full_result));
+                self.check_all_subagents_done();
+            }
+            EngineEvent::SubagentFailed { task_id, error, .. } => {
+                if let Some(info) = self.subagents.get_mut(&task_id) {
+                    info.status = SubagentStatus::Failed;
+                    info.result_preview = Some(error.clone());
+                }
+                self.update_subagent_card(&task_id, |card| {
+                    if let HistoryEntry::SubagentCard {
+                        status,
+                        result_preview,
+                        ..
+                    } = card
+                    {
+                        *status = SubagentStatus::Failed;
+                        *result_preview = Some(error.clone());
+                    }
+                });
+                self.check_all_subagents_done();
+            }
+            EngineEvent::SubagentCancelled { task_id } => {
+                if let Some(info) = self.subagents.get_mut(&task_id) {
+                    info.status = SubagentStatus::Cancelled;
+                }
+                self.update_subagent_card(&task_id, |card| {
+                    if let HistoryEntry::SubagentCard { status, .. } = card {
+                        *status = SubagentStatus::Cancelled;
+                    }
+                });
+                self.check_all_subagents_done();
+            }
+        }
+    }
+
+    fn check_all_subagents_done(&mut self) {
+        if self.running_subagent_count() > 0 {
+            return;
+        }
+        if self.agent_state != AgentState::WaitingSubagents {
+            return;
+        }
+        if self.pending_subagent_results.is_empty() {
+            if let Some(held) = self.held_turn.take() {
+                self.finalize_turn(held.content, held.reasoning, held.summary, held.note);
+            } else {
+                self.agent_state = AgentState::Ready;
+                self.auto_scroll = true;
+                self.needs_redraw = true;
+                self.maybe_dequeue();
+            }
+            return;
+        }
+        self.held_turn = None;
+        self.build_and_push_continuation();
+    }
+
+    fn build_and_push_continuation(&mut self) {
+        let results = std::mem::take(&mut self.pending_subagent_results);
+        if results.is_empty() {
+            self.agent_state = AgentState::Ready;
+            self.auto_scroll = true;
+            self.needs_redraw = true;
+            return;
+        }
+        let mut continuation = String::new();
+        for (_, label, result) in &results {
+            if !continuation.is_empty() {
+                continuation.push_str("\n\n---\n\n");
+            }
+            continuation.push_str(&format!(
+                "[Subagent '{label}' completed]\n\nResult:\n{result}\n\n\
+                 Continue the task using these results. \
+                 Summarize for the user what was accomplished."
+            ));
+        }
+        self.agent_state = AgentState::Ready;
+        self.auto_scroll = true;
+        self.needs_redraw = true;
+        self.pending.push_back(continuation);
+    }
+
+    fn update_subagent_card(&mut self, task_id: &str, f: impl Fn(&mut HistoryEntry)) {
+        for entry in self.history.iter_mut().rev() {
+            if let HistoryEntry::SubagentCard { task_id: id, .. } = entry {
+                if id == task_id {
+                    f(entry);
+                    return;
+                }
             }
         }
     }
@@ -471,6 +803,37 @@ impl App {
                             diff: tool.diff,
                         });
                     }
+                    StreamSegment::Subagent { task_id, label } => {
+                        if !accumulated_text.trim().is_empty() {
+                            self.history.push(HistoryEntry::Assistant {
+                                content: std::mem::take(&mut accumulated_text),
+                                reasoning: None,
+                            });
+                        } else {
+                            accumulated_text.clear();
+                        }
+                        let status = self
+                            .subagents
+                            .get(&task_id)
+                            .map(|i| i.status.clone())
+                            .unwrap_or(SubagentStatus::Running);
+                        let actions = self
+                            .subagents
+                            .get(&task_id)
+                            .map(|i| i.actions.clone())
+                            .unwrap_or_default();
+                        let preview = self
+                            .subagents
+                            .get(&task_id)
+                            .and_then(|i| i.result_preview.clone());
+                        self.history.push(HistoryEntry::SubagentCard {
+                            task_id,
+                            label,
+                            status,
+                            actions,
+                            result_preview: preview,
+                        });
+                    }
                 }
             }
 
@@ -504,7 +867,7 @@ impl App {
             self.history.push(HistoryEntry::Separator { summary });
         }
         self.last_summary = summary;
-        self.is_busy = false;
+        self.agent_state = AgentState::Ready;
         self.auto_scroll = true;
         self.maybe_dequeue();
     }
@@ -527,6 +890,29 @@ impl App {
                             emoji: tool.emoji,
                             detail: tool.detail,
                             diff: tool.diff,
+                        });
+                    }
+                    StreamSegment::Subagent { task_id, label } => {
+                        let status = self
+                            .subagents
+                            .get(&task_id)
+                            .map(|i| i.status.clone())
+                            .unwrap_or(SubagentStatus::Running);
+                        let actions = self
+                            .subagents
+                            .get(&task_id)
+                            .map(|i| i.actions.clone())
+                            .unwrap_or_default();
+                        let preview = self
+                            .subagents
+                            .get(&task_id)
+                            .and_then(|i| i.result_preview.clone());
+                        self.history.push(HistoryEntry::SubagentCard {
+                            task_id,
+                            label,
+                            status,
+                            actions,
+                            result_preview: preview,
                         });
                     }
                 }
@@ -592,7 +978,7 @@ impl App {
 
         match key.code {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.is_busy {
+                if self.is_busy() {
                     self.cancel_requested = true;
                 } else if self.composer.input.trim().is_empty() {
                     self.should_quit = true;
@@ -601,9 +987,12 @@ impl App {
                 }
             }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.composer.input.is_empty() && !self.is_busy {
+                if self.composer.input.is_empty() && !self.is_busy() {
                     self.should_quit = true;
                 }
+            }
+            KeyCode::Char('4') if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.show_sidebar = !self.show_sidebar;
             }
             KeyCode::Enter => {
                 if key.modifiers.contains(KeyModifiers::ALT)
@@ -689,7 +1078,7 @@ impl App {
         match cmd {
             LocalCommand::Help => self.show_help = true,
             LocalCommand::Exit => {
-                if self.is_busy {
+                if self.is_busy() {
                     self.exit_after_turn = true;
                     self.pending.clear();
                     self.history.push(HistoryEntry::System(
@@ -700,7 +1089,7 @@ impl App {
                 }
             }
             LocalCommand::Stop => {
-                if self.is_busy {
+                if self.is_busy() {
                     self.cancel_requested = true;
                 }
             }
@@ -712,6 +1101,9 @@ impl App {
                 self.auto_scroll = true;
                 self.last_summary = None;
                 self.pending.push_back("/new".to_string());
+            }
+            LocalCommand::Agents => {
+                self.show_sidebar = !self.show_sidebar;
             }
             LocalCommand::Agent(text) => {
                 self.history.push(HistoryEntry::User(text.clone()));
@@ -750,8 +1142,20 @@ impl App {
     }
 
     pub fn status_line(&self) -> String {
-        let state = if self.is_busy { "working" } else { "ready" };
+        let state = match self.agent_state {
+            AgentState::Ready => "ready",
+            AgentState::Working => "working",
+            AgentState::WaitingSubagents => "waiting agents",
+            AgentState::Summarizing => "summarizing",
+        };
         let mut parts = vec![state.to_string()];
+        let running = self.running_subagent_count();
+        if running > 0 {
+            parts.push(format!(
+                "{running} agent{}",
+                if running == 1 { "" } else { "s" }
+            ));
+        }
         if let Some(ref s) = self.last_summary {
             if s.prompt_tokens > 0 || s.completion_tokens > 0 {
                 parts.push(format!("↑{} ↓{}", s.prompt_tokens, s.completion_tokens));
@@ -767,6 +1171,7 @@ enum LocalCommand {
     Exit,
     Stop,
     Clear,
+    Agents,
     Agent(String),
 }
 
@@ -778,6 +1183,7 @@ fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "/exit" | "/quit" | "exit" | "quit" => Some(LocalCommand::Exit),
         "/stop" | "stop" | "[stop]" => Some(LocalCommand::Stop),
         "/clear" | "clear" => Some(LocalCommand::Clear),
+        "/agents" => Some(LocalCommand::Agents),
         _ => {
             if lower.starts_with("/new")
                 || lower.starts_with("/memorize")
@@ -832,6 +1238,29 @@ pub fn strip_ansi(text: &str) -> String {
         }
     }
     out
+}
+
+fn strip_tool_xml(text: &str) -> String {
+    static PATTERNS: std::sync::OnceLock<Vec<regex::Regex>> = std::sync::OnceLock::new();
+    let patterns = PATTERNS.get_or_init(|| {
+        let pats = [
+            r"(?s)</?tool_call>",
+            r"(?s)</?tool_response>",
+            r"(?s)</?tool_use>",
+            r"(?s)</?function_call>",
+            r"(?s)<\|/?tool_call\|?>",
+            r"(?s)<\|/?endoftoolcall\|?>",
+            r"(?s)<\|/?tool_response\|?>",
+        ];
+        pats.iter()
+            .filter_map(|p| regex::Regex::new(p).ok())
+            .collect()
+    });
+    let mut result = text.to_string();
+    for re in patterns {
+        result = re.replace_all(&result, "").to_string();
+    }
+    result
 }
 
 fn extract_edit_diff(args: Option<&Value>) -> Option<EditDiff> {
@@ -1003,6 +1432,10 @@ mod tests {
             Some(LocalCommand::Clear)
         ));
         assert!(matches!(
+            parse_local_command("/agents"),
+            Some(LocalCommand::Agents)
+        ));
+        assert!(matches!(
             parse_local_command("/model gpt-4"),
             Some(LocalCommand::Agent(_))
         ));
@@ -1072,5 +1505,48 @@ mod tests {
         active.push_text("world");
         assert_eq!(active.segments.len(), 1);
         assert!(matches!(&active.segments[0], StreamSegment::Text(s) if s == "hello world"));
+    }
+
+    #[test]
+    fn agent_state_transitions() {
+        let app = App::new(
+            "test".into(),
+            "test".into(),
+            PathBuf::from("/tmp"),
+            0,
+            "0/1000".into(),
+        );
+        assert_eq!(app.agent_state, AgentState::Ready);
+        assert!(!app.is_busy());
+    }
+
+    #[test]
+    fn subagent_tracking() {
+        let mut app = App::new(
+            "test".into(),
+            "test".into(),
+            PathBuf::from("/tmp"),
+            0,
+            "0/1000".into(),
+        );
+        app.handle_engine_event(EngineEvent::SubagentStarted {
+            task_id: "abc".into(),
+            label: "test task".into(),
+            task: "do something".into(),
+        });
+        assert_eq!(app.subagents.len(), 1);
+        assert_eq!(app.running_subagent_count(), 1);
+
+        app.handle_engine_event(EngineEvent::SubagentCompleted {
+            task_id: "abc".into(),
+            label: "test task".into(),
+            result_preview: "done".into(),
+            full_result: "done fully".into(),
+        });
+        assert_eq!(app.running_subagent_count(), 0);
+        assert_eq!(
+            app.subagents.get("abc").unwrap().status,
+            SubagentStatus::Completed
+        );
     }
 }

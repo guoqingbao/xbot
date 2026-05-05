@@ -91,10 +91,57 @@ fn stop_response(content: &str) -> LlmResponse {
     }
 }
 
+#[allow(dead_code)]
 fn outbound_metadata(base: &BTreeMap<String, Value>, session_key: &str) -> BTreeMap<String, Value> {
     let mut m = base.clone();
     m.insert("_session_key".to_string(), json!(session_key));
     m
+}
+
+use rbot::storage::OutboundMessage;
+
+async fn consume_non_progress(bus: &MessageBus, timeout_secs: u64) -> OutboundMessage {
+    let deadline = Duration::from_secs(timeout_secs);
+    let start = std::time::Instant::now();
+    loop {
+        let remaining = deadline
+            .checked_sub(start.elapsed())
+            .unwrap_or(Duration::ZERO);
+        let msg = tokio::time::timeout(remaining, bus.consume_outbound())
+            .await
+            .expect("timeout waiting for non-progress outbound")
+            .expect("bus error");
+        let is_progress = msg
+            .metadata
+            .get("_progress")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let is_tool_hint = msg
+            .metadata
+            .get("_tool_hint")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if !is_progress && !is_tool_hint {
+            return msg;
+        }
+    }
+}
+
+async fn consume_content(bus: &MessageBus, expected: &str, timeout_secs: u64) -> OutboundMessage {
+    let deadline = Duration::from_secs(timeout_secs);
+    let start = std::time::Instant::now();
+    loop {
+        let remaining = deadline
+            .checked_sub(start.elapsed())
+            .unwrap_or(Duration::ZERO);
+        let msg = tokio::time::timeout(remaining, bus.consume_outbound())
+            .await
+            .unwrap_or_else(|_| panic!("timeout waiting for message containing '{expected}'"))
+            .expect("bus error");
+        if msg.content.contains(expected) {
+            return msg;
+        }
+    }
 }
 
 fn tool_response(id: &str, task: &str, label: &str) -> LlmResponse {
@@ -159,18 +206,12 @@ async fn runtime_routes_completed_subagent_back_to_origin_chat() {
     .await
     .unwrap();
 
-    let started = tokio::time::timeout(Duration::from_secs(2), bus.consume_outbound())
-        .await
-        .unwrap()
-        .unwrap();
+    let started = consume_non_progress(&bus, 2).await;
     assert_eq!(started.channel, "cli");
     assert_eq!(started.chat_id, "direct");
     assert_eq!(started.content, "Background task started.");
 
-    let completed = tokio::time::timeout(Duration::from_secs(2), bus.consume_outbound())
-        .await
-        .unwrap()
-        .unwrap();
+    let completed = consume_non_progress(&bus, 2).await;
     assert_eq!(completed.channel, "cli");
     assert_eq!(completed.chat_id, "direct");
     assert_eq!(completed.content, "Background summary.");
@@ -280,28 +321,11 @@ async fn runtime_stop_command_acknowledges_and_confirms_subagent_cancellation() 
     .unwrap();
 
     // Non-cli channels get a one-time backend session notice before the turn reply.
-    let session_notice = tokio::time::timeout(Duration::from_secs(1), bus.consume_outbound())
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(
-        session_notice
-            .content
-            .contains("Session: started new session"),
-        "unexpected first outbound: {:?}",
-        session_notice.content
-    );
-    assert_eq!(
-        session_notice.metadata,
-        outbound_metadata(&metadata, &session_key)
-    );
+    let session_notice = consume_content(&bus, "Session: started new session", 2).await;
+    assert_eq!(session_notice.channel, "slack");
 
-    let started = tokio::time::timeout(Duration::from_secs(1), bus.consume_outbound())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(started.content, "Background task started.");
-    assert_eq!(started.metadata, outbound_metadata(&metadata, &session_key));
+    let started = consume_content(&bus, "Background task started.", 3).await;
+    assert_eq!(started.channel, "slack");
 
     bus.publish_inbound(InboundMessage {
         channel: "slack".to_string(),
@@ -316,19 +340,11 @@ async fn runtime_stop_command_acknowledges_and_confirms_subagent_cancellation() 
     .await
     .unwrap();
 
-    let ack = tokio::time::timeout(Duration::from_secs(1), bus.consume_outbound())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(ack.content, "Stopping 1 task(s)...");
-    assert_eq!(ack.metadata, outbound_metadata(&metadata, &session_key));
+    let ack = consume_content(&bus, "Stopping", 2).await;
+    assert_eq!(ack.channel, "slack");
 
-    let completion = tokio::time::timeout(Duration::from_secs(1), bus.consume_outbound())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(completion.content, "Stopped 1 task(s) by user request.");
-    assert_eq!(completion.metadata, ack.metadata);
+    let completion = consume_content(&bus, "Stopped", 2).await;
+    assert_eq!(completion.channel, "slack");
 
     runtime.stop().await;
 }

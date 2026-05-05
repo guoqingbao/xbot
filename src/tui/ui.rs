@@ -6,7 +6,9 @@ use ratatui::widgets::{
     Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
 };
 
-use super::app::{ActiveStreaming, App, EditDiff, HistoryEntry, StreamSegment};
+use super::app::{
+    ActiveStreaming, AgentState, App, EditDiff, HistoryEntry, StreamSegment, SubagentStatus,
+};
 use super::markdown;
 
 const HEADER_BG: Color = Color::Rgb(20, 24, 36);
@@ -23,26 +25,47 @@ const DIFF_ADD: Color = Color::Rgb(80, 200, 120);
 const DIFF_DEL: Color = Color::Rgb(220, 90, 90);
 const DIFF_HEADER: Color = Color::Rgb(100, 160, 220);
 const WORKING_FG: Color = Color::Rgb(230, 195, 80);
+const SUMMARIZE_FG: Color = Color::Rgb(180, 140, 230);
 const SEPARATOR_FG: Color = Color::Rgb(55, 65, 85);
 const COMPOSER_BG: Color = Color::Rgb(16, 20, 30);
 const TRANSCRIPT_BG: Color = Color::Rgb(12, 14, 22);
+const SIDEBAR_BG: Color = Color::Rgb(14, 17, 26);
+const SUBAGENT_RUNNING: Color = Color::Rgb(100, 180, 230);
+const SUBAGENT_DONE: Color = Color::Rgb(80, 200, 120);
+const SUBAGENT_FAIL: Color = Color::Rgb(230, 80, 80);
+
+const SIDEBAR_MIN_WIDTH: u16 = 100;
+const SIDEBAR_WIDTH: u16 = 28;
 
 pub fn render(f: &mut Frame, app: &mut App) {
     let area = f.area();
 
-    let composer_height = composer_height(&app.composer.input);
+    let composer_h = composer_height(&app.composer.input, area.width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(3),
-            Constraint::Length(composer_height),
+            Constraint::Length(composer_h),
             Constraint::Length(1),
         ])
         .split(area);
 
     render_header(f, chunks[0], app);
-    render_transcript(f, chunks[1], app);
+
+    let body = chunks[1];
+    if app.show_sidebar && body.width >= SIDEBAR_MIN_WIDTH {
+        let sidebar_w = SIDEBAR_WIDTH.min(body.width.saturating_sub(40));
+        let split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(1), Constraint::Length(sidebar_w)])
+            .split(body);
+        render_transcript(f, split[0], app);
+        render_sidebar(f, split[1], app);
+    } else {
+        render_transcript(f, body, app);
+    }
+
     render_composer(f, chunks[2], app);
     render_footer(f, chunks[3], app);
 
@@ -51,16 +74,29 @@ pub fn render(f: &mut Frame, app: &mut App) {
     }
 }
 
-fn composer_height(input: &str) -> u16 {
-    let lines = input.matches('\n').count() + 1;
-    (lines as u16 + 2).min(12).max(3)
+fn composer_height(input: &str, area_width: u16) -> u16 {
+    let inner_w = area_width.saturating_sub(2).max(1) as usize;
+    let mut visual_lines: usize = 0;
+    for line in input.split('\n') {
+        let chars = line.chars().count();
+        if inner_w > 0 && chars > inner_w {
+            visual_lines += (chars + inner_w - 1) / inner_w;
+        } else {
+            visual_lines += 1;
+        }
+    }
+    (visual_lines as u16 + 2).min(12).max(3)
 }
 
 fn render_header(f: &mut Frame, area: Rect, app: &App) {
-    let (status_icon, status_color) = if app.is_busy {
-        (format!("{} working", app.spinner_char()), WORKING_FG)
-    } else {
-        ("● ready".to_string(), SUCCESS_FG)
+    let (status_icon, status_color) = match app.agent_state {
+        AgentState::Working => (format!("{} working", app.spinner_char()), WORKING_FG),
+        AgentState::WaitingSubagents => (
+            format!("{} waiting agents", app.spinner_char()),
+            SUBAGENT_RUNNING,
+        ),
+        AgentState::Summarizing => (format!("{} summarizing", app.spinner_char()), SUMMARIZE_FG),
+        AgentState::Ready => ("● ready".to_string(), SUCCESS_FG),
     };
 
     let sep = Span::styled(" │ ", Style::default().fg(BORDER_DIM));
@@ -79,9 +115,20 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
             format!("ctx:{}", app.context_status),
             Style::default().fg(TEXT_MUTED),
         ),
-        sep,
+        sep.clone(),
         Span::styled(status_icon, Style::default().fg(status_color)),
     ];
+
+    let running = app.running_subagent_count();
+    if running > 0 {
+        spans.push(Span::styled(
+            format!(
+                " │ ◐ {running} agent{}",
+                if running == 1 { "" } else { "s" }
+            ),
+            Style::default().fg(SUBAGENT_RUNNING),
+        ));
+    }
 
     if !app.pending.is_empty() {
         spans.push(Span::styled(
@@ -101,11 +148,16 @@ fn render_transcript(f: &mut Frame, area: Rect, app: &mut App) {
     let mut lines = build_transcript_lines(app, inner_width);
 
     if let Some(ref active) = app.active {
-        lines.extend(build_active_lines(active, inner_width, app.animation_frame));
+        lines.extend(build_active_lines(
+            active,
+            app,
+            inner_width,
+            app.animation_frame,
+        ));
     }
 
     let pending_preview = app.line_buffer.pending_preview();
-    if !pending_preview.is_empty() && app.is_busy {
+    if !pending_preview.is_empty() && app.is_busy() {
         let md = markdown::markdown_to_lines(pending_preview, inner_width.saturating_sub(2).max(1));
         for ml in md {
             let mut prefixed = vec![Span::raw("  ")];
@@ -114,13 +166,48 @@ fn render_transcript(f: &mut Frame, area: Rect, app: &mut App) {
         }
     }
 
-    if app.is_busy
+    if app.agent_state == AgentState::WaitingSubagents {
+        lines.push(Line::from(""));
+        let running = app.running_subagent_count();
+        let total = app.subagents.len();
+        let done = total.saturating_sub(running);
+        let header_text = format!(
+            "  {} Waiting for subagents ({done}/{total} done)…",
+            app.spinner_char()
+        );
+        lines.push(Line::from(Span::styled(
+            header_text,
+            Style::default()
+                .fg(SUBAGENT_RUNNING)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for (label, status) in app.waiting_subagent_lines() {
+            let (icon, color) = match status {
+                SubagentStatus::Running => {
+                    let s = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+                    let ch = s[(app.animation_frame / 3) as usize % s.len()];
+                    (format!("{ch}"), SUBAGENT_RUNNING)
+                }
+                SubagentStatus::Completed => ("✓".into(), SUBAGENT_DONE),
+                SubagentStatus::Failed => ("✗".into(), SUBAGENT_FAIL),
+                SubagentStatus::Cancelled => ("⊘".into(), TEXT_DIM),
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("    {icon} "), Style::default().fg(color)),
+                Span::styled(label, Style::default().fg(TEXT_MUTED)),
+            ]));
+        }
+    } else if app.is_busy()
         && app.active.as_ref().map_or(true, |a| !a.has_content())
         && pending_preview.is_empty()
     {
         lines.push(Line::from(""));
+        let label = match app.agent_state {
+            AgentState::Summarizing => "summarizing to memory…",
+            _ => "thinking…",
+        };
         lines.push(Line::from(Span::styled(
-            format!("  {} thinking…", app.spinner_char()),
+            format!("  {} {label}", app.spinner_char()),
             Style::default().fg(TEXT_DIM),
         )));
     }
@@ -166,6 +253,95 @@ fn render_transcript(f: &mut Frame, area: Rect, app: &mut App) {
     }
 }
 
+fn render_sidebar(f: &mut Frame, area: Rect, app: &App) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(BORDER_DIM))
+        .title(Span::styled(
+            " Agents ",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(SIDEBAR_BG));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let inner_w = inner.width as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let running = app.running_subagent_count();
+    let total = app.subagents.len();
+
+    if total == 0 {
+        lines.push(Line::from(Span::styled(
+            " No subagents",
+            Style::default().fg(TEXT_DIM),
+        )));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!(" {running}"),
+                Style::default().fg(if running > 0 {
+                    SUBAGENT_RUNNING
+                } else {
+                    TEXT_MUTED
+                }),
+            ),
+            Span::styled(format!("/{total} running"), Style::default().fg(TEXT_MUTED)),
+        ]));
+        lines.push(Line::from(""));
+
+        for info in app.subagents.values() {
+            let (glyph, color) = match info.status {
+                SubagentStatus::Running => (app.spinner_char().to_string(), SUBAGENT_RUNNING),
+                SubagentStatus::Completed => ("✓".to_string(), SUBAGENT_DONE),
+                SubagentStatus::Failed => ("✗".to_string(), SUBAGENT_FAIL),
+                SubagentStatus::Cancelled => ("⊘".to_string(), TEXT_DIM),
+            };
+
+            let max_label = inner_w.saturating_sub(4);
+            let label: String = info.label.chars().take(max_label).collect();
+
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {glyph} "), Style::default().fg(color)),
+                Span::styled(
+                    label,
+                    Style::default().fg(if info.status == SubagentStatus::Running {
+                        TEXT_PRIMARY
+                    } else {
+                        TEXT_MUTED
+                    }),
+                ),
+            ]));
+
+            if info.status == SubagentStatus::Running {
+                let elapsed = info.started_at.elapsed();
+                let elapsed_str = super::app::format_elapsed(elapsed);
+                lines.push(Line::from(Span::styled(
+                    format!("   {elapsed_str}"),
+                    Style::default().fg(TEXT_DIM),
+                )));
+                if let Some(last_action) = info.actions.last() {
+                    let truncated: String = last_action
+                        .chars()
+                        .take(inner_w.saturating_sub(4))
+                        .collect();
+                    lines.push(Line::from(Span::styled(
+                        format!("   {truncated}"),
+                        Style::default().fg(TEXT_DIM),
+                    )));
+                }
+            }
+            lines.push(Line::from(""));
+        }
+    }
+
+    let visible_count = inner.height as usize;
+    let visible: Vec<Line<'static>> = lines.into_iter().take(visible_count).collect();
+    let paragraph = Paragraph::new(Text::from(visible));
+    f.render_widget(paragraph, inner);
+}
+
 fn transcript_title(app: &App) -> String {
     let msg_count = app
         .history
@@ -180,6 +356,16 @@ fn transcript_title(app: &App) -> String {
     }
 }
 
+fn push_blank(lines: &mut Vec<Line<'static>>) {
+    let is_last_blank = lines
+        .last()
+        .map(|l| l.spans.is_empty() || l.spans.iter().all(|s| s.content.is_empty()))
+        .unwrap_or(true);
+    if !is_last_blank {
+        lines.push(Line::from(""));
+    }
+}
+
 fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let w = width.saturating_sub(4).max(1);
@@ -187,7 +373,7 @@ fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     for entry in &app.history {
         match entry {
             HistoryEntry::User(text) => {
-                lines.push(Line::from(""));
+                push_blank(&mut lines);
                 let display = if text.chars().count() > 200 {
                     let truncated: String = text.chars().take(200).collect();
                     format!("{truncated}…")
@@ -214,7 +400,7 @@ fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             }
             HistoryEntry::Assistant { content, reasoning } => {
                 render_reasoning_block(&mut lines, reasoning.as_deref());
-                lines.push(Line::from(""));
+                push_blank(&mut lines);
                 let md_lines = markdown::markdown_to_lines(content, w);
                 for ml in md_lines {
                     let mut prefixed = vec![Span::raw("  ")];
@@ -228,21 +414,30 @@ fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                 detail,
                 diff,
             } => {
-                lines.push(Line::from(""));
+                push_blank(&mut lines);
                 render_tool_card(&mut lines, name, emoji, detail, diff.as_ref(), w, false, 0);
             }
             HistoryEntry::Error(msg) => {
-                lines.push(Line::from(""));
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "  ✗ ",
-                        Style::default().fg(ERROR_FG).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(msg.clone(), Style::default().fg(ERROR_FG)),
-                ]));
+                push_blank(&mut lines);
+                for (i, err_line) in msg.lines().enumerate() {
+                    if i == 0 {
+                        lines.push(Line::from(vec![
+                            Span::styled(
+                                "  ✗ ",
+                                Style::default().fg(ERROR_FG).add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(err_line.to_string(), Style::default().fg(ERROR_FG)),
+                        ]));
+                    } else {
+                        lines.push(Line::from(Span::styled(
+                            format!("    {err_line}"),
+                            Style::default().fg(ERROR_FG),
+                        )));
+                    }
+                }
             }
             HistoryEntry::System(msg) => {
-                lines.push(Line::from(""));
+                push_blank(&mut lines);
                 lines.push(Line::from(Span::styled(
                     format!("  {msg}"),
                     Style::default().fg(TEXT_DIM),
@@ -250,6 +445,30 @@ fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             }
             HistoryEntry::Separator { summary } => {
                 render_turn_separator(&mut lines, summary, w);
+            }
+            HistoryEntry::SubagentCard {
+                task_id,
+                label,
+                status,
+                actions,
+                result_preview,
+            } => {
+                let (live_status, live_actions, live_preview) =
+                    if let Some(info) = app.subagents.get(task_id) {
+                        (&info.status, &info.actions, info.result_preview.as_deref())
+                    } else {
+                        (status, actions, result_preview.as_deref())
+                    };
+                push_blank(&mut lines);
+                render_subagent_card(
+                    &mut lines,
+                    label,
+                    live_status,
+                    live_actions,
+                    live_preview,
+                    w,
+                    app.animation_frame,
+                );
             }
         }
     }
@@ -262,7 +481,7 @@ fn render_reasoning_block(lines: &mut Vec<Line<'static>>, reasoning: Option<&str
     if reasoning.trim().is_empty() {
         return;
     }
-    lines.push(Line::from(""));
+    push_blank(lines);
     lines.push(Line::from(vec![
         Span::styled("  ◆ ", Style::default().fg(TEXT_DIM)),
         Span::styled(
@@ -287,8 +506,81 @@ fn render_reasoning_block(lines: &mut Vec<Line<'static>>, reasoning: Option<&str
     }
 }
 
+fn render_subagent_card(
+    lines: &mut Vec<Line<'static>>,
+    label: &str,
+    status: &SubagentStatus,
+    actions: &[String],
+    result_preview: Option<&str>,
+    w: usize,
+    anim_frame: u16,
+) {
+    let (glyph, glyph_color, state_text) = match status {
+        SubagentStatus::Running => {
+            let spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+            let ch = spinner[(anim_frame / 3) as usize % spinner.len()];
+            (format!("{ch}"), SUBAGENT_RUNNING, "running")
+        }
+        SubagentStatus::Completed => ("✓".to_string(), SUBAGENT_DONE, "done"),
+        SubagentStatus::Failed => ("✗".to_string(), SUBAGENT_FAIL, "failed"),
+        SubagentStatus::Cancelled => ("⊘".to_string(), TEXT_DIM, "cancelled"),
+    };
+
+    let header_fill = "─".repeat(
+        w.saturating_sub(12 + label.len() + state_text.len())
+            .min(60),
+    );
+
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {glyph} "), Style::default().fg(glyph_color)),
+        Span::styled("◐ ", Style::default().fg(TOOL_FG)),
+        Span::styled(
+            label.to_string(),
+            Style::default()
+                .fg(TEXT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!(" {state_text} "), Style::default().fg(TEXT_DIM)),
+        Span::styled(header_fill, Style::default().fg(BORDER_DIM)),
+    ]));
+
+    for action in actions.iter().rev().take(3).rev() {
+        let truncated: String = action.chars().take(w.saturating_sub(8)).collect();
+        lines.push(Line::from(vec![
+            Span::styled("    │ ", Style::default().fg(BORDER_DIM)),
+            Span::styled(truncated, Style::default().fg(TEXT_DIM)),
+        ]));
+    }
+
+    if let Some(preview) = result_preview {
+        let first_line: String = preview
+            .lines()
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take(w.saturating_sub(8))
+            .collect();
+        let color = if *status == SubagentStatus::Failed {
+            SUBAGENT_FAIL
+        } else {
+            TEXT_MUTED
+        };
+        lines.push(Line::from(vec![
+            Span::styled("    │ ", Style::default().fg(BORDER_DIM)),
+            Span::styled(first_line, Style::default().fg(color)),
+        ]));
+    }
+
+    let bottom_fill = "─".repeat(w.saturating_sub(4).min(60));
+    lines.push(Line::from(Span::styled(
+        format!("    └{bottom_fill}"),
+        Style::default().fg(BORDER_DIM),
+    )));
+}
+
 fn build_active_lines(
     active: &ActiveStreaming,
+    app: &App,
     width: usize,
     anim_frame: u16,
 ) -> Vec<Line<'static>> {
@@ -301,7 +593,7 @@ fn build_active_lines(
         match seg {
             StreamSegment::Text(content) => {
                 if !content.is_empty() {
-                    lines.push(Line::from(""));
+                    push_blank(&mut lines);
                     let md_lines = markdown::markdown_to_lines(content, w);
                     for ml in md_lines {
                         let mut prefixed = vec![Span::raw("  ")];
@@ -314,7 +606,7 @@ fn build_active_lines(
                 }
             }
             StreamSegment::Tool(tool) => {
-                lines.push(Line::from(""));
+                push_blank(&mut lines);
                 render_tool_card(
                     &mut lines,
                     &tool.name,
@@ -323,6 +615,32 @@ fn build_active_lines(
                     tool.diff.as_ref(),
                     w,
                     is_last,
+                    anim_frame,
+                );
+            }
+            StreamSegment::Subagent { task_id, label } => {
+                let status = app
+                    .subagents
+                    .get(task_id)
+                    .map(|i| i.status.clone())
+                    .unwrap_or(SubagentStatus::Running);
+                let actions: Vec<String> = app
+                    .subagents
+                    .get(task_id)
+                    .map(|i| i.actions.clone())
+                    .unwrap_or_default();
+                let preview = app
+                    .subagents
+                    .get(task_id)
+                    .and_then(|i| i.result_preview.clone());
+                push_blank(&mut lines);
+                render_subagent_card(
+                    &mut lines,
+                    label,
+                    &status,
+                    &actions,
+                    preview.as_deref(),
+                    w,
                     anim_frame,
                 );
             }
@@ -492,13 +810,19 @@ fn render_turn_separator(
 }
 
 fn render_composer(f: &mut Frame, area: Rect, app: &App) {
-    let border_color = if app.is_busy { TEXT_DIM } else { ACCENT };
-    let title = if app.is_busy {
+    let busy = app.is_busy();
+    let border_color = if busy { TEXT_DIM } else { ACCENT };
+    let title = if busy {
+        let state_label = match app.agent_state {
+            AgentState::Summarizing => "summarizing…",
+            AgentState::WaitingSubagents => "waiting agents…",
+            _ => "working…",
+        };
         if app.pending.is_empty() {
-            format!(" {} working… ", app.spinner_char())
+            format!(" {} {state_label} ", app.spinner_char())
         } else {
             format!(
-                " {} working… ({} queued) ",
+                " {} {state_label} ({} queued) ",
                 app.spinner_char(),
                 app.pending.len()
             )
@@ -514,13 +838,13 @@ fn render_composer(f: &mut Frame, area: Rect, app: &App) {
         .border_style(Style::default().fg(border_color))
         .title(Span::styled(
             title,
-            Style::default().fg(if app.is_busy { TEXT_DIM } else { TEXT_MUTED }),
+            Style::default().fg(if busy { TEXT_DIM } else { TEXT_MUTED }),
         ))
         .style(Style::default().bg(COMPOSER_BG));
 
     let inner = block.inner(area);
 
-    let display_text = if app.composer.input.is_empty() && !app.is_busy {
+    let display_text = if app.composer.input.is_empty() && !busy {
         Text::from(Span::styled(
             "Type a message… (↑ history, ? help)",
             Style::default().fg(TEXT_DIM).add_modifier(Modifier::ITALIC),
@@ -534,7 +858,7 @@ fn render_composer(f: &mut Frame, area: Rect, app: &App) {
         .wrap(Wrap { trim: false });
     f.render_widget(paragraph, area);
 
-    if !app.show_help && !app.is_busy {
+    if !app.show_help && !busy {
         let (cursor_x, cursor_y) = compute_cursor_position(
             &app.composer.input,
             app.composer.cursor,
@@ -569,10 +893,11 @@ fn compute_cursor_position(input: &str, cursor: usize, width: usize) -> (usize, 
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let status = app.status_line();
-    let shortcuts = if app.is_busy {
-        "Ctrl+C:cancel  ↑↓:history  Shift+↑↓:scroll  F1/?:help"
+    let busy = app.is_busy();
+    let shortcuts = if busy {
+        "Ctrl+C:cancel  ↑↓:history  Shift+↑↓:scroll  Alt+4:agents  F1:help"
     } else {
-        "Enter:send  Ctrl+C:quit  ↑↓:history  Shift+↑↓:scroll  F1/?:help"
+        "Enter:send  Ctrl+C:quit  ↑↓:history  Alt+4:agents  F1:help"
     };
 
     let available = area.width as usize;
@@ -588,7 +913,12 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
 
     let padding = available.saturating_sub(left_text.len() + sep.len() + right_len + 2);
 
-    let status_color = if app.is_busy { WORKING_FG } else { ACCENT };
+    let status_color = match app.agent_state {
+        AgentState::Working => WORKING_FG,
+        AgentState::WaitingSubagents => SUBAGENT_RUNNING,
+        AgentState::Summarizing => SUMMARIZE_FG,
+        AgentState::Ready => ACCENT,
+    };
 
     let spans = vec![
         Span::styled(format!(" {left_text}"), Style::default().fg(TEXT_DIM)),
@@ -602,7 +932,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
 
 fn render_help_overlay(f: &mut Frame, area: Rect) {
     let width = area.width.min(64);
-    let height = area.height.min(30);
+    let height = area.height.min(32);
     let x = (area.width.saturating_sub(width)) / 2;
     let y = (area.height.saturating_sub(height)) / 2;
     let popup = Rect::new(x, y, width, height);
@@ -634,8 +964,10 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
             ],
         ),
         (
-            "Commands",
+            "Agents & Commands",
             vec![
+                ("Alt+4", "Toggle agents sidebar"),
+                ("/agents", "Toggle agents sidebar"),
                 ("/help or ?", "Toggle this help"),
                 ("/clear", "Clear & reset session"),
                 ("/exit or /quit", "Exit rbot"),
