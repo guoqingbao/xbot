@@ -914,6 +914,186 @@ async fn disabled_memory_skips_memorize_and_memory_files() {
 }
 
 #[tokio::test]
+async fn near_context_limit_compresses_context_before_next_request() {
+    let dir = tempdir().unwrap();
+    let file = dir.path().join("note.txt");
+    std::fs::write(&file, "important file finding").unwrap();
+    let provider = Arc::new(QueuedProvider::new(
+        "test-model",
+        vec![
+            LlmResponse {
+                content: Some("Inspecting file.".to_string()),
+                tool_calls: vec![ToolCallRequest {
+                    id: "call_1".to_string(),
+                    name: "read_file".to_string(),
+                    arguments: json!({"path": file.display().to_string()}),
+                }],
+                finish_reason: "tool_calls".to_string(),
+                usage: LlmUsage {
+                    prompt_tokens: 90,
+                    completion_tokens: 8,
+                },
+                reasoning_content: None,
+                thinking_blocks: None,
+            },
+            LlmResponse {
+                content: Some("Kept the file inspection result and current request.".to_string()),
+                tool_calls: Vec::new(),
+                finish_reason: "stop".to_string(),
+                usage: LlmUsage::default(),
+                reasoning_content: None,
+                thinking_blocks: None,
+            },
+            LlmResponse {
+                content: Some("Done after compression.".to_string()),
+                tool_calls: Vec::new(),
+                finish_reason: "stop".to_string(),
+                usage: LlmUsage::default(),
+                reasoning_content: None,
+                thinking_blocks: None,
+            },
+        ],
+    ));
+    let agent = AgentLoop::new(
+        provider,
+        dir.path(),
+        Some("test-model".to_string()),
+        8,
+        5,
+        100,
+        32 * 1024,
+        Default::default(),
+        None,
+        ExecToolConfig {
+            enable: false,
+            timeout: 60,
+            path_append: String::new(),
+        },
+        false,
+        None,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+    agent.set_auto_task_summary_enabled(false);
+    let progress_messages = Arc::new(Mutex::new(Vec::<OutboundMessage>::new()));
+    let captured = progress_messages.clone();
+    let callback: MessageSendCallback = Arc::new(move |msg| {
+        let captured = captured.clone();
+        Box::pin(async move {
+            captured.lock().expect("progress lock poisoned").push(msg);
+            Ok(())
+        })
+    });
+    agent.set_progress_sender(Some(callback));
+
+    let response = agent
+        .process_direct("inspect the file", "cli:direct", "cli", "direct")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(response.content, "Done after compression.");
+
+    let progress = progress_messages.lock().expect("progress lock poisoned");
+    assert!(progress.iter().any(|msg| {
+        msg.metadata.get("_tool_name").and_then(Value::as_str) == Some("context_compression")
+    }));
+    assert!(progress.iter().any(|msg| {
+        msg.metadata.get("_tool_name").and_then(Value::as_str) == Some("context_compression_done")
+    }));
+    drop(progress);
+
+    let mut sessions = SessionManager::new(dir.path()).unwrap();
+    let session = sessions.get_or_create("cli:direct").unwrap();
+    let combined = session
+        .messages
+        .iter()
+        .filter_map(ChatMessage::content_as_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(combined.contains("[Compressed Context]"));
+    assert!(combined.contains("Kept the file inspection result"));
+    assert!(combined.contains("inspect the file"));
+    assert!(combined.contains("Done after compression."));
+    assert!(!combined.contains("important file finding"));
+}
+
+#[tokio::test]
+async fn provider_usage_emits_realtime_context_update() {
+    let dir = tempdir().unwrap();
+    let provider = Arc::new(QueuedProvider::new(
+        "test-model",
+        vec![LlmResponse {
+            content: Some("Done.".to_string()),
+            tool_calls: Vec::new(),
+            finish_reason: "stop".to_string(),
+            usage: LlmUsage {
+                prompt_tokens: 42,
+                completion_tokens: 7,
+            },
+            reasoning_content: None,
+            thinking_blocks: None,
+        }],
+    ));
+    let agent = AgentLoop::new(
+        provider,
+        dir.path(),
+        Some("test-model".to_string()),
+        8,
+        5,
+        100,
+        32 * 1024,
+        Default::default(),
+        None,
+        ExecToolConfig {
+            enable: false,
+            timeout: 60,
+            path_append: String::new(),
+        },
+        false,
+        None,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+    agent.set_auto_task_summary_enabled(false);
+    let progress_messages = Arc::new(Mutex::new(Vec::<OutboundMessage>::new()));
+    let captured = progress_messages.clone();
+    let callback: MessageSendCallback = Arc::new(move |msg| {
+        let captured = captured.clone();
+        Box::pin(async move {
+            captured.lock().expect("progress lock poisoned").push(msg);
+            Ok(())
+        })
+    });
+    agent.set_progress_sender(Some(callback));
+
+    agent
+        .process_direct("finish", "cli:direct", "cli", "direct")
+        .await
+        .unwrap()
+        .unwrap();
+
+    let progress = progress_messages.lock().expect("progress lock poisoned");
+    let update = progress
+        .iter()
+        .find(|msg| msg.metadata.get("_context_update").and_then(Value::as_bool) == Some(true))
+        .expect("context update should be emitted");
+    assert_eq!(
+        update.metadata.get("_context").and_then(Value::as_str),
+        Some("42/100 (42%)")
+    );
+    drop(progress);
+
+    let status = agent
+        .process_direct("/status", "cli:direct", "cli", "direct")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(status.content.contains("Context: 42/100 (42%)"));
+}
+
+#[tokio::test]
 async fn completed_task_memory_emits_backend_tool_hint_without_context_entry() {
     let dir = tempdir().unwrap();
     let provider = Arc::new(QueuedProvider::new(

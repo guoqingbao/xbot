@@ -217,7 +217,7 @@ fn render_transcript(f: &mut Frame, area: Rect, app: &mut App) {
     {
         lines.push(Line::from(""));
         let label = match app.agent_state {
-            AgentState::Summarizing => "summarizing to memory…",
+            AgentState::Summarizing => "summarizing context…",
             _ => "thinking…",
         };
         lines.push(Line::from(Span::styled(

@@ -40,6 +40,8 @@ const NANOBOT_STYLE_HELP: &str = "Available commands:\n\
   /model    - Switch model (e.g. /model gpt-4.1)\n\
   /memorize - Save important facts to long-term memory";
 const SUBAGENT_WAIT_TIMEOUT: Duration = Duration::from_secs(300);
+const CONTEXT_COMPRESSION_THRESHOLD_PERCENT: usize = 90;
+const CONTEXT_COMPRESSION_TARGET_DIVISOR: usize = 10;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentSnapshot {
@@ -72,6 +74,7 @@ pub struct AgentLoop {
     cron_tool: Option<Arc<CronTool>>,
     start_time: Instant,
     last_usage: Mutex<(usize, usize)>,
+    last_context_prompt_tokens: Mutex<usize>,
     tool_semaphore: Arc<Semaphore>,
     cancellations: Arc<Mutex<HashSet<String>>>,
     active_turns: Arc<Mutex<BTreeMap<String, usize>>>,
@@ -231,6 +234,7 @@ impl AgentLoop {
             cron_tool,
             start_time: Instant::now(),
             last_usage: Mutex::new((0, 0)),
+            last_context_prompt_tokens: Mutex::new(0),
             tool_semaphore,
             cancellations: Arc::new(Mutex::new(HashSet::new())),
             active_turns: Arc::new(Mutex::new(BTreeMap::new())),
@@ -693,31 +697,42 @@ impl AgentLoop {
             self.run_agent_loop(
                 &session_key,
                 &active_model,
+                context_window_tokens,
                 initial_messages.clone(),
                 text_stream,
                 Some(target.clone()),
             )
             .await
         };
-        let (final_content, all_messages, interrupted, final_reasoning_content, completed_normally) =
-            match loop_result {
-                Ok(result) => result,
-                Err(err) => {
-                    self.persist_session_messages(&session_key, &initial_messages)?;
-                    self.finalize_stop_state(
-                        &session_key,
-                        false,
-                        Some(format!("Unable to stop task: {err}")),
-                    )
-                    .await;
-                    return Err(err);
-                }
-            };
+        let (
+            final_content,
+            all_messages,
+            interrupted,
+            final_reasoning_content,
+            completed_normally,
+            context_compressed,
+        ) = match loop_result {
+            Ok(result) => result,
+            Err(err) => {
+                self.persist_session_messages(&session_key, &initial_messages)?;
+                self.finalize_stop_state(
+                    &session_key,
+                    false,
+                    Some(format!("Unable to stop task: {err}")),
+                )
+                .await;
+                return Err(err);
+            }
+        };
 
         {
             let mut sessions = self.sessions.lock().expect("session manager lock poisoned");
             let mut session = sessions.get_or_create(&session_key)?;
-            self.save_turn(&mut session, &all_messages)?;
+            if context_compressed {
+                self.replace_session_messages(&mut session, &all_messages);
+            } else {
+                self.save_turn(&mut session, &all_messages)?;
+            }
             self.maybe_consolidate_session(&mut session, context_window_tokens)?;
             sessions.save(&session)?;
         }
@@ -832,6 +847,7 @@ impl AgentLoop {
             self.run_agent_loop(
                 &session_key,
                 &active_model,
+                context_window_tokens,
                 initial_messages.clone(),
                 None,
                 Some(progress_target.clone()),
@@ -844,6 +860,7 @@ impl AgentLoop {
             interrupted,
             _final_reasoning_content,
             _completed_normally,
+            context_compressed,
         ) = match loop_result {
             Ok(result) => result,
             Err(err) => {
@@ -861,7 +878,11 @@ impl AgentLoop {
         {
             let mut sessions = self.sessions.lock().expect("session manager lock poisoned");
             let mut session = sessions.get_or_create(&session_key)?;
-            self.save_turn(&mut session, &all_messages)?;
+            if context_compressed {
+                self.replace_session_messages(&mut session, &all_messages);
+            } else {
+                self.save_turn(&mut session, &all_messages)?;
+            }
             self.maybe_consolidate_session(&mut session, context_window_tokens)?;
             sessions.save(&session)?;
         }
@@ -888,14 +909,28 @@ impl AgentLoop {
         &self,
         session_key: &str,
         active_model: &str,
+        context_window_tokens: usize,
         mut messages: Vec<ChatMessage>,
         text_stream: Option<TextStreamCallback>,
         progress_target: Option<ProgressTarget>,
-    ) -> Result<(Option<String>, Vec<ChatMessage>, bool, Option<String>, bool)> {
+    ) -> Result<(
+        Option<String>,
+        Vec<ChatMessage>,
+        bool,
+        Option<String>,
+        bool,
+        bool,
+    )> {
         *self.last_usage.lock().expect("usage lock poisoned") = (0, 0);
+        *self
+            .last_context_prompt_tokens
+            .lock()
+            .expect("context prompt lock poisoned") = 0;
         let mut final_content = None;
         let mut final_reasoning_content = None;
         let mut completed_normally = false;
+        let mut context_compressed = false;
+        let mut compression_pending = false;
         let think_re = Regex::new(r"(?s)<think>.*?</think>").expect("valid think regex");
         let mut last_tool_call_fingerprint: Option<String> = None;
         let mut repeated_tool_call_streak = 0_usize;
@@ -911,12 +946,24 @@ impl AgentLoop {
                     .expect("cancellations lock poisoned")
                     .contains(session_key)
                 {
-                    return Ok((None, messages, true, None, false));
+                    return Ok((None, messages, true, None, false, context_compressed));
                 }
             }
 
             if self.max_iterations > 0 && iteration >= self.max_iterations {
                 break;
+            }
+            if compression_pending {
+                messages = self
+                    .compress_context_for_next_request(
+                        messages,
+                        active_model,
+                        context_window_tokens,
+                        progress_target.as_ref(),
+                    )
+                    .await?;
+                context_compressed = true;
+                compression_pending = false;
             }
             iteration += 1;
             let defs = self.tools.definitions();
@@ -932,6 +979,10 @@ impl AgentLoop {
                 )
                 .await?;
             self.record_usage(&response);
+            self.send_context_update(progress_target.as_ref(), &response, context_window_tokens)
+                .await;
+            let should_compress_after_response =
+                self.should_compress_context(&response, context_window_tokens);
 
             // Check for cancellation immediately after LLM response
             {
@@ -941,7 +992,7 @@ impl AgentLoop {
                     .expect("cancellations lock poisoned")
                     .contains(session_key)
                 {
-                    return Ok((None, messages, true, None, false));
+                    return Ok((None, messages, true, None, false, context_compressed));
                 }
             }
 
@@ -986,7 +1037,7 @@ impl AgentLoop {
                             .expect("cancellations lock poisoned")
                             .contains(session_key)
                         {
-                            return Ok((None, messages, true, None, false));
+                            return Ok((None, messages, true, None, false, context_compressed));
                         }
                     }
                     self.send_tool_hint(progress_target.as_ref(), tool_call)
@@ -1017,6 +1068,9 @@ impl AgentLoop {
                         output.into_value(),
                     );
                 }
+                if should_compress_after_response {
+                    compression_pending = true;
+                }
 
                 // Break the main loop if cancellation was detected during tool execution
                 {
@@ -1026,7 +1080,7 @@ impl AgentLoop {
                         .expect("cancellations lock poisoned")
                         .contains(session_key)
                     {
-                        return Ok((None, messages, true, None, false));
+                        return Ok((None, messages, true, None, false, context_compressed));
                     }
                 }
 
@@ -1069,10 +1123,32 @@ impl AgentLoop {
                                 timed_out,
                             ),
                         ));
+                        if should_compress_after_response {
+                            messages = self
+                                .compress_context_for_next_request(
+                                    messages,
+                                    active_model,
+                                    context_window_tokens,
+                                    progress_target.as_ref(),
+                                )
+                                .await?;
+                            context_compressed = true;
+                        }
                         continue;
                     }
                 }
 
+                if should_compress_after_response {
+                    messages = self
+                        .compress_context_for_next_request(
+                            messages,
+                            active_model,
+                            context_window_tokens,
+                            progress_target.as_ref(),
+                        )
+                        .await?;
+                    context_compressed = true;
+                }
                 final_content = content;
                 final_reasoning_content = response.reasoning_content.clone();
                 completed_normally = true;
@@ -1088,7 +1164,7 @@ impl AgentLoop {
                 .expect("cancellations lock poisoned")
                 .contains(session_key)
             {
-                return Ok((None, messages, true, None, false));
+                return Ok((None, messages, true, None, false, context_compressed));
             }
         }
 
@@ -1106,7 +1182,101 @@ impl AgentLoop {
             false,
             final_reasoning_content,
             completed_normally,
+            context_compressed,
         ))
+    }
+
+    fn should_compress_context(
+        &self,
+        response: &LlmResponse,
+        context_window_tokens: usize,
+    ) -> bool {
+        let prompt_tokens = response.usage.prompt_tokens;
+        prompt_tokens > 0
+            && context_window_tokens > 0
+            && prompt_tokens.saturating_mul(100)
+                >= context_window_tokens.saturating_mul(CONTEXT_COMPRESSION_THRESHOLD_PERCENT)
+    }
+
+    async fn compress_context_for_next_request(
+        &self,
+        messages: Vec<ChatMessage>,
+        active_model: &str,
+        context_window_tokens: usize,
+        target: Option<&ProgressTarget>,
+    ) -> Result<Vec<ChatMessage>> {
+        if messages.len() <= 3 {
+            return Ok(messages);
+        }
+
+        self.send_backend_tool_hint(
+            target,
+            "context_compression",
+            serde_json::json!({
+                "task": "compress conversation context",
+                "_summarizing": true,
+                "thresholdPercent": CONTEXT_COMPRESSION_THRESHOLD_PERCENT,
+            }),
+        )
+        .await;
+
+        let summary_result = self
+            .summarize_context_for_compression(&messages, active_model, context_window_tokens)
+            .await;
+        let summary = match summary_result {
+            Ok(summary) if !summary.trim().is_empty() => summary,
+            Ok(_) => build_local_context_summary(&messages),
+            Err(err) => {
+                eprintln!("failed to compress context with provider: {err}");
+                build_local_context_summary(&messages)
+            }
+        };
+        let compacted = rebuild_messages_with_context_summary(messages, summary);
+
+        self.send_backend_tool_hint(
+            target,
+            "context_compression_done",
+            serde_json::json!({
+                "task": "context compression complete",
+                "_summarizing_done": true,
+            }),
+        )
+        .await;
+
+        Ok(compacted)
+    }
+
+    async fn summarize_context_for_compression(
+        &self,
+        messages: &[ChatMessage],
+        active_model: &str,
+        context_window_tokens: usize,
+    ) -> Result<String> {
+        let target_tokens =
+            (context_window_tokens / CONTEXT_COMPRESSION_TARGET_DIVISOR).clamp(1024, 8 * 1024);
+        let prompt = build_context_compression_prompt(messages, target_tokens);
+        let response = self
+            .provider
+            .chat_with_retry(
+                &[
+                    ChatMessage::text(
+                        "system",
+                        "You compress long agent conversation context for continuation.",
+                    ),
+                    ChatMessage::text("user", prompt),
+                ],
+                None,
+                Some(active_model),
+                Some(target_tokens),
+                Some(0.1),
+            )
+            .await
+            .context("context compression request failed")?;
+        response
+            .content
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty())
+            .context("context compression response was empty")
     }
 
     fn recent_tool_diagnostics(messages: &[ChatMessage]) -> Vec<String> {
@@ -1178,6 +1348,49 @@ impl AgentLoop {
             arguments,
         };
         self.send_tool_hint(target, &tool_call).await;
+    }
+
+    async fn send_context_update(
+        &self,
+        target: Option<&ProgressTarget>,
+        response: &LlmResponse,
+        context_window_tokens: usize,
+    ) {
+        let prompt_tokens = response.usage.prompt_tokens;
+        if prompt_tokens == 0 {
+            return;
+        }
+        let Some(target) = target else {
+            return;
+        };
+        if target.channel != "cli" {
+            return;
+        }
+        let callback = self
+            .progress_sender
+            .lock()
+            .expect("progress callback lock poisoned")
+            .clone();
+        let Some(callback) = callback else {
+            return;
+        };
+        let context = format_context_usage(prompt_tokens, context_window_tokens);
+        let mut outbound = target.outbound(String::new());
+        outbound
+            .metadata
+            .insert("_context_update".to_string(), Value::Bool(true));
+        outbound
+            .metadata
+            .insert("_context".to_string(), Value::String(context));
+        outbound.metadata.insert(
+            "_prompt_tokens".to_string(),
+            Value::from(prompt_tokens as u64),
+        );
+        outbound.metadata.insert(
+            "_context_window_tokens".to_string(),
+            Value::from(context_window_tokens as u64),
+        );
+        let _ = callback(outbound).await;
     }
 
     async fn handle_stop_signal(
@@ -1488,7 +1701,15 @@ impl AgentLoop {
     fn build_status_content(&self, session: &Session) -> String {
         let (prompt_tokens, completion_tokens) =
             *self.last_usage.lock().expect("usage lock poisoned");
-        let context_tokens = self.memory.estimate_session_prompt_tokens(session);
+        let latest_context_tokens = *self
+            .last_context_prompt_tokens
+            .lock()
+            .expect("context prompt lock poisoned");
+        let context_tokens = if latest_context_tokens > 0 {
+            latest_context_tokens
+        } else {
+            self.memory.estimate_session_prompt_tokens(session)
+        };
         let active_model = self.session_model(session);
         let context_window_tokens = self.session_context_window_tokens(session);
         build_status_content(
@@ -1516,33 +1737,54 @@ impl AgentLoop {
         let mut usage = self.last_usage.lock().expect("usage lock poisoned");
         usage.0 += response.usage.prompt_tokens;
         usage.1 += response.usage.completion_tokens;
+        if response.usage.prompt_tokens > 0 {
+            *self
+                .last_context_prompt_tokens
+                .lock()
+                .expect("context prompt lock poisoned") = response.usage.prompt_tokens;
+        }
     }
 
     fn save_turn(&self, session: &mut Session, messages: &[ChatMessage]) -> Result<()> {
         let skip = 1 + session.get_history(0).len();
         for message in messages.iter().skip(skip) {
-            if message.role == "assistant"
-                && message.content.is_none()
-                && message.tool_calls.as_ref().is_none_or(Vec::is_empty)
-            {
-                continue;
+            if let Some(stored) = self.prepare_message_for_session_storage(message) {
+                session.messages.push(stored);
             }
-            let mut stored = message.clone();
-            if stored.timestamp.is_none() {
-                stored.timestamp = Some(crate::util::now_iso());
-            }
-            let Some(stored) = sanitize_message_for_storage(stored) else {
-                continue;
-            };
-            if let Some(Value::String(text)) = &stored.content {
-                if text.trim().is_empty() {
-                    continue;
-                }
-            }
-            session.messages.push(stored);
         }
         session.updated_at = crate::util::now_iso();
         Ok(())
+    }
+
+    fn replace_session_messages(&self, session: &mut Session, messages: &[ChatMessage]) {
+        session.messages.clear();
+        session.last_consolidated = 0;
+        for message in messages.iter().skip(1) {
+            if let Some(stored) = self.prepare_message_for_session_storage(message) {
+                session.messages.push(stored);
+            }
+        }
+        session.updated_at = crate::util::now_iso();
+    }
+
+    fn prepare_message_for_session_storage(&self, message: &ChatMessage) -> Option<ChatMessage> {
+        if message.role == "assistant"
+            && message.content.is_none()
+            && message.tool_calls.as_ref().is_none_or(Vec::is_empty)
+        {
+            return None;
+        }
+        let mut stored = message.clone();
+        if stored.timestamp.is_none() {
+            stored.timestamp = Some(crate::util::now_iso());
+        }
+        let stored = sanitize_message_for_storage(stored)?;
+        if let Some(Value::String(text)) = &stored.content
+            && text.trim().is_empty()
+        {
+            return None;
+        }
+        Some(stored)
     }
 
     fn persist_session_messages(&self, session_key: &str, messages: &[ChatMessage]) -> Result<()> {
@@ -2036,6 +2278,119 @@ fn format_subagent_results_for_context(
         ));
     }
     text
+}
+
+fn format_context_usage(context_tokens: usize, context_window_tokens: usize) -> String {
+    let pct = if context_window_tokens > 0 {
+        (context_tokens * 100) / context_window_tokens
+    } else {
+        0
+    };
+    format!("{context_tokens}/{context_window_tokens} ({pct}%)")
+}
+
+fn build_context_compression_prompt(messages: &[ChatMessage], target_tokens: usize) -> String {
+    let latest_user = latest_user_message_text(messages).unwrap_or_default();
+    let transcript = build_compression_transcript(messages, target_tokens.saturating_mul(30));
+    format!(
+        "Compress the conversation context below to about 1/{CONTEXT_COMPRESSION_TARGET_DIVISOR} \
+of its original size, targeting at most {target_tokens} tokens.\n\n\
+Keep durable facts, user preferences, decisions, tool results, file paths, errors, and unfinished \
+work. Preserve enough detail for the next assistant response to continue correctly. Do not include \
+the current user request verbatim because it will be kept separately.\n\n\
+Return only the compressed context as concise markdown bullets.\n\n\
+Current user request kept separately:\n{}\n\n\
+Conversation to compress:\n{}",
+        truncate_plain(&latest_user, 4_000),
+        transcript
+    )
+}
+
+fn build_compression_transcript(messages: &[ChatMessage], max_chars: usize) -> String {
+    let latest_user_idx = latest_user_message_index(messages);
+    let mut entries = Vec::new();
+    let mut used = 0_usize;
+    for (idx, message) in messages.iter().enumerate().rev() {
+        if idx == 0 || Some(idx) == latest_user_idx {
+            continue;
+        }
+        let Some(text) = message.content_as_text() else {
+            continue;
+        };
+        let text = collapse_plain_text(&text);
+        if text.is_empty() {
+            continue;
+        }
+        let entry = format!("{}: {}", message.role, truncate_plain(&text, 2_000));
+        let entry_len = entry.len() + 1;
+        if used + entry_len > max_chars && !entries.is_empty() {
+            break;
+        }
+        used += entry_len;
+        entries.push(entry);
+    }
+    entries.reverse();
+    if entries.is_empty() {
+        "No prior context available.".to_string()
+    } else {
+        entries.join("\n")
+    }
+}
+
+fn rebuild_messages_with_context_summary(
+    messages: Vec<ChatMessage>,
+    summary: String,
+) -> Vec<ChatMessage> {
+    if messages.is_empty() {
+        return messages;
+    }
+    let latest_user_idx = latest_user_message_index(&messages);
+    let mut compacted = vec![messages[0].clone()];
+    compacted.push(ChatMessage::text(
+        "assistant",
+        format!("[Compressed Context]\n{}", summary.trim()),
+    ));
+    if let Some(idx) = latest_user_idx {
+        compacted.push(messages[idx].clone());
+        if let Some(assistant) = latest_plain_assistant_after(&messages, idx) {
+            compacted.push(assistant);
+        }
+    }
+    compacted
+}
+
+fn build_local_context_summary(messages: &[ChatMessage]) -> String {
+    let transcript = build_compression_transcript(messages, 16_000);
+    format!(
+        "Provider context compression failed; retained an extractive compressed context.\n\n{}",
+        transcript
+    )
+}
+
+fn latest_user_message_index(messages: &[ChatMessage]) -> Option<usize> {
+    messages
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, message)| message.role == "user")
+        .map(|(idx, _)| idx)
+}
+
+fn latest_user_message_text(messages: &[ChatMessage]) -> Option<String> {
+    latest_user_message_index(messages).and_then(|idx| messages[idx].content_as_text())
+}
+
+fn latest_plain_assistant_after(messages: &[ChatMessage], start: usize) -> Option<ChatMessage> {
+    messages
+        .iter()
+        .skip(start + 1)
+        .rev()
+        .find(|message| {
+            message.role == "assistant"
+                && message.content.is_some()
+                && message.tool_calls.as_ref().is_none_or(Vec::is_empty)
+        })
+        .cloned()
 }
 
 fn truncate_plain(text: &str, max_chars: usize) -> String {

@@ -344,6 +344,23 @@ fn make_progress_callback(
         Box::pin(async move {
             if msg
                 .metadata
+                .get("_context_update")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
+                if let Some(ctx) = msg
+                    .metadata
+                    .get("_context")
+                    .and_then(serde_json::Value::as_str)
+                    .map(String::from)
+                {
+                    let _ = tx.send(EngineEvent::ContextUpdate(ctx));
+                }
+                return Ok(());
+            }
+
+            if msg
+                .metadata
                 .get("_tool_hint")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false)
