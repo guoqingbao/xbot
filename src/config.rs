@@ -18,7 +18,8 @@ pub struct AgentDefaults {
     pub max_tokens: usize,
     #[serde(alias = "contextWindowTokens")]
     pub context_window_tokens: usize,
-    pub temperature: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
     #[serde(alias = "maxToolIterations")]
     pub max_tool_iterations: usize,
     #[serde(alias = "maxConcurrentTools")]
@@ -37,7 +38,7 @@ impl Default for AgentDefaults {
             provider: "auto".to_string(),
             max_tokens: 8192,
             context_window_tokens: 65_536,
-            temperature: 0.1,
+            temperature: None,
             max_tool_iterations: 0,
             max_concurrent_tools: 5,
             memory_max_bytes: 32 * 1024,

@@ -283,11 +283,13 @@ fn spawn_turn(
                 .map(|snap| TurnSummary {
                     prompt_tokens: snap.last_prompt_tokens,
                     completion_tokens: snap.last_completion_tokens,
+                    cached_tokens: snap.last_cached_tokens,
                     elapsed,
                 })
                 .unwrap_or(TurnSummary {
                     prompt_tokens: 0,
                     completion_tokens: 0,
+                    cached_tokens: 0,
                     elapsed,
                 })
         };

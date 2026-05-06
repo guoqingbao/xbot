@@ -1158,7 +1158,16 @@ fn tool_family(name: &str) -> (&'static str, &'static str) {
 fn format_summary(s: &super::app::TurnSummary) -> String {
     let mut parts = vec!["✓ done".to_string()];
     if s.prompt_tokens > 0 || s.completion_tokens > 0 {
-        parts.push(format!("↑{} ↓{}", s.prompt_tokens, s.completion_tokens));
+        let cache_hint = if s.cached_tokens > 0 && s.prompt_tokens > 0 {
+            let pct = (s.cached_tokens * 100) / s.prompt_tokens;
+            format!(" {}% cached", pct)
+        } else {
+            String::new()
+        };
+        parts.push(format!(
+            "↑{} ↓{}{}",
+            s.prompt_tokens, s.completion_tokens, cache_hint
+        ));
     }
     parts.push(super::app::format_elapsed(s.elapsed));
     parts.join(" · ")

@@ -65,6 +65,8 @@ impl ToolCallRequest {
 pub struct LlmUsage {
     pub prompt_tokens: usize,
     pub completion_tokens: usize,
+    #[serde(default)]
+    pub cached_prompt_tokens: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,14 +100,14 @@ pub struct ProviderModelInfo {
 
 #[derive(Debug, Clone)]
 pub struct GenerationSettings {
-    pub temperature: f32,
+    pub temperature: Option<f32>,
     pub max_tokens: usize,
 }
 
 impl Default for GenerationSettings {
     fn default() -> Self {
         Self {
-            temperature: 0.7,
+            temperature: None,
             max_tokens: 4096,
         }
     }
@@ -429,17 +431,21 @@ impl LlmProvider for OpenAiCompatibleProvider {
     ) -> Result<LlmResponse> {
         let endpoint = format!("{}/chat/completions", self.api_base.trim_end_matches('/'));
         let openai_messages: Vec<Value> = messages.iter().map(|m| m.to_openai_payload()).collect();
-        let mut request = self.client.post(endpoint).json(&json!({
+        let effective_temp = temperature.or(self.generation.temperature);
+        let mut payload = json!({
             "model": model.unwrap_or(self.default_model()),
             "messages": openai_messages,
             "tools": tools.unwrap_or(&[]),
             "max_tokens": max_tokens.unwrap_or(self.generation.max_tokens),
-            "temperature": temperature.unwrap_or(self.generation.temperature),
             "stream": true,
             "stream_options": {
                 "include_usage": true
             }
-        }));
+        });
+        if let Some(temp) = effective_temp {
+            payload["temperature"] = json!(temp);
+        }
+        let mut request = self.client.post(endpoint).json(&payload);
         if !self.api_key.trim().is_empty() {
             request = request.bearer_auth(&self.api_key);
         }
@@ -499,10 +505,9 @@ impl LlmProvider for AzureOpenAiProvider {
             "max_completion_tokens": max_tokens.unwrap_or(self.generation.max_tokens),
             "stream": true,
         });
-        if let Some(temp) = temperature {
+        let effective_temp = temperature.or(self.generation.temperature);
+        if let Some(temp) = effective_temp {
             payload["temperature"] = json!(temp);
-        } else {
-            payload["temperature"] = json!(self.generation.temperature);
         }
         if let Some(tools) = tools {
             payload["tools"] = Value::Array(tools.to_vec());
@@ -663,6 +668,11 @@ fn parse_openai_like_response(payload: Value) -> Result<LlmResponse> {
                 .get("completion_tokens")
                 .and_then(Value::as_u64)
                 .unwrap_or(0) as usize,
+            cached_prompt_tokens: usage
+                .get("prompt_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize,
         },
         reasoning_content: message
             .get("reasoning_content")
@@ -818,6 +828,12 @@ fn apply_openai_like_sse_event(
             .and_then(Value::as_u64)
             .unwrap_or(state.usage.completion_tokens as u64)
             as usize;
+        if let Some(details) = usage_payload.get("prompt_tokens_details") {
+            state.usage.cached_prompt_tokens = details
+                .get("cached_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize;
+        }
     }
     let Some(choice) = payload
         .get("choices")
@@ -1011,6 +1027,7 @@ mod tests {
                 usage: LlmUsage {
                     prompt_tokens: 10,
                     completion_tokens: 5,
+                    ..Default::default()
                 },
                 reasoning_content: None,
                 thinking_blocks: None,

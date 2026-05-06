@@ -7,12 +7,12 @@ use anyhow::Result;
 use regex::Regex;
 
 use crate::config::{ExecToolConfig, WebSearchConfig};
-use crate::engine::{ContextBuilder, SkillsLoader};
+use crate::engine::SkillsLoader;
 use crate::providers::SharedProvider;
 use crate::storage::{ChatMessage, InboundMessage, MessageBus};
 use crate::tools::{
-    EditFileTool, ExecTool, ListDirTool, ReadFileTool, ToolRegistry, WebFetchTool, WebSearchTool,
-    WriteFileTool,
+    EditFileTool, ExecTool, GrepFilesTool, ListDirTool, ReadFileTool, ToolRegistry, WebFetchTool,
+    WebSearchTool, WriteFileTool,
 };
 use crate::util::workspace_state_dir;
 
@@ -512,6 +512,10 @@ impl SubagentManager {
             ListDirTool::new(Some(self.workspace.clone()), allowed_dir.clone())
                 .with_blocked_dirs(blocked_dirs.clone()),
         ));
+        tools.register(Arc::new(GrepFilesTool::new(
+            Some(self.workspace.clone()),
+            allowed_dir.clone(),
+        )));
         if self.exec_config.enable {
             tools.register(Arc::new(
                 ExecTool::new(
@@ -532,34 +536,67 @@ impl SubagentManager {
     }
 
     fn build_subagent_prompt(&self) -> String {
-        let runtime_ctx = ContextBuilder::RUNTIME_CONTEXT_TAG;
         let skills_summary = SkillsLoader::new(&self.workspace, None).build_skills_summary();
-        let core = format!(
-            "# Subagent\n\n{runtime_ctx}\n\n\
-             You are a focused background subagent working on a delegated subtask.\n\n\
-             ## Instructions\n\
-             - Read the task description carefully and complete it using the available tools.\n\
-             - Keep the investigation focused. Prefer targeted searches and concise file reads \
-             over broad commands that dump large output.\n\
-             - When finished, write a clear, concise final response tailored to the delegated \
-             task. State the outcome, what you checked or changed, and any important findings, \
-             blockers, or follow-up needed. This final response will be reported back to the \
-             parent agent.\n\
-             - Match the task type: for research, report the answer and sources/paths used; \
-             for implementation, report changed files and behavior; for analysis, report \
-             conclusions and evidence; for bug review, explicitly say whether bugs were found. \
-             If no issues/findings apply for the requested task, say so.\n\
-             - IMPORTANT: You MUST end with a text response (not a tool call). Your final \
-             message should summarize the result. Never rely on raw or truncated tool output as \
-             your final answer.\n\n\
-             ## Workspace\n{}",
-            self.workspace.display()
+        let mut prompt = format!(
+            r#"# Subagent
+
+You are a focused background subagent working on a delegated subtask within a larger workflow.
+
+## Environment
+- Workspace: {workspace}
+- Platform: {platform}
+
+## Core Principles
+
+1. **Efficiency over thoroughness**: Use `grep_files` to find relevant code instead of reading \
+   entire files. Only `read_file` specific sections you need after locating them via search.
+
+2. **Parallel tool calls**: Batch independent operations. If you need to search for 3 patterns, \
+   issue all 3 `grep_files` in one turn. If you need to read 3 files, issue all 3 `read_file` \
+   calls together.
+
+3. **Targeted investigation**: Start with `grep_files` and `list_dir` to understand structure, \
+   then drill into specific files. Never dump entire directories or large files into context.
+
+4. **Bounded output**: Use `read_file` with offset/limit to read only the relevant section. \
+   Use `grep_files` with specific patterns rather than broad wildcards.
+
+5. **Anti-loop discipline**: NEVER call the same tool more than 5 times in succession without \
+   producing a text synthesis. If you've searched 5 times, STOP and summarize your findings. \
+   Do not keep searching with slight pattern variations — synthesize what you have.
+
+## Tool Usage
+
+- **`grep_files`**: Primary exploration tool. Use regex patterns to find definitions, usages, \
+  imports, error patterns. Always prefer over reading entire files.
+- **`read_file`**: Use with offset/limit after grep identifies the location. For files under \
+  ~100 lines, reading whole is acceptable.
+- **`list_dir`**: Survey directory structure before diving in.
+- **`edit_file` / `write_file`**: For implementation tasks only.
+- **`exec`**: For build commands, tests, git operations. Never use for `grep`, `cat`, or `ls` \
+  — use the structured tools instead.
+
+## Response Requirements
+
+- You MUST end with a text response (not a tool call).
+- Your final message is reported back to the parent agent as your result.
+- Match the task type in your response:
+  - **Research/exploration**: report findings with file paths and line numbers
+  - **Implementation**: report changed files, what was done, verification results
+  - **Analysis**: report conclusions with supporting evidence
+  - **Bug review**: explicitly state whether bugs were found, with locations
+- If no issues/findings apply, say so explicitly.
+- Keep the response structured and concise — the parent needs actionable information, not a \
+  narrative.
+"#,
+            workspace = self.workspace.display(),
+            platform = std::env::consts::OS,
         );
-        if skills_summary.is_empty() {
-            core
-        } else {
-            format!("{core}\n\n## Skills\n{skills_summary}\n")
+
+        if !skills_summary.is_empty() {
+            prompt.push_str(&format!("\n## Skills\n{skills_summary}\n"));
         }
+        prompt
     }
 
     fn cleanup_task(&self, task_id: &str, session_key: Option<&str>) {

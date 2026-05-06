@@ -130,15 +130,17 @@ impl AnthropicProvider {
         let model_id =
             normalize_model_id(model.unwrap_or(&self.default_model), &self.default_model);
         let max_t = max_tokens.unwrap_or(self.generation.max_tokens);
-        let temp = temperature.unwrap_or(self.generation.temperature);
+        let effective_temp = temperature.or(self.generation.temperature);
 
         let mut body = json!({
             "model": model_id,
             "max_tokens": max_t,
             "messages": anthropic_messages,
             "stream": stream,
-            "temperature": temp,
         });
+        if let Some(temp) = effective_temp {
+            body["temperature"] = json!(temp);
+        }
         if let Some(sys) = system {
             body["system"] = json!(sys);
         }
@@ -561,6 +563,10 @@ fn parse_non_streaming_message(payload: &Value) -> Result<LlmResponse> {
         usage: LlmUsage {
             prompt_tokens,
             completion_tokens,
+            cached_prompt_tokens: usage
+                .get("cache_read_input_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize,
         },
         reasoning_content: (!reasoning.trim().is_empty()).then_some(reasoning),
         thinking_blocks: (!thinking_blocks.is_empty()).then_some(thinking_blocks),
@@ -862,6 +868,9 @@ fn merge_usage(state: &mut AnthropicStreamState, usage: &Value) {
     }
     if let Some(o) = usage.get("output_tokens").and_then(Value::as_u64) {
         state.usage.completion_tokens = state.usage.completion_tokens.max(o as usize);
+    }
+    if let Some(c) = usage.get("cache_read_input_tokens").and_then(Value::as_u64) {
+        state.usage.cached_prompt_tokens = state.usage.cached_prompt_tokens.max(c as usize);
     }
 }
 

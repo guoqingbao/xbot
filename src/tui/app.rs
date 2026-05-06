@@ -21,6 +21,7 @@ pub enum AgentState {
 pub struct TurnSummary {
     pub prompt_tokens: usize,
     pub completion_tokens: usize,
+    pub cached_tokens: usize,
     pub elapsed: Duration,
 }
 
@@ -1184,7 +1185,16 @@ impl App {
         }
         if let Some(ref s) = self.last_summary {
             if s.prompt_tokens > 0 || s.completion_tokens > 0 {
-                parts.push(format!("↑{} ↓{}", s.prompt_tokens, s.completion_tokens));
+                let cache_hint = if s.cached_tokens > 0 && s.prompt_tokens > 0 {
+                    let pct = (s.cached_tokens * 100) / s.prompt_tokens;
+                    format!(" {}% cached", pct)
+                } else {
+                    String::new()
+                };
+                parts.push(format!(
+                    "↑{} ↓{}{}",
+                    s.prompt_tokens, s.completion_tokens, cache_hint
+                ));
             }
             parts.push(format_elapsed(s.elapsed));
         }

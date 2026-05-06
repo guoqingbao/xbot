@@ -276,6 +276,7 @@ async fn run(config_path: Option<&Path>, model_override: Option<String>) -> Resu
         &model,
         config.provider_api_base_for_model(Some(&model)),
         config.tools.web.proxy.as_deref(),
+        config.agents.defaults.temperature,
     )?;
     let startup_model = resolve_startup_model(&provider, &model).await;
     if let Some(notice) = &startup_model.notice {
@@ -558,6 +559,7 @@ async fn build_agent(
         &model,
         config.provider_api_base_for_model(Some(&model)),
         config.tools.web.proxy.as_deref(),
+        config.agents.defaults.temperature,
     )?;
     let startup_model = resolve_startup_model(&provider, &model).await;
     let subagent_model = config.agents.subagents.model.trim();
@@ -764,6 +766,7 @@ fn build_subagent_provider_from_config(
         &subagent_model,
         api_base,
         config.tools.web.proxy.as_deref(),
+        config.agents.defaults.temperature,
     )?;
 
     if provider.default_model() == main_provider.default_model()
@@ -785,6 +788,7 @@ fn turn_summary(agent: &AgentLoop, elapsed: std::time::Duration) -> Result<TurnS
     Ok(TurnSummary {
         prompt_tokens: snapshot.last_prompt_tokens,
         completion_tokens: snapshot.last_completion_tokens,
+        cached_tokens: snapshot.last_cached_tokens,
         elapsed,
     })
 }
@@ -1299,6 +1303,7 @@ fn build_heartbeat_service(
             &model,
             config.provider_api_base_for_model(Some(&model)),
             config.tools.web.proxy.as_deref(),
+            config.agents.defaults.temperature,
         )
         .ok()?,
         model,

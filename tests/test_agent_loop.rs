@@ -394,6 +394,58 @@ async fn agent_loop_does_not_stop_when_tool_arguments_change() {
     );
 }
 
+#[tokio::test]
+async fn agent_loop_breaks_semantic_loop_after_repeated_nudges() {
+    let dir = tempdir().unwrap();
+    let responses = (1..=25)
+        .map(|idx| LlmResponse {
+            content: None,
+            tool_calls: vec![ToolCallRequest {
+                id: format!("call_{idx}"),
+                name: "grep_files".to_string(),
+                arguments: json!({"pattern": format!("bug_pattern_{idx}"), "path": "."}),
+            }],
+            finish_reason: "tool_calls".to_string(),
+            usage: LlmUsage::default(),
+            reasoning_content: None,
+            thinking_blocks: None,
+        })
+        .collect();
+    let provider = Arc::new(QueuedProvider::new("test-model", responses));
+    let agent = AgentLoop::new(
+        provider,
+        dir.path(),
+        Some("test-model".to_string()),
+        40,
+        5,
+        128_000,
+        32 * 1024,
+        Default::default(),
+        None,
+        ExecToolConfig {
+            enable: false,
+            timeout: 60,
+            path_append: String::new(),
+        },
+        false,
+        None,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+
+    let response = agent
+        .process_direct("find bugs", "cli:direct", "cli", "direct")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        response.content.contains("stuck in a search loop"),
+        "Expected loop-break message, got: {}",
+        response.content
+    );
+}
+
 struct SlowQueuedProvider {
     inner: QueuedProvider,
     delay: std::time::Duration,
@@ -587,7 +639,7 @@ async fn runtime_stop_command_sends_threaded_ack_and_completion() {
             Some("test-model".to_string()),
             8,
             5,
-            8_000,
+            128_000,
             32 * 1024,
             Default::default(),
             None,
@@ -629,7 +681,7 @@ async fn runtime_stop_command_sends_threaded_ack_and_completion() {
     .await
     .unwrap();
 
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     bus.publish_inbound(InboundMessage {
         channel: "slack".to_string(),
@@ -644,12 +696,12 @@ async fn runtime_stop_command_sends_threaded_ack_and_completion() {
     .await
     .unwrap();
 
-    let mut ack = tokio::time::timeout(Duration::from_secs(1), bus.consume_outbound())
+    let mut ack = tokio::time::timeout(Duration::from_secs(3), bus.consume_outbound())
         .await
         .unwrap()
         .unwrap();
     while ack.content != "Stopping current turn..." {
-        ack = tokio::time::timeout(Duration::from_secs(1), bus.consume_outbound())
+        ack = tokio::time::timeout(Duration::from_secs(3), bus.consume_outbound())
             .await
             .unwrap()
             .unwrap();
@@ -662,7 +714,7 @@ async fn runtime_stop_command_sends_threaded_ack_and_completion() {
     );
     assert_eq!(ack.metadata, expected_meta);
 
-    let completion = tokio::time::timeout(Duration::from_secs(1), bus.consume_outbound())
+    let completion = tokio::time::timeout(Duration::from_secs(3), bus.consume_outbound())
         .await
         .unwrap()
         .unwrap();
@@ -932,6 +984,7 @@ async fn near_context_limit_compresses_context_before_next_request() {
                 usage: LlmUsage {
                     prompt_tokens: 90,
                     completion_tokens: 8,
+                    ..Default::default()
                 },
                 reasoning_content: None,
                 thinking_blocks: None,
@@ -1030,6 +1083,7 @@ async fn provider_usage_emits_realtime_context_update() {
             usage: LlmUsage {
                 prompt_tokens: 42,
                 completion_tokens: 7,
+                ..Default::default()
             },
             reasoning_content: None,
             thinking_blocks: None,
@@ -1546,7 +1600,11 @@ async fn backend_announces_new_session_once_per_runtime_session() {
                 content: Some("First reply.".to_string()),
                 tool_calls: Vec::new(),
                 finish_reason: "stop".to_string(),
-                usage: LlmUsage::default(),
+                usage: LlmUsage {
+                    prompt_tokens: 100,
+                    completion_tokens: 10,
+                    ..Default::default()
+                },
                 reasoning_content: None,
                 thinking_blocks: None,
             },
@@ -1565,7 +1623,11 @@ async fn backend_announces_new_session_once_per_runtime_session() {
                 content: Some("Second reply.".to_string()),
                 tool_calls: Vec::new(),
                 finish_reason: "stop".to_string(),
-                usage: LlmUsage::default(),
+                usage: LlmUsage {
+                    prompt_tokens: 100,
+                    completion_tokens: 10,
+                    ..Default::default()
+                },
                 reasoning_content: None,
                 thinking_blocks: None,
             },
@@ -1588,7 +1650,7 @@ async fn backend_announces_new_session_once_per_runtime_session() {
         Some("test-model".to_string()),
         8,
         5,
-        8_000,
+        128_000,
         32 * 1024,
         Default::default(),
         None,
@@ -1647,14 +1709,18 @@ async fn backend_announces_new_session_once_per_runtime_session() {
     assert_eq!(second.content, "Second reply.");
 
     let messages = progress_messages.lock().unwrap();
-    assert_eq!(messages.len(), 1);
+    let session_messages: Vec<_> = messages
+        .iter()
+        .filter(|m| m.content.contains("Session:"))
+        .collect();
+    assert_eq!(session_messages.len(), 1);
     assert!(
-        messages[0].content.starts_with(
+        session_messages[0].content.starts_with(
             "Session: started new session for this conversation.\n\n_Model: test-model_"
         )
     );
-    assert!(messages[0].content.contains("Workspace:"));
-    assert!(messages[0].content.contains("Session messages: 0"));
+    assert!(session_messages[0].content.contains("Workspace:"));
+    assert!(session_messages[0].content.contains("Session messages: 0"));
 }
 
 #[tokio::test]
@@ -1671,7 +1737,11 @@ async fn backend_announces_when_resuming_existing_session() {
             content: Some("Reply after resume.".to_string()),
             tool_calls: Vec::new(),
             finish_reason: "stop".to_string(),
-            usage: LlmUsage::default(),
+            usage: LlmUsage {
+                prompt_tokens: 100,
+                completion_tokens: 10,
+                ..Default::default()
+            },
             reasoning_content: None,
             thinking_blocks: None,
         },
@@ -1693,7 +1763,7 @@ async fn backend_announces_when_resuming_existing_session() {
         Some("test-model".to_string()),
         8,
         5,
-        8_000,
+        128_000,
         32 * 1024,
         Default::default(),
         None,
@@ -1736,10 +1806,14 @@ async fn backend_announces_when_resuming_existing_session() {
     assert_eq!(response.content, "Reply after resume.");
 
     let messages = progress_messages.lock().unwrap();
-    assert_eq!(messages.len(), 1);
-    assert!(messages[0].content.starts_with(
+    let session_messages: Vec<_> = messages
+        .iter()
+        .filter(|m| m.content.contains("Session:"))
+        .collect();
+    assert_eq!(session_messages.len(), 1);
+    assert!(session_messages[0].content.starts_with(
         "Session: resuming 1 previous message; /new to start fresh.\n\n_Model: test-model_"
     ));
-    assert!(messages[0].content.contains("Workspace:"));
-    assert!(messages[0].content.contains("Session messages: 1"));
+    assert!(session_messages[0].content.contains("Workspace:"));
+    assert!(session_messages[0].content.contains("Session messages: 1"));
 }

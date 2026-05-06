@@ -457,15 +457,27 @@ impl Tool for ReadFileTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "read_file".to_string(),
-            description:
-                "Read a file with numbered lines. Use offset and limit to paginate large files."
-                    .to_string(),
+            description: "Read file contents with line numbers. Use offset and limit to read \
+                specific sections — prefer reading only the lines you need after using \
+                grep_files to locate relevant code. Default limit is 2000 lines."
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string"},
-                    "offset": {"type": "integer", "minimum": 1},
-                    "limit": {"type": "integer", "minimum": 1}
+                    "path": {
+                        "type": "string",
+                        "description": "File path (absolute or relative to workspace)"
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Starting line number (1-indexed)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Max lines to read (default: 2000)"
+                    }
                 },
                 "required": ["path"]
             }),
@@ -915,6 +927,271 @@ impl Tool for ListDirTool {
             ));
         }
         ToolOutput::Text(result)
+    }
+}
+
+#[derive(Clone)]
+pub struct GrepFilesTool {
+    workspace: Option<PathBuf>,
+    allowed_dir: Option<PathBuf>,
+}
+
+impl GrepFilesTool {
+    const DEFAULT_MAX_RESULTS: i64 = 50;
+    const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
+    pub fn new(workspace: Option<PathBuf>, allowed_dir: Option<PathBuf>) -> Self {
+        Self {
+            workspace,
+            allowed_dir,
+        }
+    }
+
+    fn search_file(
+        &self,
+        path: &Path,
+        regex: &Regex,
+        context_lines: usize,
+        results: &mut Vec<String>,
+        max_results: usize,
+    ) {
+        if results.len() >= max_results {
+            return;
+        }
+        let metadata = match fs::metadata(path) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        if metadata.len() > Self::MAX_FILE_SIZE {
+            return;
+        }
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let lines: Vec<&str> = content.lines().collect();
+        let display_path = path.display().to_string();
+
+        if context_lines == 0 {
+            for (i, line) in lines.iter().enumerate() {
+                if results.len() >= max_results {
+                    break;
+                }
+                if regex.is_match(line) {
+                    results.push(format!("{}:{}: {}", display_path, i + 1, line.trim()));
+                }
+            }
+        } else {
+            let mut matched_ranges: Vec<(usize, usize)> = Vec::new();
+            for (i, line) in lines.iter().enumerate() {
+                if regex.is_match(line) {
+                    let start = i.saturating_sub(context_lines);
+                    let end = (i + context_lines + 1).min(lines.len());
+                    matched_ranges.push((start, end));
+                }
+            }
+            let merged = Self::merge_ranges(&matched_ranges);
+            for (start, end) in merged {
+                if results.len() >= max_results {
+                    break;
+                }
+                let mut block = format!("{}:{}:\n", display_path, start + 1);
+                for i in start..end {
+                    block.push_str(&format!("  {}: {}\n", i + 1, lines[i]));
+                }
+                results.push(block);
+            }
+        }
+    }
+
+    fn merge_ranges(ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {
+        if ranges.is_empty() {
+            return Vec::new();
+        }
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        let mut sorted = ranges.to_vec();
+        sorted.sort_by_key(|r| r.0);
+        let mut current = sorted[0];
+        for &(start, end) in &sorted[1..] {
+            if start <= current.1 {
+                current.1 = current.1.max(end);
+            } else {
+                merged.push(current);
+                current = (start, end);
+            }
+        }
+        merged.push(current);
+        merged
+    }
+
+    fn walk_and_search(
+        &self,
+        base: &Path,
+        regex: &Regex,
+        include: &Option<String>,
+        context_lines: usize,
+        max_results: usize,
+    ) -> Vec<String> {
+        let mut results = Vec::new();
+        let include_pattern = include.as_ref().and_then(|p| glob::Pattern::new(p).ok());
+
+        for entry in WalkDir::new(base)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| {
+                let name = e.file_name().to_string_lossy();
+                !matches!(
+                    name.as_ref(),
+                    ".git"
+                        | "node_modules"
+                        | "__pycache__"
+                        | "target"
+                        | ".venv"
+                        | "venv"
+                        | "dist"
+                        | "build"
+                )
+            })
+        {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if let Some(ref pattern) = include_pattern {
+                let file_name = entry.file_name().to_string_lossy();
+                if !pattern.matches(&file_name) {
+                    let rel = entry
+                        .path()
+                        .strip_prefix(base)
+                        .unwrap_or(entry.path())
+                        .to_string_lossy();
+                    if !pattern.matches(&rel) {
+                        continue;
+                    }
+                }
+            }
+            self.search_file(
+                entry.path(),
+                regex,
+                context_lines,
+                &mut results,
+                max_results,
+            );
+            if results.len() >= max_results {
+                break;
+            }
+        }
+        results
+    }
+}
+
+#[async_trait]
+impl Tool for GrepFilesTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "grep_files".to_string(),
+            description: "Fast content search using regex. Returns file paths, line numbers, \
+                and matching lines sorted by modification time. Use to find code patterns, \
+                definitions, imports, or any text across the codebase. For open-ended searches \
+                that may require multiple rounds, delegate to a sub-agent via `spawn` instead."
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Regex pattern to search for"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Directory or file to search in (defaults to workspace root)"
+                    },
+                    "include": {
+                        "type": "string",
+                        "description": "Glob pattern to filter files (e.g. '*.rs', '*.py')"
+                    },
+                    "context_lines": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Lines of context before and after each match (default: 0). Use 0 for compact output (file:line: content), increase for surrounding context."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Maximum number of matches to return (default: 50)"
+                    }
+                },
+                "required": ["pattern"]
+            }),
+        }
+    }
+
+    async fn execute(&self, params: Value) -> ToolOutput {
+        let Some(pattern) = param_str(&params, "pattern") else {
+            return ToolOutput::Text("Error: missing pattern".to_string());
+        };
+        let regex = match Regex::new(&pattern) {
+            Ok(r) => r,
+            Err(e) => return ToolOutput::Text(format!("Error: invalid regex: {e}")),
+        };
+        let path = param_str(&params, "path");
+        let include = param_str(&params, "include").map(|s| s.to_string());
+        let context_lines = param_i64(&params, "context_lines").unwrap_or(0).max(0) as usize;
+        let max_results = param_i64(&params, "max_results")
+            .unwrap_or(Self::DEFAULT_MAX_RESULTS)
+            .clamp(1, 500) as usize;
+
+        let search_path = if let Some(p) = path {
+            match resolve_path(
+                &p,
+                self.workspace.as_deref(),
+                self.allowed_dir.as_deref(),
+                &[],
+            ) {
+                Ok(resolved) => resolved,
+                Err(e) => return ToolOutput::Text(format!("Error: {e}")),
+            }
+        } else {
+            self.workspace.clone().unwrap_or_else(|| PathBuf::from("."))
+        };
+
+        if !search_path.exists() {
+            return ToolOutput::Text(format!("Error: path not found: {}", search_path.display()));
+        }
+
+        let results = if search_path.is_file() {
+            let mut results = Vec::new();
+            self.search_file(
+                &search_path,
+                &regex,
+                context_lines,
+                &mut results,
+                max_results,
+            );
+            results
+        } else {
+            self.walk_and_search(&search_path, &regex, &include, context_lines, max_results)
+        };
+
+        if results.is_empty() {
+            return ToolOutput::Text(format!(
+                "No matches found for pattern '{}' in {}",
+                pattern,
+                search_path.display()
+            ));
+        }
+
+        let total = results.len();
+        let mut output = results.join("\n");
+        if total >= max_results {
+            output.push_str(&format!(
+                "\n(results capped at {max_results}; refine pattern or path to narrow search)"
+            ));
+        }
+        ToolOutput::Text(output)
     }
 }
 
@@ -1636,13 +1913,17 @@ impl Tool for WaitSubagentsTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "wait_subagents".to_string(),
-            description: "Wait for background subagents spawned in the current session and return their final text results. Call this after spawning subagents before continuing or giving a final answer.".to_string(),
+            description: "Wait for spawned sub-agents to complete and return their results. \
+                Each result contains the sub-agent's final summary. Integrate findings into \
+                your work — do not re-do what sub-agents already did. If a result is \
+                insufficient, investigate the specific gap yourself rather than re-spawning."
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "timeout_seconds": {
                         "type": "integer",
-                        "description": "Maximum time to wait for currently running subagents. Defaults to 300 seconds."
+                        "description": "Maximum seconds to wait (default: 300, max: 3600)"
                     }
                 }
             }),
@@ -1697,12 +1978,27 @@ impl Tool for SpawnTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "spawn".to_string(),
-            description: "Spawn a background subagent. After spawning one or more subagents, call wait_subagents to receive their final text results before continuing the main task.".to_string(),
+            description: "Spawn a background sub-agent for independent parallel work. The \
+                sub-agent runs autonomously with its own context and tools (grep_files, \
+                read_file, edit_file, exec, etc). Use for: parallel investigation of 3+ \
+                independent files/modules, heavy exploration that would consume main context, \
+                or independent implementation tasks after planning. Provide a detailed, \
+                self-contained task description — the sub-agent has no access to your \
+                conversation history. After spawning, call wait_subagents to collect results."
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "task": {"type": "string"},
-                    "label": {"type": "string"}
+                    "task": {
+                        "type": "string",
+                        "description": "Detailed, self-contained task description. Include \
+                            all context the sub-agent needs: what to investigate/implement, \
+                            which files/paths are relevant, what format to return results in."
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Short label for tracking (shown in progress updates)"
+                    }
                 },
                 "required": ["task"]
             }),

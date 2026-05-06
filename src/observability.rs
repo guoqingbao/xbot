@@ -652,6 +652,7 @@ mod tests {
                 usage: LlmUsage {
                     prompt_tokens: 120,
                     completion_tokens: 40,
+                    ..Default::default()
                 },
                 reasoning_content: None,
                 thinking_blocks: None,

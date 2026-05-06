@@ -24,7 +24,7 @@ fn cursor_build_requires_api_base() {
         extra_headers: Default::default(),
         reasoning_effort: None,
     };
-    let err = match build_provider_client("cursor", &cfg, "cursor-model", None, None) {
+    let err = match build_provider_client("cursor", &cfg, "cursor-model", None, None, None) {
         Err(e) => e,
         Ok(_) => panic!("expected cursor without apiBase to fail"),
     };

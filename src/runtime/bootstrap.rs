@@ -218,6 +218,7 @@ pub fn build_provider_client(
     model: &str,
     resolved_api_base: Option<String>,
     proxy: Option<&str>,
+    temperature: Option<f32>,
 ) -> Result<SharedProvider> {
     let spec = find_by_name(provider_name);
     let api_base = resolved_api_base
@@ -249,7 +250,7 @@ pub fn build_provider_client(
         bail!("provider '{provider_name}' is configured without an API key");
     }
     let generation = GenerationSettings {
-        temperature: 0.1,
+        temperature,
         max_tokens: 8192,
     };
 
@@ -431,6 +432,7 @@ mod tests {
             "ollama/qwen2.5-coder:7b",
             Some("http://localhost:11434/v1".to_string()),
             None,
+            None,
         )
         .unwrap();
 
@@ -449,6 +451,7 @@ mod tests {
             },
             "Qwen3_5ForConditionalGeneration",
             Some("http://192.168.1.3:8000/v1".to_string()),
+            None,
             None,
         )
         .unwrap();

@@ -268,6 +268,7 @@ type SharedPrinter = Arc<Mutex<Box<dyn RustylineExternalPrinter + Send>>>;
 pub struct TurnSummary {
     pub prompt_tokens: usize,
     pub completion_tokens: usize,
+    pub cached_tokens: usize,
     pub elapsed: Duration,
 }
 
@@ -276,7 +277,16 @@ impl TurnSummary {
         let tokens = if self.prompt_tokens == 0 && self.completion_tokens == 0 {
             String::new()
         } else {
-            format!("↑{} ↓{}", self.prompt_tokens, self.completion_tokens)
+            let cache_hint = if self.cached_tokens > 0 && self.prompt_tokens > 0 {
+                let pct = (self.cached_tokens * 100) / self.prompt_tokens;
+                format!(" {}% cached", pct)
+            } else {
+                String::new()
+            };
+            format!(
+                "↑{} ↓{}{}",
+                self.prompt_tokens, self.completion_tokens, cache_hint
+            )
         };
         let elapsed = format_elapsed_short(self.elapsed);
         let mut parts = vec![style.accent(status)];

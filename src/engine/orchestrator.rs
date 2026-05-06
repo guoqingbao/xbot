@@ -24,9 +24,9 @@ use crate::storage::{
     ChatMessage, InboundMessage, MessageBus, OutboundMessage, Session, SessionManager,
 };
 use crate::tools::{
-    CronTool, EditFileTool, ExecTool, ListDirTool, MessageSendCallback, MessageTool, ReadFileTool,
-    SpawnTool, ToolOutput, ToolRegistry, WaitSubagentsTool, WebFetchTool, WebSearchTool,
-    WriteFileTool,
+    CronTool, EditFileTool, ExecTool, GrepFilesTool, ListDirTool, MessageSendCallback, MessageTool,
+    ReadFileTool, SpawnTool, ToolOutput, ToolRegistry, WaitSubagentsTool, WebFetchTool,
+    WebSearchTool, WriteFileTool,
 };
 use crate::util::{build_status_content, workspace_state_dir};
 
@@ -54,6 +54,7 @@ pub struct AgentSnapshot {
     pub running_subagents: usize,
     pub last_prompt_tokens: usize,
     pub last_completion_tokens: usize,
+    pub last_cached_tokens: usize,
 }
 
 pub struct AgentLoop {
@@ -73,7 +74,7 @@ pub struct AgentLoop {
     wait_subagents_tool: Arc<WaitSubagentsTool>,
     cron_tool: Option<Arc<CronTool>>,
     start_time: Instant,
-    last_usage: Mutex<(usize, usize)>,
+    last_usage: Mutex<(usize, usize, usize)>,
     last_context_prompt_tokens: Mutex<usize>,
     tool_semaphore: Arc<Semaphore>,
     cancellations: Arc<Mutex<HashSet<String>>>,
@@ -189,6 +190,10 @@ impl AgentLoop {
             ListDirTool::new(Some(workspace.clone()), allowed_dir.clone())
                 .with_blocked_dirs(blocked_dirs.clone()),
         ));
+        tools.register(Arc::new(GrepFilesTool::new(
+            Some(workspace.clone()),
+            allowed_dir.clone(),
+        )));
         if exec.enable {
             tools.register(Arc::new(
                 ExecTool::new(
@@ -233,7 +238,7 @@ impl AgentLoop {
             wait_subagents_tool,
             cron_tool,
             start_time: Instant::now(),
-            last_usage: Mutex::new((0, 0)),
+            last_usage: Mutex::new((0, 0, 0)),
             last_context_prompt_tokens: Mutex::new(0),
             tool_semaphore,
             cancellations: Arc::new(Mutex::new(HashSet::new())),
@@ -921,7 +926,7 @@ impl AgentLoop {
         bool,
         bool,
     )> {
-        *self.last_usage.lock().expect("usage lock poisoned") = (0, 0);
+        *self.last_usage.lock().expect("usage lock poisoned") = (0, 0, 0);
         *self
             .last_context_prompt_tokens
             .lock()
@@ -934,6 +939,9 @@ impl AgentLoop {
         let think_re = Regex::new(r"(?s)<think>.*?</think>").expect("valid think regex");
         let mut last_tool_call_fingerprint: Option<String> = None;
         let mut repeated_tool_call_streak = 0_usize;
+        let mut same_tool_name_streak = 0_usize;
+        let mut same_tool_nudges_sent = 0_usize;
+        let mut last_tool_names: Option<String> = None;
         let mut last_assistant_content: Option<String> = None;
 
         let mut iteration = 0_usize;
@@ -998,11 +1006,28 @@ impl AgentLoop {
 
             if response.has_tool_calls() {
                 let tool_call_fingerprint = normalize_tool_call_fingerprint(&response.tool_calls);
-                if last_tool_call_fingerprint.as_deref() == Some(tool_call_fingerprint.as_str()) {
+                let fingerprint_matches =
+                    last_tool_call_fingerprint.as_deref() == Some(tool_call_fingerprint.as_str());
+                if fingerprint_matches {
                     repeated_tool_call_streak += 1;
                 } else {
                     repeated_tool_call_streak = 1;
                     last_tool_call_fingerprint = Some(tool_call_fingerprint);
+                }
+
+                let current_tool_names: String = response
+                    .tool_calls
+                    .iter()
+                    .map(|c| c.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                if !fingerprint_matches
+                    && last_tool_names.as_deref() == Some(current_tool_names.as_str())
+                {
+                    same_tool_name_streak += 1;
+                } else if !fingerprint_matches {
+                    same_tool_name_streak = 1;
+                    last_tool_names = Some(current_tool_names);
                 }
 
                 let openai_tool_calls = response
@@ -1091,6 +1116,33 @@ impl AgentLoop {
                         last_assistant_content.as_deref(),
                     ));
                     break;
+                }
+
+                if same_tool_name_streak >= 10 && repeated_tool_call_streak < 30 {
+                    same_tool_nudges_sent += 1;
+                    if same_tool_nudges_sent >= 2 {
+                        final_content = Some(format!(
+                            "I was stuck in a search loop calling {} repeatedly. \
+                             Here is what I found before being stopped:\n\n{}",
+                            last_tool_names.as_deref().unwrap_or("unknown"),
+                            last_assistant_content
+                                .as_deref()
+                                .unwrap_or("(no summary produced)")
+                        ));
+                        break;
+                    }
+                    let nudge = format!(
+                        "[SYSTEM] You have called the same tool ({}) {} times in a row with \
+                         different arguments. You appear to be stuck in a search loop. \
+                         STOP searching immediately. Synthesize what you have found so far \
+                         into a final answer. Do NOT make any more tool calls. If you cannot \
+                         fully answer the question with the information gathered, explain \
+                         what is missing and present your partial findings.",
+                        last_tool_names.as_deref().unwrap_or("unknown"),
+                        same_tool_name_streak
+                    );
+                    messages.push(ChatMessage::text("user", nudge));
+                    same_tool_name_streak = 0;
                 }
             } else {
                 let content = response
@@ -1261,7 +1313,14 @@ impl AgentLoop {
                 &[
                     ChatMessage::text(
                         "system",
-                        "You compress long agent conversation context for continuation.",
+                        "You are a context compression specialist. You produce concise, \
+                         structured summaries of agent conversations that preserve all \
+                         actionable information while dramatically reducing token count. \
+                         Preserve: file paths, function names, decisions made, errors \
+                         encountered, user preferences, unfinished work, and tool results \
+                         that inform next steps. Discard: verbose tool output, repeated \
+                         attempts, exploratory dead ends (unless the dead end itself is \
+                         important context), and raw file contents that have been acted upon.",
                     ),
                     ChatMessage::text("user", prompt),
                 ],
@@ -1374,7 +1433,8 @@ impl AgentLoop {
         let Some(callback) = callback else {
             return;
         };
-        let context = format_context_usage(prompt_tokens, context_window_tokens);
+        let cached = response.usage.cached_prompt_tokens;
+        let context = format_context_usage(prompt_tokens, context_window_tokens, cached);
         let mut outbound = target.outbound(String::new());
         outbound
             .metadata
@@ -1390,6 +1450,11 @@ impl AgentLoop {
             "_context_window_tokens".to_string(),
             Value::from(context_window_tokens as u64),
         );
+        if cached > 0 {
+            outbound
+                .metadata
+                .insert("_cached_tokens".to_string(), Value::from(cached as u64));
+        }
         let _ = callback(outbound).await;
     }
 
@@ -1699,7 +1764,7 @@ impl AgentLoop {
     }
 
     fn build_status_content(&self, session: &Session) -> String {
-        let (prompt_tokens, completion_tokens) =
+        let (prompt_tokens, completion_tokens, cached_tokens) =
             *self.last_usage.lock().expect("usage lock poisoned");
         let latest_context_tokens = *self
             .last_context_prompt_tokens
@@ -1719,6 +1784,7 @@ impl AgentLoop {
             self.start_time.elapsed().as_secs(),
             prompt_tokens,
             completion_tokens,
+            cached_tokens,
             context_window_tokens,
             session.get_history(0).len(),
             context_tokens,
@@ -1737,6 +1803,7 @@ impl AgentLoop {
         let mut usage = self.last_usage.lock().expect("usage lock poisoned");
         usage.0 += response.usage.prompt_tokens;
         usage.1 += response.usage.completion_tokens;
+        usage.2 += response.usage.cached_prompt_tokens;
         if response.usage.prompt_tokens > 0 {
             *self
                 .last_context_prompt_tokens
@@ -1842,7 +1909,7 @@ impl AgentLoop {
     pub fn snapshot(&self) -> Result<AgentSnapshot> {
         let sessions = self.sessions.lock().expect("session manager lock poisoned");
         let session_count = sessions.list_session_summaries()?.len();
-        let (last_prompt_tokens, last_completion_tokens) =
+        let (last_prompt_tokens, last_completion_tokens, last_cached_tokens) =
             *self.last_usage.lock().expect("usage lock poisoned");
         Ok(AgentSnapshot {
             model: self.model.clone(),
@@ -1854,6 +1921,7 @@ impl AgentLoop {
             running_subagents: self.subagents.get_running_count(),
             last_prompt_tokens,
             last_completion_tokens,
+            last_cached_tokens,
         })
     }
 
@@ -2280,26 +2348,46 @@ fn format_subagent_results_for_context(
     text
 }
 
-fn format_context_usage(context_tokens: usize, context_window_tokens: usize) -> String {
+fn format_context_usage(
+    context_tokens: usize,
+    context_window_tokens: usize,
+    cached_tokens: usize,
+) -> String {
     let pct = if context_window_tokens > 0 {
         (context_tokens * 100) / context_window_tokens
     } else {
         0
     };
-    format!("{context_tokens}/{context_window_tokens} ({pct}%)")
+    if cached_tokens > 0 && context_tokens > 0 {
+        let cache_pct = (cached_tokens * 100) / context_tokens;
+        format!("{context_tokens}/{context_window_tokens} ({pct}%, {cache_pct}% cached)")
+    } else {
+        format!("{context_tokens}/{context_window_tokens} ({pct}%)")
+    }
 }
 
 fn build_context_compression_prompt(messages: &[ChatMessage], target_tokens: usize) -> String {
     let latest_user = latest_user_message_text(messages).unwrap_or_default();
     let transcript = build_compression_transcript(messages, target_tokens.saturating_mul(30));
     format!(
-        "Compress the conversation context below to about 1/{CONTEXT_COMPRESSION_TARGET_DIVISOR} \
-of its original size, targeting at most {target_tokens} tokens.\n\n\
-Keep durable facts, user preferences, decisions, tool results, file paths, errors, and unfinished \
-work. Preserve enough detail for the next assistant response to continue correctly. Do not include \
-the current user request verbatim because it will be kept separately.\n\n\
-Return only the compressed context as concise markdown bullets.\n\n\
-Current user request kept separately:\n{}\n\n\
+        "Compress the conversation below to ~{target_tokens} tokens (about \
+1/{CONTEXT_COMPRESSION_TARGET_DIVISOR} of original size).\n\n\
+## What to preserve (in order of priority)\n\
+1. **Decisions and outcomes** — what was decided, what worked, what failed\n\
+2. **File paths and locations** — exact paths, line numbers, function names referenced\n\
+3. **User preferences and constraints** — explicit requirements and style choices\n\
+4. **Unfinished work** — tasks in progress, next steps planned\n\
+5. **Errors and blockers** — issues encountered that may recur\n\
+6. **Key tool results** — findings from grep/search/read that inform next steps\n\n\
+## What to discard\n\
+- Verbose raw file contents (keep only the relevant excerpts)\n\
+- Repeated/failed tool attempts (keep only the final working approach)\n\
+- Exploratory dead ends (unless the dead end itself is important)\n\
+- Assistant reasoning/preamble that restates the user's request\n\n\
+## Format\n\
+Return concise markdown bullets grouped by topic. Use `code formatting` for paths and \
+identifiers. The current user request is kept separately and must NOT be included.\n\n\
+Current user request (kept separately):\n{}\n\n\
 Conversation to compress:\n{}",
         truncate_plain(&latest_user, 4_000),
         transcript
