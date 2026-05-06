@@ -265,6 +265,7 @@ fn spawn_turn(
             agent.clone(),
             session_key.clone(),
         )));
+        agent.set_approval_callback(Some(make_approval_callback(tx.clone())));
         let started = Instant::now();
 
         let result = agent
@@ -334,6 +335,26 @@ fn make_stream_callback(tx: mpsc::UnboundedSender<EngineEvent>) -> TextStreamCal
     })))
 }
 
+fn make_approval_callback(tx: mpsc::UnboundedSender<EngineEvent>) -> rbot::tools::ApprovalCallback {
+    use rbot::tools::{ApprovalDecision, ApprovalRequest};
+    Arc::new(move |request: ApprovalRequest| {
+        let tx = tx.clone();
+        Box::pin(async move {
+            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+            let sent = tx.send(EngineEvent::ApprovalRequest {
+                tool_name: request.tool_name,
+                path: request.path,
+                diff_lines: request.diff_lines,
+                responder: resp_tx,
+            });
+            if sent.is_err() {
+                return ApprovalDecision::AllowOnce;
+            }
+            resp_rx.await.unwrap_or(ApprovalDecision::AllowOnce)
+        })
+    })
+}
+
 fn make_progress_callback(
     tx: mpsc::UnboundedSender<EngineEvent>,
     agent: Arc<AgentLoop>,
@@ -358,6 +379,37 @@ fn make_progress_callback(
                 {
                     let _ = tx.send(EngineEvent::ContextUpdate(ctx));
                 }
+                return Ok(());
+            }
+
+            if msg
+                .metadata
+                .get("_tool_result")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
+                let tool_name = msg
+                    .metadata
+                    .get("_tool_name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("tool")
+                    .to_string();
+                let success = msg
+                    .metadata
+                    .get("_tool_success")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(true);
+                let summary = msg
+                    .metadata
+                    .get("_tool_result_summary")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let _ = tx.send(EngineEvent::ToolResult {
+                    tool_name,
+                    success,
+                    summary,
+                });
                 return Ok(());
             }
 

@@ -74,6 +74,10 @@ pub fn render(f: &mut Frame, app: &mut App) {
     if app.show_help {
         render_help_overlay(f, area);
     }
+
+    if app.approval_dialog.is_some() {
+        render_approval_overlay(f, area, app);
+    }
 }
 
 fn composer_height(input: &str, area_width: u16) -> u16 {
@@ -435,9 +439,20 @@ fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                 emoji,
                 detail,
                 diff,
+                result_summary,
             } => {
                 push_blank(&mut lines);
-                render_tool_card(&mut lines, name, emoji, detail, diff.as_ref(), w, false, 0);
+                render_tool_card(
+                    &mut lines,
+                    name,
+                    emoji,
+                    detail,
+                    diff.as_ref(),
+                    result_summary.as_ref(),
+                    w,
+                    false,
+                    0,
+                );
             }
             HistoryEntry::Error(msg) => {
                 push_blank(&mut lines);
@@ -545,7 +560,7 @@ fn render_subagent_card(
     w: usize,
     anim_frame: u16,
 ) {
-    let (glyph, glyph_color, state_text) = match status {
+    let (glyph, glyph_color, mut state_text) = match status {
         SubagentStatus::Running => {
             let spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
             let ch = spinner[(anim_frame / 3) as usize % spinner.len()];
@@ -555,6 +570,9 @@ fn render_subagent_card(
         SubagentStatus::Failed => ("✗".to_string(), SUBAGENT_FAIL, "failed"),
         SubagentStatus::Cancelled => ("⊘".to_string(), TEXT_DIM, "cancelled"),
     };
+
+    // Remove state text for now because it has corresponding animation frame
+    state_text = "";
 
     let header_fill = "─".repeat(
         w.saturating_sub(12 + label.len() + state_text.len())
@@ -650,6 +668,7 @@ fn build_active_lines(
                     &tool.emoji,
                     &tool.detail,
                     tool.diff.as_ref(),
+                    tool.result_summary.as_ref(),
                     w,
                     is_last,
                     anim_frame,
@@ -835,6 +854,7 @@ fn render_tool_card(
     emoji: &str,
     detail: &str,
     diff: Option<&EditDiff>,
+    result_summary: Option<&(bool, String)>,
     w: usize,
     running: bool,
     anim_frame: u16,
@@ -853,11 +873,11 @@ fn render_tool_card(
         ("✓".to_string(), SUCCESS_FG)
     };
 
-    let state_text = if running { "running" } else { "done" };
-    let header_fill = "─".repeat(
-        w.saturating_sub(10 + display_name.len() + state_text.len())
-            .min(60),
-    );
+    // Header: "  ✓ ◆ write ────"  Bottom: "    └────"
+    let header_prefix_len = 4 + 2 + display_name.chars().count() + 1;
+    let card_total = w.saturating_sub(2);
+    let header_fill = "─".repeat(card_total.saturating_sub(header_prefix_len));
+    let bottom_fill = "─".repeat(card_total.saturating_sub(5));
 
     lines.push(Line::from(vec![
         Span::styled(
@@ -866,12 +886,11 @@ fn render_tool_card(
         ),
         Span::styled(format!("{glyph} "), Style::default().fg(TOOL_FG)),
         Span::styled(
-            display_name,
+            format!("{display_name} "),
             Style::default()
                 .fg(TEXT_PRIMARY)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!(" {state_text} "), Style::default().fg(TEXT_DIM)),
         Span::styled(header_fill, Style::default().fg(BORDER_DIM)),
     ]));
 
@@ -880,7 +899,7 @@ fn render_tool_card(
             lines.push(Line::from(vec![
                 Span::styled("    │ ", Style::default().fg(BORDER_DIM)),
                 Span::styled(
-                    truncate_end(dline, w.saturating_sub(6)),
+                    truncate_end(dline, w.saturating_sub(8)),
                     Style::default().fg(TEXT_MUTED),
                 ),
             ]));
@@ -896,7 +915,26 @@ fn render_tool_card(
         render_edit_diff(lines, diff, w);
     }
 
-    let bottom_fill = "─".repeat(w.saturating_sub(4).min(60));
+    if let Some((success, summary)) = result_summary {
+        let (icon, color) = if *success {
+            ("✓", SUCCESS_FG)
+        } else {
+            ("✗", ERROR_FG)
+        };
+        for (i, sline) in summary.lines().enumerate() {
+            let prefix = if i == 0 {
+                format!("    │ {icon} ")
+            } else {
+                "    │   ".to_string()
+            };
+            let text = truncate_end(sline, w.saturating_sub(prefix.len()));
+            lines.push(Line::from(vec![
+                Span::styled(prefix, Style::default().fg(color)),
+                Span::styled(text, Style::default().fg(color)),
+            ]));
+        }
+    }
+
     lines.push(Line::from(Span::styled(
         format!("    └{bottom_fill}"),
         Style::default().fg(BORDER_DIM),
@@ -904,6 +942,8 @@ fn render_tool_card(
 }
 
 fn render_edit_diff(lines: &mut Vec<Line<'static>>, diff: &EditDiff, w: usize) {
+    use rbot::diff::DiffKind;
+
     let max_w = w.saturating_sub(8);
     lines.push(Line::from(vec![
         Span::styled("    │ ", Style::default().fg(BORDER_DIM)),
@@ -915,54 +955,47 @@ fn render_edit_diff(lines: &mut Vec<Line<'static>>, diff: &EditDiff, w: usize) {
         ),
     ]));
 
-    let max_diff_lines = 12;
-    let total_diff = diff.removals.len() + diff.additions.len();
-    let (show_rem, show_add) = if total_diff <= max_diff_lines {
-        (diff.removals.len(), diff.additions.len())
-    } else {
-        let ratio_rem = if total_diff > 0 {
-            (diff.removals.len() * max_diff_lines) / total_diff
-        } else {
-            0
+    lines.push(Line::from(vec![
+        Span::styled("    │ ", Style::default().fg(BORDER_DIM)),
+        Span::styled(
+            format!("{:>5} {:>5} │ ", "old", "new"),
+            Style::default().fg(TEXT_DIM),
+        ),
+    ]));
+
+    let max_diff_lines = 24;
+    for dl in diff.lines.iter().take(max_diff_lines) {
+        let old_no = dl
+            .old_lineno
+            .map(|n| format!("{n:>5}"))
+            .unwrap_or_else(|| "     ".to_string());
+        let new_no = dl
+            .new_lineno
+            .map(|n| format!("{n:>5}"))
+            .unwrap_or_else(|| "     ".to_string());
+        let gutter = format!(" {old_no} {new_no} │ {} ", dl.marker);
+        let text_w = max_w.saturating_sub(gutter.chars().count());
+        let content = truncate_end(&dl.text, text_w);
+
+        let (fg, bg) = match dl.kind {
+            DiffKind::Added => (DIFF_ADD, Color::Rgb(20, 40, 20)),
+            DiffKind::Removed => (DIFF_DEL, Color::Rgb(50, 20, 20)),
+            DiffKind::Context => (TEXT_DIM, Color::Reset),
+            DiffKind::Omitted => (TEXT_DIM, Color::Reset),
         };
-        let rem = ratio_rem.max(1).min(diff.removals.len());
-        let add = (max_diff_lines - rem).min(diff.additions.len());
-        (rem, add)
-    };
 
-    for line in diff.removals.iter().take(show_rem) {
         lines.push(Line::from(vec![
             Span::styled("    │ ", Style::default().fg(BORDER_DIM)),
-            Span::styled(
-                format!("- {}", truncate_end(line, max_w.saturating_sub(2))),
-                Style::default().fg(DIFF_DEL),
-            ),
-        ]));
-    }
-    if diff.removals.len() > show_rem {
-        lines.push(Line::from(vec![
-            Span::styled("    │ ", Style::default().fg(BORDER_DIM)),
-            Span::styled(
-                format!("  … {} more removed", diff.removals.len() - show_rem),
-                Style::default().fg(TEXT_DIM),
-            ),
+            Span::styled(gutter, Style::default().fg(TEXT_DIM)),
+            Span::styled(content, Style::default().fg(fg).bg(bg)),
         ]));
     }
 
-    for line in diff.additions.iter().take(show_add) {
+    if diff.lines.len() > max_diff_lines {
         lines.push(Line::from(vec![
             Span::styled("    │ ", Style::default().fg(BORDER_DIM)),
             Span::styled(
-                format!("+ {}", truncate_end(line, max_w.saturating_sub(2))),
-                Style::default().fg(DIFF_ADD),
-            ),
-        ]));
-    }
-    if diff.additions.len() > show_add {
-        lines.push(Line::from(vec![
-            Span::styled("    │ ", Style::default().fg(BORDER_DIM)),
-            Span::styled(
-                format!("  … {} more added", diff.additions.len() - show_add),
+                format!("  … {} more lines", diff.lines.len() - max_diff_lines),
                 Style::default().fg(TEXT_DIM),
             ),
         ]));
@@ -1193,6 +1226,113 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
 
     let help = Paragraph::new(Text::from(text_lines)).block(block);
     f.render_widget(help, popup);
+}
+
+fn render_approval_overlay(f: &mut Frame, area: Rect, app: &super::app::App) {
+    use rbot::diff::DiffKind;
+
+    let dialog = match &app.approval_dialog {
+        Some(d) => d,
+        None => return,
+    };
+
+    let width = area.width.min(80);
+    let height = area.height.min(28);
+    let x = (area.width.saturating_sub(width)) / 2;
+    let y = (area.height.saturating_sub(height)) / 2;
+    let popup = Rect::new(x, y, width, height);
+
+    f.render_widget(Clear, popup);
+
+    let inner_w = width.saturating_sub(4) as usize;
+    let mut text_lines: Vec<Line<'static>> = Vec::new();
+
+    text_lines.push(Line::from(vec![
+        Span::styled("  File: ", Style::default().fg(TEXT_DIM)),
+        Span::styled(
+            truncate_end(&dialog.path, inner_w.saturating_sub(8)),
+            Style::default()
+                .fg(DIFF_HEADER)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    text_lines.push(Line::from(""));
+
+    let max_lines = height.saturating_sub(8) as usize;
+    for dl in dialog.diff_lines.iter().take(max_lines) {
+        let old_no = dl
+            .old_lineno
+            .map(|n| format!("{n:>4}"))
+            .unwrap_or_else(|| "    ".to_string());
+        let new_no = dl
+            .new_lineno
+            .map(|n| format!("{n:>4}"))
+            .unwrap_or_else(|| "    ".to_string());
+        let gutter = format!(" {old_no} {new_no} {} ", dl.marker);
+        let text_w = inner_w.saturating_sub(gutter.chars().count());
+        let content = truncate_end(&dl.text, text_w);
+
+        let (fg, bg) = match dl.kind {
+            DiffKind::Added => (DIFF_ADD, Color::Rgb(20, 40, 20)),
+            DiffKind::Removed => (DIFF_DEL, Color::Rgb(50, 20, 20)),
+            DiffKind::Context => (TEXT_DIM, Color::Reset),
+            DiffKind::Omitted => (TEXT_DIM, Color::Reset),
+        };
+
+        text_lines.push(Line::from(vec![
+            Span::styled(gutter, Style::default().fg(TEXT_DIM)),
+            Span::styled(content, Style::default().fg(fg).bg(bg)),
+        ]));
+    }
+
+    if dialog.diff_lines.len() > max_lines {
+        text_lines.push(Line::from(Span::styled(
+            format!("  … {} more lines", dialog.diff_lines.len() - max_lines),
+            Style::default().fg(TEXT_DIM),
+        )));
+    }
+
+    text_lines.push(Line::from(""));
+
+    let options = ["Allow Once", "Always Allow", "Deny"];
+    let option_line = options
+        .iter()
+        .enumerate()
+        .map(|(i, label)| {
+            if i == dialog.selected {
+                Span::styled(
+                    format!(" [{label}] "),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::styled(format!("  {label}  "), Style::default().fg(TEXT_PRIMARY))
+            }
+        })
+        .collect::<Vec<_>>();
+    text_lines.push(Line::from(option_line));
+    text_lines.push(Line::from(Span::styled(
+        "  ←/→ select · Enter confirm",
+        Style::default().fg(TEXT_DIM),
+    )));
+
+    let title = format!(" Approve {} ", dialog.tool_name);
+    let block = Block::default()
+        .title(Span::styled(
+            title,
+            Style::default()
+                .fg(Color::Rgb(255, 200, 80))
+                .add_modifier(Modifier::BOLD),
+        ))
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Rgb(255, 200, 80)))
+        .style(Style::default().bg(HEADER_BG));
+
+    let paragraph = Paragraph::new(Text::from(text_lines)).block(block);
+    f.render_widget(paragraph, popup);
 }
 
 fn tool_family(name: &str) -> (&'static str, &'static str) {

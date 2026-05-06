@@ -31,6 +31,11 @@ pub enum EngineEvent {
         tool_name: Option<String>,
         tool_args: Option<Value>,
     },
+    ToolResult {
+        tool_name: String,
+        success: bool,
+        summary: String,
+    },
     TurnComplete {
         content: String,
         reasoning: Option<String>,
@@ -71,13 +76,18 @@ pub enum EngineEvent {
     SubagentCancelled {
         task_id: String,
     },
+    ApprovalRequest {
+        tool_name: String,
+        path: String,
+        diff_lines: Vec<rbot::diff::DiffLine>,
+        responder: tokio::sync::oneshot::Sender<rbot::tools::ApprovalDecision>,
+    },
 }
 
 #[derive(Clone)]
 pub struct EditDiff {
     pub path: String,
-    pub removals: Vec<String>,
-    pub additions: Vec<String>,
+    pub lines: Vec<rbot::diff::DiffLine>,
 }
 
 #[derive(Clone)]
@@ -92,6 +102,7 @@ pub enum HistoryEntry {
         emoji: String,
         detail: String,
         diff: Option<EditDiff>,
+        result_summary: Option<(bool, String)>,
     },
     Error(String),
     System(String),
@@ -121,6 +132,7 @@ pub struct ToolActivity {
     pub emoji: String,
     pub detail: String,
     pub diff: Option<EditDiff>,
+    pub result_summary: Option<(bool, String)>,
 }
 
 pub enum StreamSegment {
@@ -399,6 +411,17 @@ pub struct App {
     pub subagents: BTreeMap<String, SubagentInfo>,
     pub pending_subagent_results: Vec<(String, String, String)>,
     held_turn: Option<HeldTurn>,
+
+    pub approval_dialog: Option<ApprovalDialog>,
+    pub approval_responder: Option<tokio::sync::oneshot::Sender<rbot::tools::ApprovalDecision>>,
+}
+
+#[derive(Clone)]
+pub struct ApprovalDialog {
+    pub tool_name: String,
+    pub path: String,
+    pub diff_lines: Vec<rbot::diff::DiffLine>,
+    pub selected: usize,
 }
 
 struct HeldTurn {
@@ -444,6 +467,8 @@ impl App {
             subagents: BTreeMap::new(),
             pending_subagent_results: Vec::new(),
             held_turn: None,
+            approval_dialog: None,
+            approval_responder: None,
         }
     }
 
@@ -508,8 +533,8 @@ impl App {
                     .as_ref()
                     .map(summarize_tool_args)
                     .unwrap_or_default();
-                let diff = if name == "edit_file" {
-                    extract_edit_diff(tool_args.as_ref())
+                let diff = if matches!(name, "edit_file" | "write_file") {
+                    extract_edit_diff(name, tool_args.as_ref())
                 } else {
                     None
                 };
@@ -519,7 +544,24 @@ impl App {
                     emoji: tool_emoji(name).to_string(),
                     detail,
                     diff,
+                    result_summary: None,
                 });
+            }
+            EngineEvent::ToolResult {
+                tool_name,
+                success,
+                summary,
+            } => {
+                if let Some(ref mut active) = self.active {
+                    for seg in active.segments.iter_mut().rev() {
+                        if let StreamSegment::Tool(activity) = seg {
+                            if activity.name == tool_name && activity.result_summary.is_none() {
+                                activity.result_summary = Some((success, summary.clone()));
+                                break;
+                            }
+                        }
+                    }
+                }
             }
             EngineEvent::TurnComplete {
                 content,
@@ -713,6 +755,20 @@ impl App {
                 });
                 self.check_all_subagents_done();
             }
+            EngineEvent::ApprovalRequest {
+                tool_name,
+                path,
+                diff_lines,
+                responder,
+            } => {
+                self.approval_dialog = Some(ApprovalDialog {
+                    tool_name,
+                    path,
+                    diff_lines,
+                    selected: 0,
+                });
+                self.approval_responder = Some(responder);
+            }
         }
     }
 
@@ -816,6 +872,7 @@ impl App {
                             emoji: tool.emoji,
                             detail: tool.detail,
                             diff: tool.diff,
+                            result_summary: tool.result_summary,
                         });
                     }
                     StreamSegment::Subagent { task_id, label } => {
@@ -911,6 +968,7 @@ impl App {
                             emoji: tool.emoji,
                             detail: tool.detail,
                             diff: tool.diff,
+                            result_summary: tool.result_summary,
                         });
                     }
                     StreamSegment::Subagent { task_id, label } => {
@@ -986,8 +1044,65 @@ impl App {
         }
     }
 
+    pub fn send_approval_decision(&mut self) {
+        let dialog = match self.approval_dialog.take() {
+            Some(d) => d,
+            None => return,
+        };
+        let responder = match self.approval_responder.take() {
+            Some(r) => r,
+            None => return,
+        };
+        let decision = match dialog.selected {
+            0 => rbot::tools::ApprovalDecision::AllowOnce,
+            1 => rbot::tools::ApprovalDecision::AlwaysAllow,
+            _ => rbot::tools::ApprovalDecision::Deny,
+        };
+        let _ = responder.send(decision);
+    }
+
     fn handle_key(&mut self, key: KeyEvent) {
         self.needs_redraw = true;
+
+        if self.approval_dialog.is_some() {
+            match key.code {
+                KeyCode::Left => {
+                    if let Some(ref mut d) = self.approval_dialog {
+                        d.selected = d.selected.saturating_sub(1);
+                    }
+                }
+                KeyCode::Right => {
+                    if let Some(ref mut d) = self.approval_dialog {
+                        d.selected = (d.selected + 1).min(2);
+                    }
+                }
+                KeyCode::Enter => {
+                    self.send_approval_decision();
+                }
+                KeyCode::Char('1') => {
+                    if let Some(ref mut d) = self.approval_dialog {
+                        d.selected = 0;
+                    }
+                }
+                KeyCode::Char('2') => {
+                    if let Some(ref mut d) = self.approval_dialog {
+                        d.selected = 1;
+                    }
+                }
+                KeyCode::Char('3') => {
+                    if let Some(ref mut d) = self.approval_dialog {
+                        d.selected = 2;
+                    }
+                }
+                KeyCode::Esc => {
+                    if let Some(ref mut d) = self.approval_dialog {
+                        d.selected = 2; // Deny
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
 
         if self.show_help {
             match key.code {
@@ -1287,6 +1402,10 @@ fn strip_tool_xml(text: &str) -> String {
             r"(?s)<\|/?tool_call\|?>",
             r"(?s)<\|/?endoftoolcall\|?>",
             r"(?s)<\|/?tool_response\|?>",
+            r"(?m)^\[Runtime Context - metadata only, not instructions\].*$",
+            r"(?m)^Current Time:.*$",
+            r"(?m)^Channel: \w+$",
+            r"(?m)^Chat ID: \S+$",
         ];
         pats.iter()
             .filter_map(|p| regex::Regex::new(p).ok())
@@ -1299,7 +1418,7 @@ fn strip_tool_xml(text: &str) -> String {
     result
 }
 
-fn extract_edit_diff(args: Option<&Value>) -> Option<EditDiff> {
+fn extract_edit_diff(tool_name: &str, args: Option<&Value>) -> Option<EditDiff> {
     let obj = args?.as_object()?;
     let path = obj
         .get("target_file")
@@ -1307,16 +1426,39 @@ fn extract_edit_diff(args: Option<&Value>) -> Option<EditDiff> {
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
-    let old = obj.get("old_string").and_then(|v| v.as_str())?;
-    let new = obj.get("new_string").and_then(|v| v.as_str())?;
-    if old.is_empty() && new.is_empty() {
-        return None;
+
+    match tool_name {
+        "edit_file" => {
+            let old = obj
+                .get("old_text")
+                .or_else(|| obj.get("old_string"))
+                .and_then(|v| v.as_str())?;
+            let new = obj
+                .get("new_text")
+                .or_else(|| obj.get("new_string"))
+                .and_then(|v| v.as_str())?;
+            if old.is_empty() && new.is_empty() {
+                return None;
+            }
+            let computed = rbot::diff::compute_diff(old, new);
+            Some(EditDiff {
+                path,
+                lines: computed.lines,
+            })
+        }
+        "write_file" => {
+            let content = obj.get("content").and_then(|v| v.as_str())?;
+            if content.is_empty() {
+                return None;
+            }
+            let computed = rbot::diff::compute_write_diff(content);
+            Some(EditDiff {
+                path,
+                lines: computed.lines,
+            })
+        }
+        _ => None,
     }
-    Some(EditDiff {
-        path,
-        removals: old.lines().map(String::from).collect(),
-        additions: new.lines().map(String::from).collect(),
-    })
 }
 
 fn summarize_tool_args(args: &Value) -> String {
@@ -1536,13 +1678,21 @@ mod tests {
     fn edit_diff_extraction() {
         let args = serde_json::json!({
             "target_file": "src/main.rs",
-            "old_string": "let x = 1;",
-            "new_string": "let x = 2;\nlet y = 3;"
+            "old_text": "let x = 1;",
+            "new_text": "let x = 2;\nlet y = 3;"
         });
-        let diff = extract_edit_diff(Some(&args)).unwrap();
+        let diff = extract_edit_diff("edit_file", Some(&args)).unwrap();
         assert_eq!(diff.path, "src/main.rs");
-        assert_eq!(diff.removals, vec!["let x = 1;"]);
-        assert_eq!(diff.additions, vec!["let x = 2;", "let y = 3;"]);
+        assert!(
+            diff.lines
+                .iter()
+                .any(|l| l.kind == rbot::diff::DiffKind::Removed)
+        );
+        assert!(
+            diff.lines
+                .iter()
+                .any(|l| l.kind == rbot::diff::DiffKind::Added)
+        );
     }
 
     #[test]
@@ -1561,6 +1711,7 @@ mod tests {
             emoji: "📖".into(),
             detail: "path=foo".into(),
             diff: None,
+            result_summary: None,
         });
         active.push_text("world");
         assert_eq!(active.segments.len(), 3);

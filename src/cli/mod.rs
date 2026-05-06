@@ -1143,12 +1143,8 @@ fn render_edit_file_hint(style: &Style, _hint: &str, tool_args: Option<&Value>) 
         .and_then(Value::as_str)
         .unwrap_or_default()
         .replace("\r\n", "\n");
-    let _replace_all = args
-        .get("replace_all")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
     let width = available_panel_width();
-    let diff = build_edit_diff(&old_text, &new_text);
+    let computed = rbot::diff::compute_diff(&old_text, &new_text);
     let mut lines = Vec::new();
     lines.push(style.panel_meta(
         format!("path    {}", truncate_middle(path, width.saturating_sub(8))),
@@ -1158,11 +1154,12 @@ fn render_edit_file_hint(style: &Style, _hint: &str, tool_args: Option<&Value>) 
         format!(" {:>5} {:>5} |   diff preview", "old", "new"),
         width,
     ));
-    lines.extend(render_diff_lines(style, &diff.lines, width));
+    lines.extend(render_diff_lines(style, &computed.lines, width));
     Some(render_rounded_block(style, "✍ edit_file", &lines, width))
 }
 
-fn render_diff_lines(style: &Style, lines: &[RenderedDiffLine], width: usize) -> Vec<String> {
+fn render_diff_lines(style: &Style, lines: &[rbot::diff::DiffLine], width: usize) -> Vec<String> {
+    use rbot::diff::DiffKind;
     lines
         .iter()
         .map(|line| {
@@ -1186,186 +1183,6 @@ fn render_diff_lines(style: &Style, lines: &[RenderedDiffLine], width: usize) ->
             }
         })
         .collect()
-}
-
-struct EditDiff {
-    lines: Vec<RenderedDiffLine>,
-}
-
-#[derive(Clone)]
-struct RenderedDiffLine {
-    kind: DiffKind,
-    old_lineno: Option<usize>,
-    new_lineno: Option<usize>,
-    marker: char,
-    text: String,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum DiffKind {
-    Context,
-    Added,
-    Removed,
-    Omitted,
-}
-
-fn build_edit_diff(old_text: &str, new_text: &str) -> EditDiff {
-    let old_lines = split_lines_for_diff(old_text);
-    let new_lines = split_lines_for_diff(new_text);
-    let ops = diff_ops(&old_lines, &new_lines);
-    let (rendered, _changed_blocks) = compress_diff_ops(ops, 2, 64);
-    EditDiff { lines: rendered }
-}
-
-fn split_lines_for_diff(text: &str) -> Vec<String> {
-    if text.is_empty() {
-        Vec::new()
-    } else {
-        text.lines().map(|line| line.to_string()).collect()
-    }
-}
-
-fn diff_ops(old_lines: &[String], new_lines: &[String]) -> Vec<RenderedDiffLine> {
-    let n = old_lines.len();
-    let m = new_lines.len();
-    if n.saturating_mul(m) > 40_000 {
-        let mut out = Vec::new();
-        for (idx, line) in old_lines.iter().enumerate() {
-            out.push(RenderedDiffLine {
-                kind: DiffKind::Removed,
-                old_lineno: Some(idx + 1),
-                new_lineno: None,
-                marker: '-',
-                text: line.clone(),
-            });
-        }
-        for (idx, line) in new_lines.iter().enumerate() {
-            out.push(RenderedDiffLine {
-                kind: DiffKind::Added,
-                old_lineno: None,
-                new_lineno: Some(idx + 1),
-                marker: '+',
-                text: line.clone(),
-            });
-        }
-        return out;
-    }
-    let mut dp = vec![vec![0usize; m + 1]; n + 1];
-    for i in (0..n).rev() {
-        for j in (0..m).rev() {
-            dp[i][j] = if old_lines[i] == new_lines[j] {
-                dp[i + 1][j + 1] + 1
-            } else {
-                dp[i + 1][j].max(dp[i][j + 1])
-            };
-        }
-    }
-
-    let mut i = 0usize;
-    let mut j = 0usize;
-    let mut out = Vec::new();
-    while i < n || j < m {
-        if i < n && j < m && old_lines[i] == new_lines[j] {
-            out.push(RenderedDiffLine {
-                kind: DiffKind::Context,
-                old_lineno: Some(i + 1),
-                new_lineno: Some(j + 1),
-                marker: ' ',
-                text: old_lines[i].clone(),
-            });
-            i += 1;
-            j += 1;
-        } else if j < m && (i == n || dp[i][j + 1] >= dp[i + 1][j]) {
-            out.push(RenderedDiffLine {
-                kind: DiffKind::Added,
-                old_lineno: None,
-                new_lineno: Some(j + 1),
-                marker: '+',
-                text: new_lines[j].clone(),
-            });
-            j += 1;
-        } else if i < n {
-            out.push(RenderedDiffLine {
-                kind: DiffKind::Removed,
-                old_lineno: Some(i + 1),
-                new_lineno: None,
-                marker: '-',
-                text: old_lines[i].clone(),
-            });
-            i += 1;
-        }
-    }
-    out
-}
-
-fn compress_diff_ops(
-    ops: Vec<RenderedDiffLine>,
-    context: usize,
-    max_lines: usize,
-) -> (Vec<RenderedDiffLine>, usize) {
-    let changed = ops
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, line)| (line.kind != DiffKind::Context).then_some(idx))
-        .collect::<Vec<_>>();
-    if changed.is_empty() {
-        return (
-            vec![RenderedDiffLine {
-                kind: DiffKind::Context,
-                old_lineno: None,
-                new_lineno: None,
-                marker: ' ',
-                text: "(no textual changes)".to_string(),
-            }],
-            0,
-        );
-    }
-
-    let mut ranges = Vec::new();
-    let mut start = changed[0].saturating_sub(context);
-    let mut end = (changed[0] + context + 1).min(ops.len());
-    for &idx in changed.iter().skip(1) {
-        let next_start = idx.saturating_sub(context);
-        let next_end = (idx + context + 1).min(ops.len());
-        if next_start <= end {
-            end = end.max(next_end);
-        } else {
-            ranges.push((start, end));
-            start = next_start;
-            end = next_end;
-        }
-    }
-    ranges.push((start, end));
-
-    let changed_blocks = ranges.len();
-    let mut out = Vec::new();
-    let mut previous_end = 0usize;
-    for (range_index, (start, end)) in ranges.into_iter().enumerate() {
-        if range_index > 0 {
-            let skipped = start.saturating_sub(previous_end);
-            out.push(RenderedDiffLine {
-                kind: DiffKind::Omitted,
-                old_lineno: None,
-                new_lineno: None,
-                marker: '…',
-                text: format!("{} unchanged lines hidden", skipped.max(1)),
-            });
-        }
-        out.extend(ops[start..end].iter().cloned());
-        previous_end = end;
-        if out.len() >= max_lines {
-            out.truncate(max_lines.saturating_sub(1));
-            out.push(RenderedDiffLine {
-                kind: DiffKind::Omitted,
-                old_lineno: None,
-                new_lineno: None,
-                marker: '…',
-                text: "diff truncated for terminal preview".to_string(),
-            });
-            break;
-        }
-    }
-    (out, changed_blocks)
 }
 
 #[allow(dead_code)]

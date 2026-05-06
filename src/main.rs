@@ -195,6 +195,9 @@ async fn chat(
     built
         .agent
         .set_progress_sender(Some(cli_progress_callback(stream.clone())));
+    built
+        .agent
+        .set_approval_callback(Some(cli_approval_callback(stream.clone())));
     let started = Instant::now();
     stream.start_waiting();
     if let Some(response) = built
@@ -1166,6 +1169,79 @@ mod tests {
             .unwrap();
         assert_eq!(context, "5/524288 (0%)");
     }
+}
+
+fn cli_approval_callback(_stream: cli::StreamRenderer) -> rbot::tools::ApprovalCallback {
+    use rbot::diff::DiffKind;
+    use rbot::tools::{ApprovalDecision, ApprovalRequest};
+    use std::io::{IsTerminal, Write};
+
+    Arc::new(move |request: ApprovalRequest| {
+        Box::pin(async move {
+            let use_color = std::io::stdout().is_terminal();
+            let mut output = String::new();
+
+            if use_color {
+                output.push_str(&format!(
+                    "\n\x1b[1;33m── Approve {} ──\x1b[0m",
+                    request.tool_name
+                ));
+                output.push_str(&format!("\n  \x1b[36mFile:\x1b[0m {}\n", request.path));
+            } else {
+                output.push_str(&format!("\n── Approve {} ──", request.tool_name));
+                output.push_str(&format!("\n  File: {}\n", request.path));
+            }
+
+            for dl in request.diff_lines.iter().take(30) {
+                let old_no = dl
+                    .old_lineno
+                    .map(|n| format!("{n:>4}"))
+                    .unwrap_or_else(|| "    ".to_string());
+                let new_no = dl
+                    .new_lineno
+                    .map(|n| format!("{n:>4}"))
+                    .unwrap_or_else(|| "    ".to_string());
+                let text = format!(" {} {} {} {}", old_no, new_no, dl.marker, dl.text);
+                if use_color {
+                    let colored = match dl.kind {
+                        DiffKind::Added => format!("\x1b[32m{text}\x1b[0m"),
+                        DiffKind::Removed => format!("\x1b[31m{text}\x1b[0m"),
+                        DiffKind::Omitted => format!("\x1b[2m{text}\x1b[0m"),
+                        DiffKind::Context => text,
+                    };
+                    output.push_str(&format!("\n{colored}"));
+                } else {
+                    output.push_str(&format!("\n{text}"));
+                }
+            }
+            if request.diff_lines.len() > 30 {
+                output.push_str(&format!(
+                    "\n  … {} more lines",
+                    request.diff_lines.len() - 30
+                ));
+            }
+
+            output.push_str("\n\n  [1] Allow Once  [2] Always Allow  [3] Deny\n  > ");
+            print!("{output}");
+            let _ = std::io::stdout().flush();
+
+            let decision = tokio::task::spawn_blocking(|| {
+                let mut input = String::new();
+                if std::io::stdin().read_line(&mut input).is_err() {
+                    return ApprovalDecision::AllowOnce;
+                }
+                match input.trim() {
+                    "2" | "a" | "always" => ApprovalDecision::AlwaysAllow,
+                    "3" | "d" | "deny" | "n" => ApprovalDecision::Deny,
+                    _ => ApprovalDecision::AllowOnce,
+                }
+            })
+            .await
+            .unwrap_or(ApprovalDecision::AllowOnce);
+
+            decision
+        })
+    })
 }
 
 fn cli_progress_callback(stream: cli::StreamRenderer) -> MessageSendCallback {

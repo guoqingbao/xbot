@@ -1,6 +1,7 @@
 pub mod channels;
 pub mod config;
 pub mod cron;
+pub mod diff;
 pub mod engine;
 pub mod integrations;
 pub mod observability;

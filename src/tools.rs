@@ -1730,6 +1730,27 @@ impl Tool for WebFetchTool {
 pub type MessageSendCallback =
     Arc<dyn Fn(OutboundMessage) -> futures::future::BoxFuture<'static, Result<()>> + Send + Sync>;
 
+/// User decision when prompted to approve a file change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalDecision {
+    AllowOnce,
+    AlwaysAllow,
+    Deny,
+}
+
+/// Information about a file change requiring approval.
+#[derive(Debug, Clone)]
+pub struct ApprovalRequest {
+    pub tool_name: String,
+    pub path: String,
+    pub diff_lines: Vec<crate::diff::DiffLine>,
+}
+
+/// Callback invoked to request user approval before file changes.
+pub type ApprovalCallback = Arc<
+    dyn Fn(ApprovalRequest) -> futures::future::BoxFuture<'static, ApprovalDecision> + Send + Sync,
+>;
+
 #[derive(Clone)]
 pub struct MessageTool {
     callback: Arc<Mutex<Option<MessageSendCallback>>>,

@@ -84,6 +84,8 @@ pub struct AgentLoop {
     model_switch_callback: Arc<Mutex<Option<ModelSwitchCallback>>>,
     auto_task_summary_enabled: AtomicBool,
     memory_enabled: AtomicBool,
+    approval_callback: Arc<Mutex<Option<crate::tools::ApprovalCallback>>>,
+    always_allow: Arc<Mutex<bool>>,
 }
 
 impl AgentLoop {
@@ -248,7 +250,16 @@ impl AgentLoop {
             model_switch_callback: Arc::new(Mutex::new(None)),
             auto_task_summary_enabled: AtomicBool::new(memory_enabled),
             memory_enabled: AtomicBool::new(memory_enabled),
+            approval_callback: Arc::new(Mutex::new(None)),
+            always_allow: Arc::new(Mutex::new(false)),
         })
+    }
+
+    pub fn set_approval_callback(&self, callback: Option<crate::tools::ApprovalCallback>) {
+        *self
+            .approval_callback
+            .lock()
+            .expect("approval callback lock poisoned") = callback;
     }
 
     pub fn set_message_sender(&self, callback: Option<MessageSendCallback>) {
@@ -1074,29 +1085,49 @@ impl AgentLoop {
                         .await;
                 }
 
-                let tools = self.tools.clone();
-                let sem = self.tool_semaphore.clone();
-                let tool_outputs = join_all(tool_call_requests.iter().map(|tool_call| {
-                    let tools = tools.clone();
-                    let sem = sem.clone();
-                    let name = tool_call.name.clone();
-                    let args = tool_call.arguments.clone();
-                    async move {
-                        let _permit = sem.acquire_owned().await.expect("tool semaphore closed");
-                        tools.execute(&name, args).await
-                    }
-                }))
-                .await;
+                let denied_output = self.check_approval(&tool_call_requests).await;
 
-                for (tool_call, output) in
-                    tool_call_requests.into_iter().zip(tool_outputs.into_iter())
-                {
-                    self.context.add_tool_result(
-                        &mut messages,
-                        &tool_call.id,
-                        &tool_call.name,
-                        output.into_value(),
-                    );
+                if let Some(denied_outputs) = denied_output {
+                    for (tool_call, output) in tool_call_requests
+                        .into_iter()
+                        .zip(denied_outputs.into_iter())
+                    {
+                        self.context.add_tool_result(
+                            &mut messages,
+                            &tool_call.id,
+                            &tool_call.name,
+                            output.into_value(),
+                        );
+                    }
+                    final_content = Some("Task stopped: user denied the file change.".to_string());
+                    break;
+                } else {
+                    let tools = self.tools.clone();
+                    let sem = self.tool_semaphore.clone();
+                    let tool_outputs = join_all(tool_call_requests.iter().map(|tool_call| {
+                        let tools = tools.clone();
+                        let sem = sem.clone();
+                        let name = tool_call.name.clone();
+                        let args = tool_call.arguments.clone();
+                        async move {
+                            let _permit = sem.acquire_owned().await.expect("tool semaphore closed");
+                            tools.execute(&name, args).await
+                        }
+                    }))
+                    .await;
+
+                    for (tool_call, output) in
+                        tool_call_requests.into_iter().zip(tool_outputs.into_iter())
+                    {
+                        self.send_tool_result(progress_target.as_ref(), &tool_call.name, &output)
+                            .await;
+                        self.context.add_tool_result(
+                            &mut messages,
+                            &tool_call.id,
+                            &tool_call.name,
+                            output.into_value(),
+                        );
+                    }
                 }
                 if should_compress_after_response {
                     compression_pending = true;
@@ -1362,6 +1393,186 @@ impl AgentLoop {
             .into_iter()
             .rev()
             .collect()
+    }
+
+    fn is_file_modifying_tool(name: &str) -> bool {
+        matches!(name, "write_file" | "edit_file")
+    }
+
+    async fn check_approval(
+        &self,
+        tool_calls: &[crate::providers::ToolCallRequest],
+    ) -> Option<Vec<ToolOutput>> {
+        use crate::tools::{ApprovalDecision, ApprovalRequest};
+
+        if *self.always_allow.lock().expect("always_allow lock") {
+            return None;
+        }
+
+        let callback = self
+            .approval_callback
+            .lock()
+            .expect("approval callback lock")
+            .clone();
+        let callback = callback?;
+
+        let file_modifying: Vec<_> = tool_calls
+            .iter()
+            .filter(|tc| Self::is_file_modifying_tool(&tc.name))
+            .collect();
+
+        if file_modifying.is_empty() {
+            return None;
+        }
+
+        for tc in &file_modifying {
+            let path = tc
+                .arguments
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            let diff_lines = match tc.name.as_str() {
+                "edit_file" => {
+                    let old = tc
+                        .arguments
+                        .get("old_text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    let new = tc
+                        .arguments
+                        .get("new_text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    crate::diff::compute_diff(old, new).lines
+                }
+                "write_file" => {
+                    let content = tc
+                        .arguments
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    crate::diff::compute_write_diff(content).lines
+                }
+                _ => Vec::new(),
+            };
+
+            let request = ApprovalRequest {
+                tool_name: tc.name.clone(),
+                path,
+                diff_lines,
+            };
+
+            let decision = callback(request).await;
+            match decision {
+                ApprovalDecision::AllowOnce => continue,
+                ApprovalDecision::AlwaysAllow => {
+                    *self.always_allow.lock().expect("always_allow lock") = true;
+                    return None;
+                }
+                ApprovalDecision::Deny => {
+                    let outputs: Vec<ToolOutput> = tool_calls
+                        .iter()
+                        .map(|tc| {
+                            if Self::is_file_modifying_tool(&tc.name) {
+                                ToolOutput::Text("Error: User denied this file change.".to_string())
+                            } else {
+                                ToolOutput::Text(
+                                    "Error: Task cancelled by user (file change denied)."
+                                        .to_string(),
+                                )
+                            }
+                        })
+                        .collect();
+                    return Some(outputs);
+                }
+            }
+        }
+        None
+    }
+
+    async fn send_tool_result(
+        &self,
+        target: Option<&ProgressTarget>,
+        tool_name: &str,
+        output: &ToolOutput,
+    ) {
+        let Some(target) = target else { return };
+        let callback = self
+            .progress_sender
+            .lock()
+            .expect("progress callback lock poisoned")
+            .clone();
+        let Some(callback) = callback else { return };
+
+        let (success, summary) = match output {
+            ToolOutput::Text(text) => {
+                let is_error = text.starts_with("Error");
+                let all_lines: Vec<&str> = text.lines().collect();
+                let preview = if all_lines.len() <= 8 {
+                    all_lines
+                        .iter()
+                        .map(|l| {
+                            if l.len() > 100 {
+                                format!("{}…", &l[..99])
+                            } else {
+                                l.to_string()
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                } else {
+                    let head: Vec<String> = all_lines[..4]
+                        .iter()
+                        .map(|l| {
+                            if l.len() > 100 {
+                                format!("{}…", &l[..99])
+                            } else {
+                                l.to_string()
+                            }
+                        })
+                        .collect();
+                    let tail: Vec<String> = all_lines[all_lines.len() - 4..]
+                        .iter()
+                        .map(|l| {
+                            if l.len() > 100 {
+                                format!("{}…", &l[..99])
+                            } else {
+                                l.to_string()
+                            }
+                        })
+                        .collect();
+                    format!(
+                        "{}\n  … {} lines …\n{}",
+                        head.join("\n"),
+                        all_lines.len() - 8,
+                        tail.join("\n")
+                    )
+                };
+                (!is_error, preview)
+            }
+            ToolOutput::Blocks(_) => (true, "completed".to_string()),
+        };
+
+        let mut outbound = target.outbound(String::new());
+        outbound
+            .metadata
+            .insert("_progress".to_string(), Value::Bool(true));
+        outbound
+            .metadata
+            .insert("_tool_result".to_string(), Value::Bool(true));
+        outbound.metadata.insert(
+            "_tool_name".to_string(),
+            Value::String(tool_name.to_string()),
+        );
+        outbound
+            .metadata
+            .insert("_tool_success".to_string(), Value::Bool(success));
+        outbound
+            .metadata
+            .insert("_tool_result_summary".to_string(), Value::String(summary));
+        let _ = callback(outbound).await;
     }
 
     async fn send_tool_hint(
