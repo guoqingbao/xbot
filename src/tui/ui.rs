@@ -382,6 +382,24 @@ fn transcript_title(app: &App) -> String {
     }
 }
 
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= width {
+        return vec![text.to_string()];
+    }
+    let mut result = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        let end = (start + width).min(chars.len());
+        result.push(chars[start..end].iter().collect());
+        start = end;
+    }
+    result
+}
+
 fn push_blank(lines: &mut Vec<Line<'static>>) {
     let is_last_blank = lines
         .last()
@@ -407,8 +425,8 @@ fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                     text.clone()
                 };
                 let user_lines: Vec<&str> = display.lines().collect();
-                for (i, uline) in user_lines.iter().enumerate() {
-                    if i == 0 {
+                for (li, uline) in user_lines.iter().enumerate() {
+                    if li == 0 {
                         lines.push(Line::from(vec![
                             Span::styled(
                                 "  › ",
@@ -434,6 +452,27 @@ fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                     lines.push(Line::from(prefixed));
                 }
             }
+            HistoryEntry::Thinking(content) => {
+                lines.push(Line::from(vec![
+                    Span::styled("  ▼ ", Style::default().fg(TEXT_DIM)),
+                    Span::styled(
+                        "Thinking Process",
+                        Style::default().fg(TEXT_DIM).add_modifier(Modifier::ITALIC),
+                    ),
+                ]));
+                let wrap_width = w.saturating_sub(6).max(20);
+                for tline in content.lines() {
+                    for wrapped in wrap_text(tline, wrap_width) {
+                        lines.push(Line::from(vec![
+                            Span::styled("    ", Style::default()),
+                            Span::styled(
+                                wrapped,
+                                Style::default().fg(TEXT_DIM).add_modifier(Modifier::ITALIC),
+                            ),
+                        ]));
+                    }
+                }
+            }
             HistoryEntry::ToolCall {
                 name,
                 emoji,
@@ -449,6 +488,7 @@ fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                     detail,
                     diff.as_ref(),
                     result_summary.as_ref(),
+                    None,
                     w,
                     false,
                     0,
@@ -456,8 +496,8 @@ fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             }
             HistoryEntry::Error(msg) => {
                 push_blank(&mut lines);
-                for (i, err_line) in msg.lines().enumerate() {
-                    if i == 0 {
+                for (ei, err_line) in msg.lines().enumerate() {
+                    if ei == 0 {
                         lines.push(Line::from(vec![
                             Span::styled(
                                 "  ✗ ",
@@ -560,35 +600,32 @@ fn render_subagent_card(
     w: usize,
     anim_frame: u16,
 ) {
-    let (glyph, glyph_color, mut state_text) = match status {
+    let (glyph, glyph_color) = match status {
         SubagentStatus::Running => {
             let spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
             let ch = spinner[(anim_frame / 3) as usize % spinner.len()];
-            (format!("{ch}"), SUBAGENT_RUNNING, "running")
+            (format!("{ch}"), SUBAGENT_RUNNING)
         }
-        SubagentStatus::Completed => ("✓".to_string(), SUBAGENT_DONE, "done"),
-        SubagentStatus::Failed => ("✗".to_string(), SUBAGENT_FAIL, "failed"),
-        SubagentStatus::Cancelled => ("⊘".to_string(), TEXT_DIM, "cancelled"),
+        SubagentStatus::Completed => ("✓".to_string(), SUBAGENT_DONE),
+        SubagentStatus::Failed => ("✗".to_string(), SUBAGENT_FAIL),
+        SubagentStatus::Cancelled => ("⊘".to_string(), TEXT_DIM),
     };
 
-    // Remove state text for now because it has corresponding animation frame
-    state_text = "";
-
-    let header_fill = "─".repeat(
-        w.saturating_sub(12 + label.len() + state_text.len())
-            .min(60),
-    );
+    // Header: "  ◐ ◐ label ────"  Bottom: "    └────"
+    let header_prefix_len = 4 + 2 + label.chars().count() + 1;
+    let card_total = w.saturating_sub(2);
+    let header_fill = "─".repeat(card_total.saturating_sub(header_prefix_len));
+    let bottom_fill = "─".repeat(card_total.saturating_sub(5));
 
     lines.push(Line::from(vec![
         Span::styled(format!("  {glyph} "), Style::default().fg(glyph_color)),
         Span::styled("◐ ", Style::default().fg(TOOL_FG)),
         Span::styled(
-            label.to_string(),
+            format!("{label} "),
             Style::default()
                 .fg(TEXT_PRIMARY)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!(" {state_text} "), Style::default().fg(TEXT_DIM)),
         Span::styled(header_fill, Style::default().fg(BORDER_DIM)),
     ]));
 
@@ -626,7 +663,6 @@ fn render_subagent_card(
         ]));
     }
 
-    let bottom_fill = "─".repeat(w.saturating_sub(4).min(60));
     lines.push(Line::from(Span::styled(
         format!("    └{bottom_fill}"),
         Style::default().fg(BORDER_DIM),
@@ -660,8 +696,37 @@ fn build_active_lines(
                     }
                 }
             }
+            StreamSegment::Thinking(content) => {
+                lines.push(Line::from(vec![
+                    Span::styled("  ▼ ", Style::default().fg(TEXT_DIM)),
+                    Span::styled(
+                        "Thinking Process",
+                        Style::default().fg(TEXT_DIM).add_modifier(Modifier::ITALIC),
+                    ),
+                ]));
+                let wrap_width = w.saturating_sub(6).max(20);
+                for tline in content.lines() {
+                    for wrapped in wrap_text(tline, wrap_width) {
+                        lines.push(Line::from(vec![
+                            Span::styled("    ", Style::default()),
+                            Span::styled(
+                                wrapped,
+                                Style::default().fg(TEXT_DIM).add_modifier(Modifier::ITALIC),
+                            ),
+                        ]));
+                    }
+                }
+            }
             StreamSegment::Tool(tool) => {
                 push_blank(&mut lines);
+                let countdown = if is_last {
+                    tool.timeout_secs.map(|total| {
+                        let elapsed = tool.started_at.elapsed().as_secs();
+                        total.saturating_sub(elapsed)
+                    })
+                } else {
+                    None
+                };
                 render_tool_card(
                     &mut lines,
                     &tool.name,
@@ -669,6 +734,7 @@ fn build_active_lines(
                     &tool.detail,
                     tool.diff.as_ref(),
                     tool.result_summary.as_ref(),
+                    countdown,
                     w,
                     is_last,
                     anim_frame,
@@ -855,6 +921,7 @@ fn render_tool_card(
     detail: &str,
     diff: Option<&EditDiff>,
     result_summary: Option<&(bool, String)>,
+    countdown: Option<u64>,
     w: usize,
     running: bool,
     anim_frame: u16,
@@ -911,13 +978,27 @@ fn render_tool_card(
         ]));
     }
 
+    if let Some(remaining) = countdown {
+        let mins = remaining / 60;
+        let secs = remaining % 60;
+        let timer_text = if mins > 0 {
+            format!("⏱ {mins}m {secs:02}s remaining")
+        } else {
+            format!("⏱ {secs}s remaining")
+        };
+        lines.push(Line::from(vec![
+            Span::styled("    │ ", Style::default().fg(BORDER_DIM)),
+            Span::styled(timer_text, Style::default().fg(WORKING_FG)),
+        ]));
+    }
+
     if let Some(diff) = diff {
         render_edit_diff(lines, diff, w);
     }
 
     if let Some((success, summary)) = result_summary {
         let (icon, color) = if *success {
-            ("✓", SUCCESS_FG)
+            ("→", TEXT_DIM)
         } else {
             ("✗", ERROR_FG)
         };
@@ -929,7 +1010,7 @@ fn render_tool_card(
             };
             let text = truncate_end(sline, w.saturating_sub(prefix.len()));
             lines.push(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(color)),
+                Span::styled(prefix, Style::default().fg(BORDER_DIM)),
                 Span::styled(text, Style::default().fg(color)),
             ]));
         }
@@ -1107,9 +1188,9 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let status = app.status_line();
     let busy = app.is_busy();
     let shortcuts = if busy {
-        "Ctrl+C:cancel  ↑↓:history  Shift+↑↓:scroll  Alt+4:agents  F1:help"
+        "Ctrl+C:cancel  ↑↓:history  Shift+↑↓:scroll  Alt+4:agents  ?:help"
     } else {
-        "Enter:send  Ctrl+C:quit  ↑↓:history  Alt+4:agents  F1:help"
+        "Enter:send  Ctrl+C:quit  ↑↓:history  Alt+4:agents  ?:help"
     };
 
     let available = area.width as usize;

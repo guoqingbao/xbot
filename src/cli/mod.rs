@@ -674,6 +674,12 @@ impl StreamRenderer {
             if state.trailing_newlines == 0 {
                 self.target.write_raw("\n");
             }
+            if let Some(reasoning) = reasoning_content {
+                if !reasoning.trim().is_empty() {
+                    let rendered_reasoning = self.render_reasoning_content(reasoning);
+                    self.target.write_raw(&rendered_reasoning);
+                }
+            }
             self.target
                 .write_raw(format!("\n{}\n", self.target.style.separator(60)));
             state.trailing_newlines = 1;

@@ -198,6 +198,11 @@ pub async fn run_tui_repl(
                 handle.abort();
                 agent.set_progress_sender(None);
             }
+            let agent_c = agent.clone();
+            let sk = session_key.clone();
+            tokio::spawn(async move {
+                agent_c.cancel_subagents(&sk).await;
+            });
             app.agent_state = AS::Ready;
             app.pending.clear();
             app.flush_active_as_cancelled();
@@ -379,6 +384,16 @@ fn make_progress_callback(
                 {
                     let _ = tx.send(EngineEvent::ContextUpdate(ctx));
                 }
+                return Ok(());
+            }
+
+            if msg
+                .metadata
+                .get("_collapse_thinking")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
+                let _ = tx.send(EngineEvent::CollapseThinking);
                 return Ok(());
             }
 

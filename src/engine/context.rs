@@ -81,23 +81,15 @@ impl ContextBuilder {
     ) -> Result<Vec<ChatMessage>> {
         let current_content = self.build_user_content(current_message, media)?;
         let suggested_skills = self.skills.suggest_skills(current_message, 3);
-        let merged = if current_role == "user" {
-            let runtime_ctx = self.build_runtime_context(channel, chat_id);
-            match current_content {
-                Value::String(text) => Value::String(format!("{runtime_ctx}\n\n{text}")),
-                Value::Array(mut blocks) => {
-                    let mut merged = vec![json!({"type": "text", "text": runtime_ctx})];
-                    merged.append(&mut blocks);
-                    Value::Array(merged)
-                }
-                other => other,
-            }
-        } else {
-            current_content
-        };
+        let merged = current_content;
 
         let mut messages = Vec::with_capacity(history.len() + 2);
         let mut system_prompt = self.build_system_prompt(current_message)?;
+        if current_role == "user" {
+            let runtime_ctx = self.build_runtime_context(channel, chat_id);
+            system_prompt.push_str("\n\n---\n\n");
+            system_prompt.push_str(&runtime_ctx);
+        }
         if !suggested_skills.is_empty() {
             let content = self.skills.load_skills_for_context(&suggested_skills);
             if !content.trim().is_empty() {

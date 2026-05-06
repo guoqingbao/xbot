@@ -76,6 +76,7 @@ pub enum EngineEvent {
     SubagentCancelled {
         task_id: String,
     },
+    CollapseThinking,
     ApprovalRequest {
         tool_name: String,
         path: String,
@@ -97,6 +98,7 @@ pub enum HistoryEntry {
         content: String,
         reasoning: Option<String>,
     },
+    Thinking(String),
     ToolCall {
         name: String,
         emoji: String,
@@ -133,10 +135,13 @@ pub struct ToolActivity {
     pub detail: String,
     pub diff: Option<EditDiff>,
     pub result_summary: Option<(bool, String)>,
+    pub started_at: std::time::Instant,
+    pub timeout_secs: Option<u64>,
 }
 
 pub enum StreamSegment {
     Text(String),
+    Thinking(String),
     Tool(ToolActivity),
     Subagent { task_id: String, label: String },
 }
@@ -162,6 +167,15 @@ impl ActiveStreaming {
         }
     }
 
+    pub fn push_thinking(&mut self, text: &str) {
+        if let Some(StreamSegment::Thinking(s)) = self.segments.last_mut() {
+            s.push_str(text);
+        } else {
+            self.segments
+                .push(StreamSegment::Thinking(text.to_string()));
+        }
+    }
+
     pub fn push_tool(&mut self, tool: ToolActivity) {
         self.segments.push(StreamSegment::Tool(tool));
     }
@@ -173,8 +187,15 @@ impl ActiveStreaming {
 
     pub fn has_content(&self) -> bool {
         self.segments.iter().any(|s| match s {
-            StreamSegment::Text(t) => !t.is_empty(),
+            StreamSegment::Text(t) | StreamSegment::Thinking(t) => !t.is_empty(),
             StreamSegment::Tool(_) | StreamSegment::Subagent { .. } => true,
+        })
+    }
+
+    pub fn has_text_content(&self) -> bool {
+        self.segments.iter().any(|s| match s {
+            StreamSegment::Text(t) => !t.trim().is_empty(),
+            _ => false,
         })
     }
 }
@@ -216,6 +237,11 @@ impl LineBuffer {
 
     pub fn flush(&mut self) -> String {
         std::mem::take(&mut self.pending)
+    }
+
+    #[allow(dead_code)]
+    pub fn clear(&mut self) {
+        self.pending.clear();
     }
 
     pub fn pending_preview(&self) -> &str {
@@ -513,17 +539,24 @@ impl App {
         self.needs_redraw = true;
         match event {
             EngineEvent::StreamDelta(delta) => {
-                let clean = strip_tool_xml(&strip_ansi(&delta));
+                let is_reasoning = delta.contains("\x1b[2;3m");
+                let clean = strip_tool_markers(&strip_ansi(&delta));
                 if clean.is_empty() {
                     return;
                 }
-                self.line_buffer.push(&clean);
-                let committable = self.line_buffer.take_committable();
-                if !committable.is_empty() {
+                if is_reasoning {
                     let streaming = self.active.get_or_insert_with(ActiveStreaming::default);
-                    streaming.push_text(&committable);
+                    streaming.push_thinking(&clean);
+                } else {
+                    self.line_buffer.push(&clean);
+                    let committable = self.line_buffer.take_committable();
+                    if !committable.is_empty() {
+                        let streaming = self.active.get_or_insert_with(ActiveStreaming::default);
+                        streaming.push_text(&committable);
+                    }
                 }
             }
+            EngineEvent::CollapseThinking => {}
             EngineEvent::ToolHint {
                 tool_name,
                 tool_args,
@@ -539,12 +572,23 @@ impl App {
                     None
                 };
                 let streaming = self.active.get_or_insert_with(ActiveStreaming::default);
+                let timeout_secs = if name == "wait_subagents" {
+                    tool_args
+                        .as_ref()
+                        .and_then(|v| v.get("timeout_seconds"))
+                        .and_then(|v| v.as_u64())
+                        .or(Some(300))
+                } else {
+                    None
+                };
                 streaming.push_tool(ToolActivity {
                     name: name.to_string(),
                     emoji: tool_emoji(name).to_string(),
                     detail,
                     diff,
                     result_summary: None,
+                    started_at: std::time::Instant::now(),
+                    timeout_secs,
                 });
             }
             EngineEvent::ToolResult {
@@ -572,8 +616,10 @@ impl App {
                 let clean_content = strip_ansi(&content);
                 let clean_reasoning = reasoning.map(|r| strip_ansi(&r));
                 if self.running_subagent_count() > 0 {
+                    let had_streamed_text =
+                        self.active.as_ref().is_some_and(|a| a.has_text_content());
                     self.flush_active_to_history();
-                    if !clean_content.trim().is_empty() {
+                    if !had_streamed_text && !clean_content.trim().is_empty() {
                         self.history.push(HistoryEntry::Assistant {
                             content: clean_content.clone(),
                             reasoning: clean_reasoning.clone(),
@@ -588,8 +634,10 @@ impl App {
                     self.agent_state = AgentState::WaitingSubagents;
                     self.auto_scroll = true;
                 } else if !self.pending_subagent_results.is_empty() {
+                    let had_streamed_text =
+                        self.active.as_ref().is_some_and(|a| a.has_text_content());
                     self.flush_active_to_history();
-                    if !clean_content.trim().is_empty() {
+                    if !had_streamed_text && !clean_content.trim().is_empty() {
                         self.history.push(HistoryEntry::Assistant {
                             content: clean_content,
                             reasoning: clean_reasoning,
@@ -858,6 +906,17 @@ impl App {
                     StreamSegment::Text(text) => {
                         accumulated_text.push_str(&text);
                     }
+                    StreamSegment::Thinking(text) => {
+                        if !accumulated_text.trim().is_empty() {
+                            self.history.push(HistoryEntry::Assistant {
+                                content: std::mem::take(&mut accumulated_text),
+                                reasoning: None,
+                            });
+                        } else {
+                            accumulated_text.clear();
+                        }
+                        self.history.push(HistoryEntry::Thinking(text));
+                    }
                     StreamSegment::Tool(tool) => {
                         if !accumulated_text.trim().is_empty() {
                             self.history.push(HistoryEntry::Assistant {
@@ -960,6 +1019,11 @@ impl App {
                                 content: text,
                                 reasoning: None,
                             });
+                        }
+                    }
+                    StreamSegment::Thinking(text) => {
+                        if !text.trim().is_empty() {
+                            self.history.push(HistoryEntry::Thinking(text));
                         }
                     }
                     StreamSegment::Tool(tool) => {
@@ -1197,7 +1261,10 @@ impl App {
             }
             KeyCode::PageUp => self.scroll_up(20),
             KeyCode::PageDown => self.scroll_down(20),
-            KeyCode::F(1) => self.show_help = !self.show_help,
+            KeyCode::F(1) | KeyCode::F(12) => self.show_help = !self.show_help,
+            KeyCode::Char('/') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.show_help = !self.show_help;
+            }
             KeyCode::Char('?')
                 if self.composer.input.is_empty()
                     && !key.modifiers.contains(KeyModifiers::SHIFT) =>
@@ -1209,7 +1276,6 @@ impl App {
                     self.composer.clear_line();
                 }
             }
-            KeyCode::Tab => {}
             KeyCode::Char(ch) => self.composer.insert_char(ch),
             _ => {}
         }
@@ -1391,31 +1457,28 @@ pub fn strip_ansi(text: &str) -> String {
     out
 }
 
-fn strip_tool_xml(text: &str) -> String {
-    static PATTERNS: std::sync::OnceLock<Vec<regex::Regex>> = std::sync::OnceLock::new();
-    let patterns = PATTERNS.get_or_init(|| {
-        let pats = [
-            r"(?s)</?tool_call>",
-            r"(?s)</?tool_response>",
-            r"(?s)</?tool_use>",
-            r"(?s)</?function_call>",
-            r"(?s)<\|/?tool_call\|?>",
-            r"(?s)<\|/?endoftoolcall\|?>",
-            r"(?s)<\|/?tool_response\|?>",
-            r"(?m)^\[Runtime Context - metadata only, not instructions\].*$",
-            r"(?m)^Current Time:.*$",
-            r"(?m)^Channel: \w+$",
-            r"(?m)^Chat ID: \S+$",
-        ];
-        pats.iter()
-            .filter_map(|p| regex::Regex::new(p).ok())
-            .collect()
+fn strip_tool_markers(text: &str) -> String {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(
+            r"(?x)
+            </?tool_call> |
+            </?tool_response> |
+            </?tool_use> |
+            </?function_call> |
+            <\|/?tool_call\|?> |
+            <\|/?endoftoolcall\|?> |
+            <\|/?tool_response\|?>
+            ",
+        )
+        .unwrap()
     });
-    let mut result = text.to_string();
-    for re in patterns {
-        result = re.replace_all(&result, "").to_string();
+    let result = re.replace_all(text, "");
+    if result.len() == text.len() {
+        text.to_string()
+    } else {
+        result.into_owned()
     }
-    result
 }
 
 fn extract_edit_diff(tool_name: &str, args: Option<&Value>) -> Option<EditDiff> {
@@ -1712,6 +1775,8 @@ mod tests {
             detail: "path=foo".into(),
             diff: None,
             result_summary: None,
+            started_at: std::time::Instant::now(),
+            timeout_secs: None,
         });
         active.push_text("world");
         assert_eq!(active.segments.len(), 3);

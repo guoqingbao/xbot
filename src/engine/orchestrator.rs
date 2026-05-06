@@ -280,6 +280,10 @@ impl AgentLoop {
         self.subagents.set_notification_callback(callback);
     }
 
+    pub async fn cancel_subagents(&self, session_key: &str) {
+        self.subagents.cancel_by_session(session_key).await;
+    }
+
     pub fn set_model_switch_callback(&self, callback: Option<ModelSwitchCallback>) {
         *self
             .model_switch_callback
@@ -1069,6 +1073,8 @@ impl AgentLoop {
 
                 let tool_call_requests = response.tool_calls;
 
+                self.send_collapse_thinking(progress_target.as_ref()).await;
+
                 for tool_call in &tool_call_requests {
                     // Check for cancellation before each tool call
                     {
@@ -1572,6 +1578,21 @@ impl AgentLoop {
         outbound
             .metadata
             .insert("_tool_result_summary".to_string(), Value::String(summary));
+        let _ = callback(outbound).await;
+    }
+
+    async fn send_collapse_thinking(&self, target: Option<&ProgressTarget>) {
+        let Some(target) = target else { return };
+        let callback = self
+            .progress_sender
+            .lock()
+            .expect("progress callback lock poisoned")
+            .clone();
+        let Some(callback) = callback else { return };
+        let mut outbound = target.outbound(String::new());
+        outbound
+            .metadata
+            .insert("_collapse_thinking".to_string(), Value::Bool(true));
         let _ = callback(outbound).await;
     }
 
