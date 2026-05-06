@@ -14,6 +14,7 @@ use crate::tools::{
     EditFileTool, ExecTool, ListDirTool, ReadFileTool, ToolRegistry, WebFetchTool, WebSearchTool,
     WriteFileTool,
 };
+use crate::util::workspace_state_dir;
 
 #[derive(Debug, Clone)]
 pub enum SubagentNotification {
@@ -68,6 +69,7 @@ pub struct SubagentManager {
     web_proxy: Option<String>,
     exec_config: ExecToolConfig,
     restrict_to_workspace: bool,
+    memory_enabled: bool,
     running_tasks: Arc<Mutex<BTreeMap<String, tokio::task::JoinHandle<()>>>>,
     session_tasks: Arc<Mutex<BTreeMap<String, HashSet<String>>>>,
     completed_results: Arc<Mutex<BTreeMap<String, Vec<CompletedSubagentResult>>>>,
@@ -87,6 +89,7 @@ impl SubagentManager {
         web_proxy: Option<String>,
         exec_config: ExecToolConfig,
         restrict_to_workspace: bool,
+        memory_enabled: bool,
     ) -> Self {
         Self {
             provider,
@@ -97,6 +100,7 @@ impl SubagentManager {
             web_proxy,
             exec_config,
             restrict_to_workspace,
+            memory_enabled,
             running_tasks: Arc::new(Mutex::new(BTreeMap::new())),
             session_tasks: Arc::new(Mutex::new(BTreeMap::new())),
             completed_results: Arc::new(Mutex::new(BTreeMap::new())),
@@ -487,30 +491,37 @@ impl SubagentManager {
     fn build_tools(&self) -> ToolRegistry {
         let mut tools = ToolRegistry::new();
         let allowed_dir = self.restrict_to_workspace.then(|| self.workspace.clone());
-        tools.register(Arc::new(ReadFileTool::new(
-            Some(self.workspace.clone()),
-            allowed_dir.clone(),
-            vec![],
-        )));
-        tools.register(Arc::new(WriteFileTool::new(
-            Some(self.workspace.clone()),
-            allowed_dir.clone(),
-        )));
-        tools.register(Arc::new(EditFileTool::new(
-            Some(self.workspace.clone()),
-            allowed_dir.clone(),
-        )));
-        tools.register(Arc::new(ListDirTool::new(
-            Some(self.workspace.clone()),
-            allowed_dir.clone(),
-        )));
+        let blocked_dirs = if self.memory_enabled {
+            Vec::new()
+        } else {
+            vec![workspace_state_dir(&self.workspace).join("memory")]
+        };
+        tools.register(Arc::new(
+            ReadFileTool::new(Some(self.workspace.clone()), allowed_dir.clone(), vec![])
+                .with_blocked_dirs(blocked_dirs.clone()),
+        ));
+        tools.register(Arc::new(
+            WriteFileTool::new(Some(self.workspace.clone()), allowed_dir.clone())
+                .with_blocked_dirs(blocked_dirs.clone()),
+        ));
+        tools.register(Arc::new(
+            EditFileTool::new(Some(self.workspace.clone()), allowed_dir.clone())
+                .with_blocked_dirs(blocked_dirs.clone()),
+        ));
+        tools.register(Arc::new(
+            ListDirTool::new(Some(self.workspace.clone()), allowed_dir.clone())
+                .with_blocked_dirs(blocked_dirs.clone()),
+        ));
         if self.exec_config.enable {
-            tools.register(Arc::new(ExecTool::new(
-                self.exec_config.timeout,
-                Some(self.workspace.clone()),
-                self.restrict_to_workspace,
-                self.exec_config.path_append.clone(),
-            )));
+            tools.register(Arc::new(
+                ExecTool::new(
+                    self.exec_config.timeout,
+                    Some(self.workspace.clone()),
+                    self.restrict_to_workspace,
+                    self.exec_config.path_append.clone(),
+                )
+                .with_blocked_dirs(blocked_dirs.clone()),
+            ));
         }
         tools.register(Arc::new(WebSearchTool::new(
             self.web_search_config.clone(),

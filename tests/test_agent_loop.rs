@@ -803,6 +803,117 @@ async fn completed_tasks_append_task_summary_to_memory() {
 }
 
 #[tokio::test]
+async fn disabled_auto_task_summary_skips_memory_write_and_tool_hint() {
+    let dir = tempdir().unwrap();
+    let provider = Arc::new(QueuedProvider::new(
+        "test-model",
+        vec![LlmResponse {
+            content: Some("Finished without automatic memory summary.".to_string()),
+            tool_calls: Vec::new(),
+            finish_reason: "stop".to_string(),
+            usage: LlmUsage::default(),
+            reasoning_content: None,
+            thinking_blocks: None,
+        }],
+    ));
+    let agent = AgentLoop::new(
+        provider,
+        dir.path(),
+        Some("test-model".to_string()),
+        8,
+        5,
+        8_000,
+        32 * 1024,
+        Default::default(),
+        None,
+        ExecToolConfig {
+            enable: false,
+            timeout: 60,
+            path_append: String::new(),
+        },
+        false,
+        None,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+    agent.set_auto_task_summary_enabled(false);
+    let progress_messages = Arc::new(Mutex::new(Vec::<OutboundMessage>::new()));
+    let captured = progress_messages.clone();
+    let callback: MessageSendCallback = Arc::new(move |msg| {
+        let captured = captured.clone();
+        Box::pin(async move {
+            captured.lock().expect("progress lock poisoned").push(msg);
+            Ok(())
+        })
+    });
+    agent.set_progress_sender(Some(callback));
+
+    let response = agent
+        .process_direct("finish requested work", "cli:direct", "cli", "direct")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        response.content,
+        "Finished without automatic memory summary."
+    );
+
+    let memory = std::fs::read_to_string(workspace_state_dir(dir.path()).join("memory/MEMORY.md"))
+        .unwrap_or_default();
+    assert!(!memory.contains("Task Summary"));
+    let progress = progress_messages.lock().expect("progress lock poisoned");
+    assert!(!progress.iter().any(|msg| {
+        msg.metadata.get("_tool_name").and_then(Value::as_str) == Some("memory_summary")
+    }));
+}
+
+#[tokio::test]
+async fn disabled_memory_skips_memorize_and_memory_files() {
+    let dir = tempdir().unwrap();
+    let provider = Arc::new(QueuedProvider::new("test-model", vec![]));
+    let agent = AgentLoop::new(
+        provider,
+        dir.path(),
+        Some("test-model".to_string()),
+        8,
+        5,
+        8_000,
+        32 * 1024,
+        Default::default(),
+        None,
+        ExecToolConfig {
+            enable: false,
+            timeout: 60,
+            path_append: String::new(),
+        },
+        false,
+        None,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+    agent.set_memory_enabled(false);
+
+    let response = agent
+        .process_direct("/memorize remember this", "cli:direct", "cli", "direct")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(response.content.contains("Memory is disabled in this mode"));
+    assert!(
+        !workspace_state_dir(dir.path())
+            .join("memory/MEMORY.md")
+            .exists()
+    );
+    assert!(
+        !workspace_state_dir(dir.path())
+            .join("memory/HISTORY.md")
+            .exists()
+    );
+}
+
+#[tokio::test]
 async fn completed_task_memory_emits_backend_tool_hint_without_context_entry() {
     let dir = tempdir().unwrap();
     let provider = Arc::new(QueuedProvider::new(

@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -27,7 +28,7 @@ use crate::tools::{
     SpawnTool, ToolOutput, ToolRegistry, WaitSubagentsTool, WebFetchTool, WebSearchTool,
     WriteFileTool,
 };
-use crate::util::build_status_content;
+use crate::util::{build_status_content, workspace_state_dir};
 
 pub type ModelSwitchCallback = Arc<dyn Fn(String, Option<usize>) -> Result<()> + Send + Sync>;
 
@@ -77,6 +78,8 @@ pub struct AgentLoop {
     stop_notifications: Arc<Mutex<BTreeMap<String, StopNotification>>>,
     announced_sessions: Arc<Mutex<HashSet<String>>>,
     model_switch_callback: Arc<Mutex<Option<ModelSwitchCallback>>>,
+    auto_task_summary_enabled: AtomicBool,
+    memory_enabled: AtomicBool,
 }
 
 impl AgentLoop {
@@ -110,6 +113,7 @@ impl AgentLoop {
             exec,
             restrict_to_workspace,
             cron_service,
+            true,
             mcp_servers,
         )
         .await
@@ -130,10 +134,13 @@ impl AgentLoop {
         exec: ExecToolConfig,
         restrict_to_workspace: bool,
         cron_service: Option<CronService>,
+        memory_enabled: bool,
         mcp_servers: &BTreeMap<String, crate::config::McpServerConfig>,
     ) -> Result<Self> {
         let workspace = workspace.as_ref().to_path_buf();
         let context = ContextBuilder::new(&workspace, max_memory_bytes)?;
+        context.set_memory_enabled(memory_enabled);
+        context.set_task_summary_guidance_enabled(memory_enabled);
         let sessions = SessionManager::new(&workspace)?;
         let memory = MemoryConsolidator::new(&workspace, context_window_tokens, max_memory_bytes)?;
         let resolved_model = model
@@ -154,33 +161,41 @@ impl AgentLoop {
             web_proxy.clone(),
             exec.clone(),
             restrict_to_workspace,
+            memory_enabled,
         );
         let mut tools = ToolRegistry::new();
         let allowed_dir = restrict_to_workspace.then(|| workspace.clone());
-        tools.register(Arc::new(ReadFileTool::new(
-            Some(workspace.clone()),
-            allowed_dir.clone(),
-            vec![],
-        )));
-        tools.register(Arc::new(WriteFileTool::new(
-            Some(workspace.clone()),
-            allowed_dir.clone(),
-        )));
-        tools.register(Arc::new(EditFileTool::new(
-            Some(workspace.clone()),
-            allowed_dir.clone(),
-        )));
-        tools.register(Arc::new(ListDirTool::new(
-            Some(workspace.clone()),
-            allowed_dir.clone(),
-        )));
+        let blocked_dirs = if memory_enabled {
+            Vec::new()
+        } else {
+            vec![workspace_state_dir(&workspace).join("memory")]
+        };
+        tools.register(Arc::new(
+            ReadFileTool::new(Some(workspace.clone()), allowed_dir.clone(), vec![])
+                .with_blocked_dirs(blocked_dirs.clone()),
+        ));
+        tools.register(Arc::new(
+            WriteFileTool::new(Some(workspace.clone()), allowed_dir.clone())
+                .with_blocked_dirs(blocked_dirs.clone()),
+        ));
+        tools.register(Arc::new(
+            EditFileTool::new(Some(workspace.clone()), allowed_dir.clone())
+                .with_blocked_dirs(blocked_dirs.clone()),
+        ));
+        tools.register(Arc::new(
+            ListDirTool::new(Some(workspace.clone()), allowed_dir.clone())
+                .with_blocked_dirs(blocked_dirs.clone()),
+        ));
         if exec.enable {
-            tools.register(Arc::new(ExecTool::new(
-                exec.timeout,
-                Some(workspace.clone()),
-                restrict_to_workspace,
-                exec.path_append.clone(),
-            )));
+            tools.register(Arc::new(
+                ExecTool::new(
+                    exec.timeout,
+                    Some(workspace.clone()),
+                    restrict_to_workspace,
+                    exec.path_append.clone(),
+                )
+                .with_blocked_dirs(blocked_dirs.clone()),
+            ));
         }
         tools.register(Arc::new(WebSearchTool::new(web_search, web_proxy.clone())));
         tools.register(Arc::new(WebFetchTool::new(50_000, web_proxy)));
@@ -222,6 +237,8 @@ impl AgentLoop {
             stop_notifications: Arc::new(Mutex::new(BTreeMap::new())),
             announced_sessions: Arc::new(Mutex::new(HashSet::new())),
             model_switch_callback: Arc::new(Mutex::new(None)),
+            auto_task_summary_enabled: AtomicBool::new(memory_enabled),
+            memory_enabled: AtomicBool::new(memory_enabled),
         })
     }
 
@@ -248,6 +265,34 @@ impl AgentLoop {
             .model_switch_callback
             .lock()
             .expect("model switch callback lock poisoned") = callback;
+    }
+
+    pub fn set_auto_task_summary_enabled(&self, enabled: bool) {
+        self.auto_task_summary_enabled
+            .store(enabled, Ordering::SeqCst);
+        self.context.set_task_summary_guidance_enabled(enabled);
+    }
+
+    pub fn set_memory_enabled(&self, enabled: bool) {
+        self.memory_enabled.store(enabled, Ordering::SeqCst);
+        self.context.set_memory_enabled(enabled);
+        self.set_auto_task_summary_enabled(enabled);
+    }
+
+    fn memory_enabled(&self) -> bool {
+        self.memory_enabled.load(Ordering::SeqCst)
+    }
+
+    fn maybe_consolidate_session(
+        &self,
+        session: &mut Session,
+        context_window_tokens: usize,
+    ) -> Result<()> {
+        if self.memory_enabled() {
+            self.memory
+                .maybe_consolidate_by_tokens(session, context_window_tokens)?;
+        }
+        Ok(())
     }
 
     pub fn set_runtime_bus(&self, bus: MessageBus) {
@@ -283,8 +328,7 @@ impl AgentLoop {
 
         match trimmed_lower {
             "/new" | "new" | "/clear" | "clear" | "[clear]" => {
-                self.memory
-                    .maybe_consolidate_by_tokens(&mut session, context_window_tokens)?;
+                self.maybe_consolidate_session(&mut session, context_window_tokens)?;
                 session.clear();
                 sessions.save(&session)?;
                 self.reset_session_announcement(session_key);
@@ -316,8 +360,7 @@ impl AgentLoop {
             _ => {}
         }
 
-        self.memory
-            .maybe_consolidate_by_tokens(&mut session, context_window_tokens)?;
+        self.maybe_consolidate_session(&mut session, context_window_tokens)?;
         sessions.put(session);
         Ok(SessionSetup {
             response: None,
@@ -675,8 +718,7 @@ impl AgentLoop {
             let mut sessions = self.sessions.lock().expect("session manager lock poisoned");
             let mut session = sessions.get_or_create(&session_key)?;
             self.save_turn(&mut session, &all_messages)?;
-            self.memory
-                .maybe_consolidate_by_tokens(&mut session, context_window_tokens)?;
+            self.maybe_consolidate_session(&mut session, context_window_tokens)?;
             sessions.save(&session)?;
         }
 
@@ -693,7 +735,7 @@ impl AgentLoop {
             ),
         )
         .await;
-        if completed_normally {
+        if completed_normally && self.auto_task_summary_enabled.load(Ordering::SeqCst) {
             self.record_completed_task_memory(
                 &msg.content,
                 final_content.as_deref(),
@@ -749,8 +791,7 @@ impl AgentLoop {
             let mut sessions = self.sessions.lock().expect("session manager lock poisoned");
             let mut session = sessions.get_or_create(&session_key)?;
             let context_window_tokens = self.session_context_window_tokens(&session);
-            self.memory
-                .maybe_consolidate_by_tokens(&mut session, context_window_tokens)?;
+            self.maybe_consolidate_session(&mut session, context_window_tokens)?;
             sessions.put(session);
         }
 
@@ -821,8 +862,7 @@ impl AgentLoop {
             let mut sessions = self.sessions.lock().expect("session manager lock poisoned");
             let mut session = sessions.get_or_create(&session_key)?;
             self.save_turn(&mut session, &all_messages)?;
-            self.memory
-                .maybe_consolidate_by_tokens(&mut session, context_window_tokens)?;
+            self.maybe_consolidate_session(&mut session, context_window_tokens)?;
             sessions.save(&session)?;
         }
 
@@ -1207,6 +1247,11 @@ impl AgentLoop {
         target: &ProgressTarget,
         memory_input: &str,
     ) -> Result<Option<OutboundMessage>> {
+        if !self.memory_enabled() {
+            return Ok(Some(target.outbound(
+                "Memory is disabled in this mode. Run mode is required to write long-term memory.",
+            )));
+        }
         if memory_input.trim().is_empty() {
             return Ok(Some(
                 target.outbound("Usage: /memorize <durable information to remember>"),
@@ -1339,6 +1384,9 @@ impl AgentLoop {
         messages: &[ChatMessage],
         target: Option<&ProgressTarget>,
     ) {
+        if !self.memory_enabled() {
+            return;
+        }
         let summary_source = final_content
             .map(ToOwned::to_owned)
             .or_else(|| latest_assistant_text(messages))
@@ -1502,14 +1550,16 @@ impl AgentLoop {
         let mut session = sessions.get_or_create(session_key)?;
         self.save_turn(&mut session, messages)?;
         let context_window_tokens = self.session_context_window_tokens(&session);
-        self.memory
-            .maybe_consolidate_by_tokens(&mut session, context_window_tokens)?;
+        self.maybe_consolidate_session(&mut session, context_window_tokens)?;
         sessions.save(&session)?;
         Ok(())
     }
 
     #[allow(dead_code)]
     pub(crate) async fn consolidate_session_async(&self, session_key: &str) {
+        if !self.memory_enabled() {
+            return;
+        }
         let (mut session, context_window_tokens) = {
             let mut sessions = self.sessions.lock().expect("session manager lock poisoned");
             match sessions.get_or_create(session_key) {

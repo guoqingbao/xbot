@@ -414,11 +414,19 @@ fn resolve_path(
     Ok(resolved)
 }
 
+fn is_blocked_path(path: &Path, blocked_dirs: &[PathBuf]) -> bool {
+    blocked_dirs.iter().any(|dir| {
+        let dir = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+        path == dir || path.starts_with(&dir)
+    })
+}
+
 #[derive(Clone)]
 pub struct ReadFileTool {
     workspace: Option<PathBuf>,
     allowed_dir: Option<PathBuf>,
     extra_allowed_dirs: Vec<PathBuf>,
+    blocked_dirs: Vec<PathBuf>,
 }
 
 impl ReadFileTool {
@@ -434,7 +442,13 @@ impl ReadFileTool {
             workspace,
             allowed_dir,
             extra_allowed_dirs,
+            blocked_dirs: Vec::new(),
         }
+    }
+
+    pub fn with_blocked_dirs(mut self, blocked_dirs: Vec<PathBuf>) -> Self {
+        self.blocked_dirs = blocked_dirs;
+        self
     }
 }
 
@@ -477,6 +491,9 @@ impl Tool for ReadFileTool {
         };
         if !fp.exists() {
             return ToolOutput::Text(format!("Error: File not found: {path}"));
+        }
+        if is_blocked_path(&fp, &self.blocked_dirs) {
+            return ToolOutput::Text(format!("Error: Access to {path} is disabled in this mode."));
         }
         if !fp.is_file() {
             return ToolOutput::Text(format!("Error: Not a file: {path}"));
@@ -555,6 +572,7 @@ impl Tool for ReadFileTool {
 pub struct WriteFileTool {
     workspace: Option<PathBuf>,
     allowed_dir: Option<PathBuf>,
+    blocked_dirs: Vec<PathBuf>,
 }
 
 impl WriteFileTool {
@@ -562,7 +580,13 @@ impl WriteFileTool {
         Self {
             workspace,
             allowed_dir,
+            blocked_dirs: Vec::new(),
         }
+    }
+
+    pub fn with_blocked_dirs(mut self, blocked_dirs: Vec<PathBuf>) -> Self {
+        self.blocked_dirs = blocked_dirs;
+        self
     }
 }
 
@@ -595,6 +619,9 @@ impl Tool for WriteFileTool {
             Ok(path) => path,
             Err(err) => return ToolOutput::Text(format!("Error: {err}")),
         };
+        if is_blocked_path(&fp, &self.blocked_dirs) {
+            return ToolOutput::Text(format!("Error: Access to {path} is disabled in this mode."));
+        }
         if let Some(parent) = fp.parent() {
             if let Err(err) = ensure_dir(parent) {
                 return ToolOutput::Text(format!("Error writing file: {err}"));
@@ -652,6 +679,7 @@ pub fn find_match(content: &str, old_text: &str) -> (Option<String>, usize) {
 pub struct EditFileTool {
     workspace: Option<PathBuf>,
     allowed_dir: Option<PathBuf>,
+    blocked_dirs: Vec<PathBuf>,
 }
 
 impl EditFileTool {
@@ -659,7 +687,13 @@ impl EditFileTool {
         Self {
             workspace,
             allowed_dir,
+            blocked_dirs: Vec::new(),
         }
+    }
+
+    pub fn with_blocked_dirs(mut self, blocked_dirs: Vec<PathBuf>) -> Self {
+        self.blocked_dirs = blocked_dirs;
+        self
     }
 }
 
@@ -696,6 +730,9 @@ impl Tool for EditFileTool {
             Ok(path) => path,
             Err(err) => return ToolOutput::Text(format!("Error: {err}")),
         };
+        if is_blocked_path(&fp, &self.blocked_dirs) {
+            return ToolOutput::Text(format!("Error: Access to {path} is disabled in this mode."));
+        }
         if !fp.exists() {
             return ToolOutput::Text(format!("Error: File not found: {path}"));
         }
@@ -742,6 +779,7 @@ impl Tool for EditFileTool {
 pub struct ListDirTool {
     workspace: Option<PathBuf>,
     allowed_dir: Option<PathBuf>,
+    blocked_dirs: Vec<PathBuf>,
 }
 
 impl ListDirTool {
@@ -765,7 +803,13 @@ impl ListDirTool {
         Self {
             workspace,
             allowed_dir,
+            blocked_dirs: Vec::new(),
         }
+    }
+
+    pub fn with_blocked_dirs(mut self, blocked_dirs: Vec<PathBuf>) -> Self {
+        self.blocked_dirs = blocked_dirs;
+        self
     }
 }
 
@@ -805,6 +849,9 @@ impl Tool for ListDirTool {
         if !dp.exists() {
             return ToolOutput::Text(format!("Error: Directory not found: {path}"));
         }
+        if is_blocked_path(&dp, &self.blocked_dirs) {
+            return ToolOutput::Text(format!("Error: Access to {path} is disabled in this mode."));
+        }
         if !dp.is_dir() {
             return ToolOutput::Text(format!("Error: Not a directory: {path}"));
         }
@@ -812,7 +859,11 @@ impl Tool for ListDirTool {
         let mut items = Vec::new();
         let mut total = 0;
         if recursive {
-            for entry in WalkDir::new(&dp).into_iter().filter_map(|entry| entry.ok()) {
+            for entry in WalkDir::new(&dp)
+                .into_iter()
+                .filter_entry(|entry| !is_blocked_path(entry.path(), &self.blocked_dirs))
+                .filter_map(|entry| entry.ok())
+            {
                 if entry.path() == dp {
                     continue;
                 }
@@ -836,6 +887,9 @@ impl Tool for ListDirTool {
             }
         } else if let Ok(entries) = fs::read_dir(&dp) {
             for entry in entries.flatten() {
+                if is_blocked_path(&entry.path(), &self.blocked_dirs) {
+                    continue;
+                }
                 let name = entry.file_name().to_string_lossy().to_string();
                 if ignored.contains(name.as_str()) {
                     continue;
@@ -870,6 +924,7 @@ pub struct ExecTool {
     working_dir: Option<PathBuf>,
     deny_patterns: Vec<String>,
     allow_patterns: Vec<String>,
+    blocked_dirs: Vec<PathBuf>,
     restrict_to_workspace: bool,
     path_append: String,
 }
@@ -899,9 +954,15 @@ impl ExecTool {
                 r":\(\)\s*\{.*\};\s*:".to_string(),
             ],
             allow_patterns: Vec::new(),
+            blocked_dirs: Vec::new(),
             restrict_to_workspace,
             path_append,
         }
+    }
+
+    pub fn with_blocked_dirs(mut self, blocked_dirs: Vec<PathBuf>) -> Self {
+        self.blocked_dirs = blocked_dirs;
+        self
     }
 
     pub fn extract_absolute_paths(command: &str) -> Vec<String> {
@@ -953,6 +1014,18 @@ impl ExecTool {
                     .to_string(),
             );
         }
+        if !self.blocked_dirs.is_empty() {
+            let normalized = lower.replace('\\', "/");
+            if normalized.contains(".rbot/memory/")
+                || normalized.contains("memory/memory.md")
+                || normalized.contains("memory/history.md")
+            {
+                return Some(
+                    "Error: Command blocked by safety guard (memory files disabled in this mode)"
+                        .to_string(),
+                );
+            }
+        }
         if self.restrict_to_workspace {
             if command.contains("../") || command.contains("..\\") {
                 return Some(
@@ -969,6 +1042,12 @@ impl ExecTool {
                     PathBuf::from(&raw)
                 };
                 let resolved = expanded.canonicalize().unwrap_or(expanded.clone());
+                if is_blocked_path(&resolved, &self.blocked_dirs) {
+                    return Some(
+                        "Error: Command blocked by safety guard (memory files disabled in this mode)"
+                            .to_string(),
+                    );
+                }
                 if resolved.is_absolute() && resolved != cwd && !resolved.starts_with(&cwd) {
                     return Some(
                         "Error: Command blocked by safety guard (path outside working dir)"

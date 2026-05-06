@@ -74,7 +74,7 @@ pub struct MemoryStore {
 
 impl MemoryStore {
     pub fn new(workspace: &Path, max_memory_bytes: usize) -> Result<Self> {
-        let memory_dir = ensure_dir(workspace_state_dir(workspace).join("memory"))?;
+        let memory_dir = workspace_state_dir(workspace).join("memory");
         Ok(Self {
             memory_file: memory_dir.join("MEMORY.md"),
             history_file: memory_dir.join("HISTORY.md"),
@@ -94,6 +94,7 @@ impl MemoryStore {
     pub fn write_long_term(&self, content: &str) -> Result<()> {
         let (preface, mut entries) = split_memory_document(content);
         let rendered = render_memory_document(&preface, &mut entries, self.max_memory_bytes);
+        ensure_dir(&self.memory_dir)?;
         fs::write(&self.memory_file, rendered)?;
         Ok(())
     }
@@ -103,11 +104,13 @@ impl MemoryStore {
         let (preface, mut entries) = split_memory_document(&current);
         entries.push(entry.to_markdown());
         let rendered = render_memory_document(&preface, &mut entries, self.max_memory_bytes);
+        ensure_dir(&self.memory_dir)?;
         fs::write(&self.memory_file, rendered)?;
         Ok(())
     }
 
     pub fn append_history(&self, entry: &str) -> Result<()> {
+        ensure_dir(&self.memory_dir)?;
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -117,6 +120,7 @@ impl MemoryStore {
     }
 
     pub fn reset_history(&self) -> Result<()> {
+        ensure_dir(&self.memory_dir)?;
         fs::write(&self.history_file, DEFAULT_HISTORY_TEMPLATE)?;
         Ok(())
     }

@@ -203,8 +203,19 @@ pub fn build_status_content(
 }
 
 pub fn sync_workspace_templates(workspace: &Path) -> Result<Vec<PathBuf>> {
+    sync_workspace_templates_with_memory(workspace, true)
+}
+
+pub fn sync_workspace_templates_without_memory(workspace: &Path) -> Result<Vec<PathBuf>> {
+    sync_workspace_templates_with_memory(workspace, false)
+}
+
+fn sync_workspace_templates_with_memory(
+    workspace: &Path,
+    include_memory: bool,
+) -> Result<Vec<PathBuf>> {
     let state_dir = ensure_dir(workspace_state_dir(workspace))?;
-    migrate_legacy_workspace_state(workspace, &state_dir)?;
+    migrate_legacy_workspace_state(workspace, &state_dir, include_memory)?;
     let mut created = Vec::new();
     let files = [
         (
@@ -475,8 +486,13 @@ If there are no active tasks below, the heartbeat check is skipped.
     ];
     ensure_dir(workspace)?;
     ensure_dir(state_dir.join("skills"))?;
-    ensure_dir(state_dir.join("memory"))?;
+    if include_memory {
+        ensure_dir(state_dir.join("memory"))?;
+    }
     for (path, content) in files {
+        if !include_memory && is_memory_template_path(&path, &state_dir) {
+            continue;
+        }
         if let Some(parent) = path.parent() {
             ensure_dir(parent)?;
         }
@@ -488,7 +504,17 @@ If there are no active tasks below, the heartbeat check is skipped.
     Ok(created)
 }
 
-fn migrate_legacy_workspace_state(workspace: &Path, state_dir: &Path) -> Result<()> {
+fn is_memory_template_path(path: &Path, state_dir: &Path) -> bool {
+    path.starts_with(state_dir.join("memory"))
+        || path.starts_with(state_dir.join("skills").join("memory-hygiene"))
+        || path.starts_with(state_dir.join("skills").join("memory-entry-writer"))
+}
+
+fn migrate_legacy_workspace_state(
+    workspace: &Path,
+    state_dir: &Path,
+    include_memory: bool,
+) -> Result<()> {
     for name in [
         "AGENTS.md",
         "SOUL.md",
@@ -498,7 +524,12 @@ fn migrate_legacy_workspace_state(workspace: &Path, state_dir: &Path) -> Result<
     ] {
         maybe_move_legacy_path(&workspace.join(name), &state_dir.join(name))?;
     }
-    for name in ["memory", "sessions", "cron"] {
+    let state_dirs: &[&str] = if include_memory {
+        &["memory", "sessions", "cron"]
+    } else {
+        &["sessions", "cron"]
+    };
+    for name in state_dirs.iter().copied() {
         maybe_move_legacy_path(&workspace.join(name), &state_dir.join(name))?;
     }
     Ok(())

@@ -31,7 +31,9 @@ use rbot::runtime::{
 };
 use rbot::storage::{InboundMessage, MessageBus, OutboundMessage, SessionManager};
 use rbot::tools::MessageSendCallback;
-use rbot::util::{sync_workspace_templates, workspace_state_dir};
+use rbot::util::{
+    sync_workspace_templates, sync_workspace_templates_without_memory, workspace_state_dir,
+};
 
 #[derive(Parser)]
 #[command(name = "rbot", about = "Rust-native autonomous bot runtime")]
@@ -561,13 +563,14 @@ async fn build_agent(
     let subagent_model = config.agents.subagents.model.trim();
     let subagent_model = (!subagent_model.is_empty()).then(|| subagent_model.to_string());
     let workspace = resolve_cli_workspace(&config, &cwd);
-    sync_workspace_templates(&workspace)?;
+    sync_workspace_templates_without_memory(&workspace)?;
     let agent = build_agent_for_workspace(
         &config,
         &workspace,
         provider,
         Some(startup_model.active_model.clone()),
         None,
+        false,
     )
     .await?;
     configure_model_switch_persistence(&agent, config_path);
@@ -682,6 +685,7 @@ async fn build_agent_from_config(
         provider,
         model,
         cron_service,
+        true,
     )
     .await
 }
@@ -692,6 +696,7 @@ async fn build_agent_for_workspace(
     provider: SharedProvider,
     model: Option<String>,
     cron_service: Option<CronService>,
+    memory_enabled: bool,
 ) -> Result<AgentLoop> {
     let main_model = model
         .clone()
@@ -713,6 +718,7 @@ async fn build_agent_for_workspace(
         config.tools.exec.clone(),
         config.tools.restrict_to_workspace,
         cron_service,
+        memory_enabled,
         &config.tools.mcp_servers,
     )
     .await
