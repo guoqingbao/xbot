@@ -200,14 +200,14 @@ pub fn build_status_content(
     let total_tokens = last_prompt_tokens.saturating_add(last_completion_tokens);
     let cache_hint = if cached_prompt_tokens > 0 && last_prompt_tokens > 0 {
         let cache_pct = (cached_prompt_tokens * 100) / last_prompt_tokens;
-        format!(", {cache_pct}% cached")
+        format!(" ({cache_pct}% cached)")
     } else {
         String::new()
     };
     format!(
         "Model: {model}\nWorkspace: {workspace}\nUptime: {uptime}\nSession messages: \
-         {session_message_count}\nToken usage (last turn): {last_prompt_tokens} in + \
-         {last_completion_tokens} out (total {total_tokens}{cache_hint})\n\
+         {session_message_count}\nToken usage (last turn): {last_prompt_tokens}{cache_hint} in + \
+         {last_completion_tokens} out (total {total_tokens})\n\
          Context window: {context_window_tokens} tokens\n\
          Context: {context_tokens_estimate}/{context_window_tokens} ({pct}%)\nrbot v{version}"
     )

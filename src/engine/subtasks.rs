@@ -203,7 +203,7 @@ impl SubagentManager {
             model: self.model.clone(),
         });
         format!(
-            "Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
+            "Subagent [{display_label}] started (id: {task_id}). Call `wait_subagents` to collect my results."
         )
     }
 

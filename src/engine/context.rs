@@ -297,8 +297,11 @@ Sub-agents run independently with their own context. Use them for:
 - **Parallel implementation**: after planning, delegate independent leaf tasks
 - **Heavy computation**: tasks that would consume too much main context
 
+**Mandatory workflow**: `spawn` → `wait_subagents` → integrate results. You MUST call \
+`wait_subagents` after spawning before finishing your response or continuing with dependent work.
+
 Integration protocol when sub-agents complete:
-1. Read the result summary
+1. Read the result summary from `wait_subagents`
 2. Integrate findings — do not re-do what the sub-agent already did
 3. If the summary is insufficient, investigate the specific gap yourself
 4. If a sub-agent failed, assess whether failure blocks your plan or you can proceed

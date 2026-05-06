@@ -341,6 +341,11 @@ impl AgentLoop {
                 session.clear();
                 sessions.save(&session)?;
                 self.reset_session_announcement(session_key);
+                *self.last_usage.lock().expect("usage lock poisoned") = (0, 0, 0);
+                *self
+                    .last_context_prompt_tokens
+                    .lock()
+                    .expect("context prompt lock poisoned") = 0;
                 return Ok(SessionSetup {
                     response: Some(
                         target.outbound("New session started. Previous messages were cleared."),

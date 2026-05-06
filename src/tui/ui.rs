@@ -706,7 +706,7 @@ fn distinct_subagent_models(app: &App) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::path::PathBuf;
 
     use super::super::app::EngineEvent;
@@ -773,6 +773,59 @@ mod tests {
             distinct_subagent_models(&app),
             vec!["Qwen3.5-35B-A3B-FP8".to_string()]
         );
+    }
+
+    #[test]
+    fn test_compute_cursor_position_multiline_wrap() {
+        // Test cursor position with word wrapping
+        let input = "hello world";
+        let width = 5;
+
+        // Position at start
+        let (x, y) = compute_cursor_position(input, 0, width);
+        assert_eq!((x, y), (0, 0));
+
+        // Position after "hello" (exact width, no wrap)
+        let (x, y) = compute_cursor_position(input, 5, width);
+        assert_eq!((x, y), (5, 0));
+
+        // Position at end
+        let (x, y) = compute_cursor_position(input, 11, width);
+        assert_eq!((x, y), (1, 2));
+    }
+
+    #[test]
+    fn test_compute_cursor_position_with_newlines_and_wrap() {
+        // Multi-line with word wrapping
+        let input = "hello\nworld";
+        let width = 5;
+
+        // Position at "hello" (exact width, no wrap)
+        let (x, y) = compute_cursor_position(input, 5, width);
+        assert_eq!((x, y), (5, 0));
+
+        // Position at end
+        let (x, y) = compute_cursor_position(input, 11, width);
+        assert_eq!((x, y), (5, 1));
+    }
+
+    #[test]
+    fn test_compute_cursor_position_edge_cases() {
+        // Empty input
+        let (x, y) = compute_cursor_position("", 0, 10);
+        assert_eq!((x, y), (0, 0));
+
+        // Single character
+        let (x, y) = compute_cursor_position("a", 1, 10);
+        assert_eq!((x, y), (1, 0));
+
+        // Exact width fit
+        let (x, y) = compute_cursor_position("hello", 5, 5);
+        assert_eq!((x, y), (5, 0));
+
+        // One over width
+        let (x, y) = compute_cursor_position("hello", 6, 5);
+        assert_eq!((x, y), (1, 1));
     }
 }
 
@@ -998,7 +1051,7 @@ fn render_composer(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-fn compute_cursor_position(input: &str, cursor: usize, width: usize) -> (usize, usize) {
+pub(crate) fn compute_cursor_position(input: &str, cursor: usize, width: usize) -> (usize, usize) {
     let before: String = input.chars().take(cursor).collect();
     let mut x = 0usize;
     let mut y = 0usize;
@@ -1008,8 +1061,8 @@ fn compute_cursor_position(input: &str, cursor: usize, width: usize) -> (usize, 
             y += 1;
         } else {
             x += 1;
-            if width > 0 && x >= width {
-                x = 0;
+            if width > 0 && x > width {
+                x = 1;
                 y += 1;
             }
         }
@@ -1160,13 +1213,13 @@ fn format_summary(s: &super::app::TurnSummary) -> String {
     if s.prompt_tokens > 0 || s.completion_tokens > 0 {
         let cache_hint = if s.cached_tokens > 0 && s.prompt_tokens > 0 {
             let pct = (s.cached_tokens * 100) / s.prompt_tokens;
-            format!(" {}% cached", pct)
+            format!("({}% cached) ", pct)
         } else {
             String::new()
         };
         parts.push(format!(
-            "↑{} ↓{}{}",
-            s.prompt_tokens, s.completion_tokens, cache_hint
+            "↑{} {}↓{}",
+            s.prompt_tokens, cache_hint, s.completion_tokens
         ));
     }
     parts.push(super::app::format_elapsed(s.elapsed));

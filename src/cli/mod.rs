@@ -279,13 +279,13 @@ impl TurnSummary {
         } else {
             let cache_hint = if self.cached_tokens > 0 && self.prompt_tokens > 0 {
                 let pct = (self.cached_tokens * 100) / self.prompt_tokens;
-                format!(" {}% cached", pct)
+                format!("({}% cached) ", pct)
             } else {
                 String::new()
             };
             format!(
-                "↑{} ↓{}{}",
-                self.prompt_tokens, self.completion_tokens, cache_hint
+                "↑{} {}↓{}",
+                self.prompt_tokens, cache_hint, self.completion_tokens
             )
         };
         let elapsed = format_elapsed_short(self.elapsed);

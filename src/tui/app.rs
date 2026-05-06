@@ -1187,13 +1187,13 @@ impl App {
             if s.prompt_tokens > 0 || s.completion_tokens > 0 {
                 let cache_hint = if s.cached_tokens > 0 && s.prompt_tokens > 0 {
                     let pct = (s.cached_tokens * 100) / s.prompt_tokens;
-                    format!(" {}% cached", pct)
+                    format!("({}% cached) ", pct)
                 } else {
                     String::new()
                 };
                 parts.push(format!(
-                    "↑{} ↓{}{}",
-                    s.prompt_tokens, s.completion_tokens, cache_hint
+                    "↑{} {}↓{}",
+                    s.prompt_tokens, cache_hint, s.completion_tokens
                 ));
             }
             parts.push(format_elapsed(s.elapsed));
@@ -1408,6 +1408,7 @@ pub fn format_elapsed(d: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::ui::compute_cursor_position;
 
     #[test]
     fn composer_basic_editing() {
@@ -1429,6 +1430,40 @@ mod tests {
         c.insert_char('b');
         assert_eq!(c.input, "a\nb");
         assert_eq!(c.cursor, 3);
+    }
+
+    #[test]
+    fn compute_cursor_position_multiline_wrap() {
+        // Test cursor position with word wrapping
+        let input = "hello world";
+        let width = 5;
+
+        // Position at start
+        let (x, y) = compute_cursor_position(input, 0, width);
+        assert_eq!((x, y), (0, 0));
+
+        // Position after "hello" (should wrap)
+        let (x, y) = compute_cursor_position(input, 5, width);
+        assert_eq!((x, y), (0, 1));
+
+        // Position at end
+        let (x, y) = compute_cursor_position(input, 11, width);
+        assert_eq!((x, y), (1, 2));
+    }
+
+    #[test]
+    fn compute_cursor_position_with_newlines_and_wrap() {
+        // Multi-line with word wrapping
+        let input = "hello\nworld";
+        let width = 5;
+
+        // Position at newline
+        let (x, y) = compute_cursor_position(input, 5, width);
+        assert_eq!((x, y), (0, 1));
+
+        // Position at end
+        let (x, y) = compute_cursor_position(input, 11, width);
+        assert_eq!((x, y), (0, 2));
     }
 
     #[test]

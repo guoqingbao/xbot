@@ -1914,6 +1914,7 @@ impl Tool for WaitSubagentsTool {
         ToolSpec {
             name: "wait_subagents".to_string(),
             description: "Wait for spawned sub-agents to complete and return their results. \
+                You MUST call this after every `spawn` before finishing your response. \
                 Each result contains the sub-agent's final summary. Integrate findings into \
                 your work — do not re-do what sub-agents already did. If a result is \
                 insufficient, investigate the specific gap yourself rather than re-spawning."
@@ -1984,7 +1985,9 @@ impl Tool for SpawnTool {
                 independent files/modules, heavy exploration that would consume main context, \
                 or independent implementation tasks after planning. Provide a detailed, \
                 self-contained task description — the sub-agent has no access to your \
-                conversation history. After spawning, call wait_subagents to collect results."
+                conversation history. IMPORTANT: You MUST call `wait_subagents` after spawning \
+                to collect results before proceeding. Never finish your response without \
+                waiting for spawned subagents."
                 .to_string(),
             parameters: json!({
                 "type": "object",
