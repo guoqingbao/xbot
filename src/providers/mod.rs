@@ -108,7 +108,7 @@ impl Default for GenerationSettings {
     fn default() -> Self {
         Self {
             temperature: None,
-            max_tokens: 4096,
+            max_tokens: 16_384,
         }
     }
 }

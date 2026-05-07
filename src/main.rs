@@ -1060,7 +1060,7 @@ mod tests {
     #[test]
     fn formats_run_welcome_header_with_runtime_summary() {
         let mut config = Config::default();
-        config.agents.defaults.max_tokens = 4096;
+        config.agents.defaults.max_tokens = 16_384;
         config.agents.defaults.context_window_tokens = 32768;
         config.agents.defaults.max_tool_iterations = 12;
         config.agents.defaults.memory_max_bytes = 65536;
@@ -1110,7 +1110,7 @@ mod tests {
         assert!(rendered.contains("workspace : /root/rbot"));
         assert!(rendered.contains("model     : openai/gpt-4.1-mini"));
         assert!(rendered.contains("provider  : openai (default api base)"));
-        assert!(rendered.contains("agents    : maxTokens=4096  context=32768"));
+        assert!(rendered.contains("agents    : maxTokens=16384  context=32768"));
         assert!(rendered.contains("            maxToolIterations=12  memory=65536B"));
         assert!(rendered.contains("context   : 524288 max"));
         assert!(rendered.contains("channels  : slack, telegram (progress on, tool hints muted)"));

@@ -36,7 +36,7 @@ impl Default for AgentDefaults {
             workspace: "~/.rbot/workspace".to_string(),
             model: "openai/gpt-4.1-mini".to_string(),
             provider: "auto".to_string(),
-            max_tokens: 8192,
+            max_tokens: 16_384,
             context_window_tokens: 65_536,
             temperature: None,
             max_tool_iterations: 0,

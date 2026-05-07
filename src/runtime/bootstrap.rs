@@ -251,7 +251,7 @@ pub fn build_provider_client(
     }
     let generation = GenerationSettings {
         temperature,
-        max_tokens: 8192,
+        max_tokens: 16_384,
     };
 
     if provider_name == "custom" || spec.is_none() {
