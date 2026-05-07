@@ -1058,17 +1058,26 @@ fn render_edit_diff(lines: &mut Vec<Line<'static>>, diff: &EditDiff, w: usize) {
         let text_w = max_w.saturating_sub(gutter.chars().count());
         let content = truncate_end(&dl.text, text_w);
 
-        let (fg, bg) = match dl.kind {
-            DiffKind::Added => (DIFF_ADD, Color::Rgb(20, 40, 20)),
-            DiffKind::Removed => (DIFF_DEL, Color::Rgb(50, 20, 20)),
-            DiffKind::Context => (TEXT_DIM, Color::Reset),
-            DiffKind::Omitted => (TEXT_DIM, Color::Reset),
+        let fg = match dl.kind {
+            DiffKind::Added => DIFF_ADD,
+            DiffKind::Removed => DIFF_DEL,
+            DiffKind::Context => TEXT_DIM,
+            DiffKind::Omitted => TEXT_DIM,
+        };
+        let bg = match dl.kind {
+            DiffKind::Added => Some(Color::Rgb(20, 40, 20)),
+            DiffKind::Removed => Some(Color::Rgb(50, 20, 20)),
+            DiffKind::Context | DiffKind::Omitted => None,
         };
 
         lines.push(Line::from(vec![
             Span::styled("    │ ", Style::default().fg(BORDER_DIM)),
             Span::styled(gutter, Style::default().fg(TEXT_DIM)),
-            Span::styled(content, Style::default().fg(fg).bg(bg)),
+            if let Some(bg) = bg {
+                Span::styled(content, Style::default().fg(fg).bg(bg))
+            } else {
+                Span::styled(content, Style::default().fg(fg))
+            },
         ]));
     }
 
@@ -1353,16 +1362,25 @@ fn render_approval_overlay(f: &mut Frame, area: Rect, app: &super::app::App) {
         let text_w = inner_w.saturating_sub(gutter.chars().count());
         let content = truncate_end(&dl.text, text_w);
 
-        let (fg, bg) = match dl.kind {
-            DiffKind::Added => (DIFF_ADD, Color::Rgb(20, 40, 20)),
-            DiffKind::Removed => (DIFF_DEL, Color::Rgb(50, 20, 20)),
-            DiffKind::Context => (TEXT_DIM, Color::Reset),
-            DiffKind::Omitted => (TEXT_DIM, Color::Reset),
+        let fg = match dl.kind {
+            DiffKind::Added => DIFF_ADD,
+            DiffKind::Removed => DIFF_DEL,
+            DiffKind::Context => TEXT_DIM,
+            DiffKind::Omitted => TEXT_DIM,
+        };
+        let bg = match dl.kind {
+            DiffKind::Added => Some(Color::Rgb(20, 40, 20)),
+            DiffKind::Removed => Some(Color::Rgb(50, 20, 20)),
+            DiffKind::Context | DiffKind::Omitted => None,
         };
 
         text_lines.push(Line::from(vec![
             Span::styled(gutter, Style::default().fg(TEXT_DIM)),
-            Span::styled(content, Style::default().fg(fg).bg(bg)),
+            if let Some(bg) = bg {
+                Span::styled(content, Style::default().fg(fg).bg(bg))
+            } else {
+                Span::styled(content, Style::default().fg(fg))
+            },
         ]));
     }
 
