@@ -1336,9 +1336,14 @@ fn render_composer(f: &mut Frame, area: Rect, app: &App) {
 
     f.render_widget(block, area);
 
-    if app.composer.input.is_empty() && !busy {
+    if app.composer.input.is_empty() {
+        let placeholder = if busy {
+            "Type a follow up message..."
+        } else {
+            "Type a message... (↑ history, ? help)"
+        };
         let placeholder = Paragraph::new(Text::from(Span::styled(
-            "Type a message… (↑ history, ? help)",
+            placeholder,
             Style::default().fg(TEXT_DIM).add_modifier(Modifier::ITALIC),
         )))
         .style(Style::default().bg(COMPOSER_BG));
@@ -1367,7 +1372,7 @@ fn render_composer(f: &mut Frame, area: Rect, app: &App) {
         f.render_widget(paragraph, inner);
     }
 
-    if !app.show_help && !busy {
+    if !app.show_help && app.approval_dialog.is_none() {
         let (cursor_x, cursor_y) = compute_cursor_position(
             &app.composer.input,
             app.composer.cursor,

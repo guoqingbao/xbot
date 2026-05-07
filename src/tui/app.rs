@@ -139,6 +139,27 @@ pub struct ToolActivity {
     pub timeout_secs: Option<u64>,
 }
 
+pub struct QueuedPrompt {
+    pub prompt: String,
+    pub show_in_history: bool,
+}
+
+impl QueuedPrompt {
+    pub fn user(prompt: String) -> Self {
+        Self {
+            prompt,
+            show_in_history: true,
+        }
+    }
+
+    pub fn internal(prompt: String) -> Self {
+        Self {
+            prompt,
+            show_in_history: false,
+        }
+    }
+}
+
 pub enum StreamSegment {
     Text(String),
     Thinking(String),
@@ -422,7 +443,7 @@ pub struct App {
     pub agent_state: AgentState,
     pub needs_redraw: bool,
     pub cancel_requested: bool,
-    pub pending: VecDeque<String>,
+    pub pending: VecDeque<QueuedPrompt>,
     pub exit_after_turn: bool,
 
     pub model: String,
@@ -501,6 +522,15 @@ impl App {
 
     pub fn is_busy(&self) -> bool {
         !matches!(self.agent_state, AgentState::Ready)
+    }
+
+    pub fn pop_next_prompt(&mut self) -> Option<String> {
+        let queued = self.pending.pop_front()?;
+        if queued.show_in_history {
+            self.history.push(HistoryEntry::User(queued.prompt.clone()));
+            self.auto_scroll = true;
+        }
+        Some(queued.prompt)
     }
 
     #[allow(dead_code)]
@@ -870,7 +900,7 @@ impl App {
         self.agent_state = AgentState::Ready;
         self.auto_scroll = true;
         self.needs_redraw = true;
-        self.pending.push_back(continuation);
+        self.pending.push_back(QueuedPrompt::internal(continuation));
     }
 
     fn update_subagent_card(&mut self, task_id: &str, f: impl Fn(&mut HistoryEntry)) {
@@ -1217,9 +1247,7 @@ impl App {
                     return;
                 }
                 let prompt = self.composer.take_input();
-                self.history.push(HistoryEntry::User(prompt.clone()));
-                self.auto_scroll = true;
-                self.pending.push_back(prompt);
+                self.pending.push_back(QueuedPrompt::user(prompt));
             }
             KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.composer.insert_newline();
@@ -1309,15 +1337,14 @@ impl App {
                 self.scroll_offset = 0;
                 self.auto_scroll = true;
                 self.last_summary = None;
-                self.pending.push_back("/new".to_string());
+                self.pending
+                    .push_back(QueuedPrompt::internal("/new".to_string()));
             }
             LocalCommand::Agents => {
                 self.show_sidebar = !self.show_sidebar;
             }
             LocalCommand::Agent(text) => {
-                self.history.push(HistoryEntry::User(text.clone()));
-                self.auto_scroll = true;
-                self.pending.push_back(text);
+                self.pending.push_back(QueuedPrompt::user(text));
             }
         }
     }
@@ -1644,6 +1671,66 @@ mod tests {
         c.insert_paste("a\r\nb\rc");
         assert_eq!(c.input, "a\nb\nc");
         assert_eq!(c.cursor, 5);
+    }
+
+    #[test]
+    fn enter_while_busy_queues_without_history_entry() {
+        let mut app = App::new(
+            "main".into(),
+            "test".into(),
+            PathBuf::from("/tmp"),
+            0,
+            "0/1000".into(),
+            None,
+        );
+        app.agent_state = AgentState::Working;
+        app.composer.input = "follow up".into();
+        app.composer.cursor = app.composer.input.chars().count();
+
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(app.history.is_empty());
+        assert_eq!(app.pending.len(), 1);
+        let queued = app.pending.front().unwrap();
+        assert_eq!(queued.prompt, "follow up");
+        assert!(queued.show_in_history);
+    }
+
+    #[test]
+    fn pop_next_prompt_inserts_user_prompt_at_start_of_turn() {
+        let mut app = App::new(
+            "main".into(),
+            "test".into(),
+            PathBuf::from("/tmp"),
+            0,
+            "0/1000".into(),
+            None,
+        );
+        app.pending
+            .push_back(QueuedPrompt::user("queued user".into()));
+
+        assert_eq!(app.pop_next_prompt().as_deref(), Some("queued user"));
+        assert_eq!(app.pending.len(), 0);
+        assert!(matches!(
+            app.history.as_slice(),
+            [HistoryEntry::User(text)] if text == "queued user"
+        ));
+    }
+
+    #[test]
+    fn pop_next_prompt_hides_internal_prompt_from_history() {
+        let mut app = App::new(
+            "main".into(),
+            "test".into(),
+            PathBuf::from("/tmp"),
+            0,
+            "0/1000".into(),
+            None,
+        );
+        app.pending.push_back(QueuedPrompt::internal("/new".into()));
+
+        assert_eq!(app.pop_next_prompt().as_deref(), Some("/new"));
+        assert!(app.history.is_empty());
     }
 
     #[test]

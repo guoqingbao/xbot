@@ -210,7 +210,7 @@ pub async fn run_tui_repl(
         }
 
         if !app.is_busy() {
-            if let Some(prompt) = app.pending.pop_front() {
+            if let Some(prompt) = app.pop_next_prompt() {
                 active_turn = Some(spawn_turn(
                     agent.clone(),
                     prompt,
