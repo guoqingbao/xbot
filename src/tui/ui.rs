@@ -5,8 +5,9 @@ use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
-    Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+    Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::app::{
     ActiveStreaming, AgentState, App, EditDiff, HistoryEntry, StreamSegment, SubagentStatus,
@@ -42,7 +43,7 @@ const SIDEBAR_WIDTH: u16 = 28;
 pub fn render(f: &mut Frame, app: &mut App) {
     let area = f.area();
 
-    let composer_h = composer_height(&app.composer.input, area.width);
+    let composer_h = composer_height(&app.composer.input, app.composer.cursor, area.width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -80,18 +81,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
     }
 }
 
-fn composer_height(input: &str, area_width: u16) -> u16 {
+fn composer_height(input: &str, cursor: usize, area_width: u16) -> u16 {
     let inner_w = area_width.saturating_sub(2).max(1) as usize;
-    let mut visual_lines: usize = 0;
-    for line in input.split('\n') {
-        let chars = line.chars().count();
-        if inner_w > 0 && chars > inner_w {
-            visual_lines += (chars + inner_w - 1) / inner_w;
-        } else {
-            visual_lines += 1;
-        }
-    }
-    (visual_lines as u16 + 2).min(12).max(3)
+    let visible_lines = wrap_hard_lines(input, inner_w).len();
+    let (_, cursor_y) = compute_cursor_position(input, cursor, inner_w);
+    (visible_lines.max(cursor_y + 1) as u16 + 2).min(12).max(3)
 }
 
 fn render_header(f: &mut Frame, area: Rect, app: &App) {
@@ -386,16 +380,156 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     if text.is_empty() {
         return vec![String::new()];
     }
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= width {
+    if UnicodeWidthStr::width(text) <= width {
         return vec![text.to_string()];
     }
     let mut result = Vec::new();
-    let mut start = 0;
-    while start < chars.len() {
-        let end = (start + width).min(chars.len());
-        result.push(chars[start..end].iter().collect());
-        start = end;
+    push_hard_wrapped(text, width, &mut result);
+    result
+}
+
+fn char_display_width(ch: char) -> usize {
+    if ch == '\t' {
+        4
+    } else {
+        UnicodeWidthChar::width(ch).unwrap_or(0)
+    }
+}
+
+fn push_hard_wrapped(text: &str, width: usize, out: &mut Vec<String>) {
+    let width = width.max(1);
+    let mut current = String::new();
+    let mut current_width = 0usize;
+
+    for ch in text.chars() {
+        let ch_width = char_display_width(ch);
+        if ch_width > 0 && current_width + ch_width > width {
+            out.push(std::mem::take(&mut current));
+            current_width = 0;
+        }
+        current.push(ch);
+        current_width += ch_width;
+    }
+
+    out.push(current);
+}
+
+fn wrap_hard_lines(text: &str, width: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.split('\n') {
+        push_hard_wrapped(line, width, &mut out);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+    let mut pending_space = String::new();
+    let mut pending_space_width = 0usize;
+    let mut word = String::new();
+    let mut word_width = 0usize;
+
+    let flush_word = |result: &mut Vec<String>,
+                      current: &mut String,
+                      current_width: &mut usize,
+                      pending_space: &mut String,
+                      pending_space_width: &mut usize,
+                      word: &mut String,
+                      word_width: &mut usize| {
+        if word.is_empty() {
+            return;
+        }
+
+        if current.is_empty() && !pending_space.is_empty() {
+            if *pending_space_width <= width {
+                current.push_str(pending_space);
+                *current_width = *pending_space_width;
+            } else {
+                push_hard_wrapped(pending_space, width, result);
+                if let Some(last) = result.pop() {
+                    *current_width = UnicodeWidthStr::width(last.as_str());
+                    *current = last;
+                }
+            }
+            pending_space.clear();
+            *pending_space_width = 0;
+        }
+
+        if !current.is_empty() && *current_width + *pending_space_width + *word_width <= width {
+            current.push_str(pending_space);
+            *current_width += *pending_space_width;
+        } else if !current.is_empty() {
+            result.push(std::mem::take(current));
+            *current_width = 0;
+        }
+
+        pending_space.clear();
+        *pending_space_width = 0;
+
+        if *word_width <= width {
+            current.push_str(word);
+            *current_width += *word_width;
+        } else {
+            if !current.is_empty() {
+                result.push(std::mem::take(current));
+                *current_width = 0;
+            }
+            push_hard_wrapped(word, width, result);
+            if let Some(last) = result.pop() {
+                *current_width = UnicodeWidthStr::width(last.as_str());
+                *current = last;
+            }
+        }
+
+        word.clear();
+        *word_width = 0;
+    };
+
+    for ch in text.chars() {
+        let ch_width = char_display_width(ch);
+        if ch.is_whitespace() {
+            flush_word(
+                &mut result,
+                &mut current,
+                &mut current_width,
+                &mut pending_space,
+                &mut pending_space_width,
+                &mut word,
+                &mut word_width,
+            );
+            pending_space.push(ch);
+            pending_space_width += ch_width;
+        } else {
+            word.push(ch);
+            word_width += ch_width;
+        }
+    }
+
+    flush_word(
+        &mut result,
+        &mut current,
+        &mut current_width,
+        &mut pending_space,
+        &mut pending_space_width,
+        &mut word,
+        &mut word_width,
+    );
+
+    if !current.is_empty() {
+        result.push(current);
+    }
+    if result.is_empty() {
+        result.push(String::new());
     }
     result
 }
@@ -418,27 +552,24 @@ fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         match entry {
             HistoryEntry::User(text) => {
                 push_blank(&mut lines);
-                let display = if text.chars().count() > 200 {
-                    let truncated: String = text.chars().take(200).collect();
-                    format!("{truncated}…")
-                } else {
-                    text.clone()
-                };
-                let user_lines: Vec<&str> = display.lines().collect();
-                for (li, uline) in user_lines.iter().enumerate() {
-                    if li == 0 {
-                        lines.push(Line::from(vec![
-                            Span::styled(
-                                "  › ",
-                                Style::default().fg(USER_FG).add_modifier(Modifier::BOLD),
-                            ),
-                            Span::styled((*uline).to_string(), Style::default().fg(USER_FG)),
-                        ]));
-                    } else {
-                        lines.push(Line::from(vec![
-                            Span::raw("    "),
-                            Span::styled((*uline).to_string(), Style::default().fg(USER_FG)),
-                        ]));
+                let mut first = true;
+                for uline in text.split('\n') {
+                    for wrapped in wrap_words(uline, w) {
+                        if first {
+                            first = false;
+                            lines.push(Line::from(vec![
+                                Span::styled(
+                                    "  › ",
+                                    Style::default().fg(USER_FG).add_modifier(Modifier::BOLD),
+                                ),
+                                Span::styled(wrapped, Style::default().fg(USER_FG)),
+                            ]));
+                        } else {
+                            lines.push(Line::from(vec![
+                                Span::raw("    "),
+                                Span::styled(wrapped, Style::default().fg(USER_FG)),
+                            ]));
+                        }
                     }
                 }
             }
@@ -872,7 +1003,7 @@ pub mod tests {
 
         // Position after "hello" (exact width, no wrap)
         let (x, y) = compute_cursor_position(input, 5, width);
-        assert_eq!((x, y), (5, 0));
+        assert_eq!((x, y), (0, 1));
 
         // Position at end
         let (x, y) = compute_cursor_position(input, 11, width);
@@ -887,11 +1018,11 @@ pub mod tests {
 
         // Position at "hello" (exact width, no wrap)
         let (x, y) = compute_cursor_position(input, 5, width);
-        assert_eq!((x, y), (5, 0));
+        assert_eq!((x, y), (0, 1));
 
         // Position at end
         let (x, y) = compute_cursor_position(input, 11, width);
-        assert_eq!((x, y), (5, 1));
+        assert_eq!((x, y), (0, 2));
     }
 
     #[test]
@@ -906,11 +1037,68 @@ pub mod tests {
 
         // Exact width fit
         let (x, y) = compute_cursor_position("hello", 5, 5);
-        assert_eq!((x, y), (5, 0));
+        assert_eq!((x, y), (0, 1));
 
         // One over width
-        let (x, y) = compute_cursor_position("hello", 6, 5);
+        let (x, y) = compute_cursor_position("hello!", 6, 5);
         assert_eq!((x, y), (1, 1));
+    }
+
+    #[test]
+    fn user_history_wraps_long_and_multiline_prompts() {
+        let mut app = App::new(
+            "main".into(),
+            "test".into(),
+            PathBuf::from("/tmp"),
+            0,
+            "0/1000".into(),
+            None,
+        );
+        app.history
+            .push(HistoryEntry::User("one two three\nfour five six".into()));
+
+        let lines = build_transcript_lines(&app, 14);
+        let plain = lines
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            plain,
+            vec!["  › one two", "    three", "    four five", "    six"]
+        );
+    }
+
+    #[test]
+    fn user_history_wrap_keeps_prompt_indentation() {
+        let mut app = App::new(
+            "main".into(),
+            "test".into(),
+            PathBuf::from("/tmp"),
+            0,
+            "0/1000".into(),
+            None,
+        );
+        app.history
+            .push(HistoryEntry::User("  let value = 1;".into()));
+
+        let lines = build_transcript_lines(&app, 14);
+        let plain = lines
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(plain, vec!["  ›   let", "    value = 1;"]);
     }
 }
 
@@ -1146,19 +1334,38 @@ fn render_composer(f: &mut Frame, area: Rect, app: &App) {
 
     let inner = block.inner(area);
 
-    let display_text = if app.composer.input.is_empty() && !busy {
-        Text::from(Span::styled(
+    f.render_widget(block, area);
+
+    if app.composer.input.is_empty() && !busy {
+        let placeholder = Paragraph::new(Text::from(Span::styled(
             "Type a message… (↑ history, ? help)",
             Style::default().fg(TEXT_DIM).add_modifier(Modifier::ITALIC),
-        ))
+        )))
+        .style(Style::default().bg(COMPOSER_BG));
+        f.render_widget(placeholder, inner);
     } else {
-        Text::from(app.composer.input.as_str().to_string())
-    };
+        let mut visual_lines = wrap_hard_lines(&app.composer.input, inner.width as usize);
+        let (_, cursor_y) = compute_cursor_position(
+            &app.composer.input,
+            app.composer.cursor,
+            inner.width as usize,
+        );
+        while visual_lines.len() <= cursor_y {
+            visual_lines.push(String::new());
+        }
 
-    let paragraph = Paragraph::new(display_text)
-        .block(block)
-        .wrap(Wrap { trim: false });
-    f.render_widget(paragraph, area);
+        let visible_height = inner.height as usize;
+        let start = cursor_y.saturating_add(1).saturating_sub(visible_height);
+        let visible = visual_lines
+            .into_iter()
+            .skip(start)
+            .take(visible_height)
+            .map(|line| Line::from(Span::styled(line, Style::default().fg(TEXT_PRIMARY))))
+            .collect::<Vec<_>>();
+        let paragraph = Paragraph::new(Text::from(visible));
+        let paragraph = paragraph.style(Style::default().bg(COMPOSER_BG));
+        f.render_widget(paragraph, inner);
+    }
 
     if !app.show_help && !busy {
         let (cursor_x, cursor_y) = compute_cursor_position(
@@ -1166,29 +1373,43 @@ fn render_composer(f: &mut Frame, area: Rect, app: &App) {
             app.composer.cursor,
             inner.width as usize,
         );
-        let cx = inner.x + cursor_x as u16;
+        let visible_height = inner.height as usize;
+        let start = cursor_y.saturating_add(1).saturating_sub(visible_height);
+        let cursor_y = cursor_y.saturating_sub(start);
+        let cx = inner.x + cursor_x.min(inner.width.saturating_sub(1) as usize) as u16;
         let cy = inner.y + cursor_y as u16;
-        if cy < inner.y + inner.height {
+        if inner.width > 0 && cy < inner.y + inner.height {
             f.set_cursor_position((cx, cy));
         }
     }
 }
 
 pub(crate) fn compute_cursor_position(input: &str, cursor: usize, width: usize) -> (usize, usize) {
-    let before: String = input.chars().take(cursor).collect();
+    let before: Vec<char> = input.chars().take(cursor).collect();
     let mut x = 0usize;
     let mut y = 0usize;
-    for ch in before.chars() {
+    for (idx, ch) in before.iter().copied().enumerate() {
         if ch == '\n' {
             x = 0;
             y += 1;
         } else {
-            x += 1;
-            if width > 0 && x > width {
-                x = 1;
+            let ch_width = char_display_width(ch);
+            if width > 0 && ch_width > 0 && x + ch_width > width {
+                x = 0;
                 y += 1;
             }
+            x += ch_width;
         }
+
+        let next = before.get(idx + 1).copied();
+        if width > 0 && x == width && next.is_some_and(|ch| ch != '\n') {
+            x = 0;
+            y += 1;
+        }
+    }
+    if width > 0 && x == width && before.last().is_some_and(|ch| *ch != '\n') {
+        x = 0;
+        y += 1;
     }
     (x, y)
 }

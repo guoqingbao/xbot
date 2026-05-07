@@ -391,7 +391,8 @@ impl ComposerState {
     }
 
     pub fn insert_paste(&mut self, text: &str) {
-        for ch in text.chars() {
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        for ch in normalized.chars() {
             self.insert_char(ch);
         }
     }
@@ -1635,6 +1636,14 @@ mod tests {
         c.insert_char('b');
         assert_eq!(c.input, "a\nb");
         assert_eq!(c.cursor, 3);
+    }
+
+    #[test]
+    fn composer_paste_normalizes_crlf_newlines() {
+        let mut c = ComposerState::new();
+        c.insert_paste("a\r\nb\rc");
+        assert_eq!(c.input, "a\nb\nc");
+        assert_eq!(c.cursor, 5);
     }
 
     #[test]
