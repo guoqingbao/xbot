@@ -171,3 +171,39 @@ fn all_orphan_prefix_stripped() {
     assert_eq!(history.first().unwrap().role, "user");
     assert_eq!(history.len(), 2);
 }
+
+#[test]
+fn get_history_preserves_assistant_reasoning_for_prefix_cache() {
+    let mut session = Session::new("test:reasoning");
+    session.messages.push(ChatMessage::text("user", "question"));
+    session.messages.push(ChatMessage {
+        role: "assistant".to_string(),
+        content: Some(json!("answer")),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+        timestamp: Some("stored timestamp".to_string()),
+        reasoning_content: Some("stored reasoning".to_string()),
+        thinking_blocks: Some(vec![json!({
+            "type": "thinking",
+            "thinking": "stored thinking",
+            "signature": "sig",
+        })]),
+        metadata: None,
+    });
+
+    let history = session.get_history(0);
+
+    assert_eq!(history.len(), 2);
+    assert_eq!(
+        history[1].reasoning_content.as_deref(),
+        Some("stored reasoning")
+    );
+    assert_eq!(
+        history[1].thinking_blocks.as_ref().unwrap()[0]
+            .get("signature")
+            .and_then(|value| value.as_str()),
+        Some("sig")
+    );
+    assert!(history[1].timestamp.is_none());
+}

@@ -79,16 +79,14 @@ impl ContextBuilder {
         chat_id: Option<&str>,
         current_role: &str,
     ) -> Result<Vec<ChatMessage>> {
-        let current_content = self.build_user_content(current_message, media)?;
+        let mut current_content = self.build_user_content(current_message, media)?;
         let suggested_skills = self.skills.suggest_skills(current_message, 3);
-        let merged = current_content;
 
         let mut messages = Vec::with_capacity(history.len() + 2);
         let mut system_prompt = self.build_system_prompt(current_message)?;
         if current_role == "user" {
             let runtime_ctx = self.build_runtime_context(channel, chat_id);
-            system_prompt.push_str("\n\n---\n\n");
-            system_prompt.push_str(&runtime_ctx);
+            current_content = prepend_text_content(runtime_ctx, current_content);
         }
         if !suggested_skills.is_empty() {
             let content = self.skills.load_skills_for_context(&suggested_skills);
@@ -111,7 +109,7 @@ impl ContextBuilder {
         messages.extend(history);
         messages.push(ChatMessage {
             role: current_role.to_string(),
-            content: Some(merged),
+            content: Some(current_content),
             tool_calls: None,
             tool_call_id: None,
             name: None,
@@ -398,6 +396,17 @@ Be concise and direct. State what you're doing, not how you feel about it.
     }
 }
 
+fn prepend_text_content(prefix: String, content: Value) -> Value {
+    match content {
+        Value::String(text) => Value::String(format!("{prefix}\n\n{text}")),
+        Value::Array(mut blocks) => {
+            blocks.insert(0, json!({"type": "text", "text": prefix}));
+            Value::Array(blocks)
+        }
+        other => Value::Array(vec![json!({"type": "text", "text": prefix}), other]),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ContextBuilder;
@@ -421,6 +430,30 @@ mod tests {
         let prompt = builder.build_system_prompt("finish task").unwrap();
         assert!(!prompt.contains("## Memory"));
         assert!(!prompt.contains("On `memorize`"));
+    }
+
+    #[test]
+    fn build_messages_places_runtime_context_on_current_user_message() {
+        let dir = tempdir().unwrap();
+        let builder = ContextBuilder::new(dir.path(), 1024).unwrap();
+        let messages = builder
+            .build_messages(
+                Vec::new(),
+                "continue",
+                None,
+                Some("cli"),
+                Some("direct"),
+                "user",
+            )
+            .unwrap();
+
+        let system = messages[0].content_as_text().unwrap();
+        let user = messages[1].content_as_text().unwrap();
+
+        assert!(!system.contains(ContextBuilder::RUNTIME_CONTEXT_TAG));
+        assert!(user.starts_with(ContextBuilder::RUNTIME_CONTEXT_TAG));
+        assert!(user.contains("Channel: cli"));
+        assert!(user.ends_with("continue"));
     }
 
     #[test]

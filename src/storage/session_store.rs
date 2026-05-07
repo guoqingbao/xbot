@@ -172,8 +172,8 @@ impl Session {
                 tool_call_id: message.tool_call_id,
                 name: message.name,
                 timestamp: None,
-                reasoning_content: None,
-                thinking_blocks: None,
+                reasoning_content: message.reasoning_content,
+                thinking_blocks: message.thinking_blocks,
                 metadata: None,
             })
             .collect()
