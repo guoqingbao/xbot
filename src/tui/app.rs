@@ -245,10 +245,12 @@ impl LineBuffer {
         }
     }
 
+    #[allow(dead_code)]
     pub fn push(&mut self, text: &str) {
         self.pending.push_str(text);
     }
 
+    #[allow(dead_code)]
     pub fn take_committable(&mut self) -> String {
         let Some(last_nl) = self.pending.rfind('\n') else {
             return String::new();
@@ -583,12 +585,8 @@ impl App {
                     let streaming = self.active.get_or_insert_with(ActiveStreaming::default);
                     streaming.push_thinking(&clean);
                 } else {
-                    self.line_buffer.push(&clean);
-                    let committable = self.line_buffer.take_committable();
-                    if !committable.is_empty() {
-                        let streaming = self.active.get_or_insert_with(ActiveStreaming::default);
-                        streaming.push_text(&committable);
-                    }
+                    let streaming = self.active.get_or_insert_with(ActiveStreaming::default);
+                    streaming.push_text(&clean);
                 }
             }
             EngineEvent::CollapseThinking => {}
@@ -1923,6 +1921,33 @@ mod tests {
         assert!(matches!(&active.segments[0], StreamSegment::Text(s) if s == "hello "));
         assert!(matches!(&active.segments[1], StreamSegment::Tool(_)));
         assert!(matches!(&active.segments[2], StreamSegment::Text(s) if s == "world"));
+    }
+
+    #[test]
+    fn stream_delta_without_newline_stays_before_later_tool() {
+        let mut app = App::new(
+            "test".into(),
+            "test".into(),
+            PathBuf::from("/tmp"),
+            0,
+            "0/1000".into(),
+            None,
+        );
+
+        app.handle_engine_event(EngineEvent::StreamDelta("partial answer".into()));
+        app.handle_engine_event(EngineEvent::ToolHint {
+            tool_name: Some("read_file".into()),
+            tool_args: Some(serde_json::json!({ "path": "src/main.rs" })),
+        });
+
+        let active = app.active.as_ref().unwrap();
+        assert_eq!(active.segments.len(), 2);
+        assert!(matches!(
+            &active.segments[0],
+            StreamSegment::Text(text) if text == "partial answer"
+        ));
+        assert!(matches!(&active.segments[1], StreamSegment::Tool(_)));
+        assert_eq!(app.line_buffer.pending_preview(), "");
     }
 
     #[test]

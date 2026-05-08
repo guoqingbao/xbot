@@ -801,6 +801,32 @@ impl OpenAiLikeStreamState {
             thinking_blocks: (!self.thinking_blocks.is_empty()).then_some(self.thinking_blocks),
         }
     }
+
+    fn push_content_update(&mut self, text: &str) -> String {
+        let delta = normalize_stream_text_update(&self.content, text);
+        if delta.len() == text.len() {
+            self.content.push_str(text);
+        } else if text.len() > self.content.len() && text.starts_with(&self.content) {
+            self.content = text.to_string();
+        }
+        delta
+    }
+}
+
+fn normalize_stream_text_update(current: &str, update: &str) -> String {
+    if update.is_empty() {
+        return String::new();
+    }
+    if current.is_empty() {
+        return update.to_string();
+    }
+    if update.starts_with(current) {
+        return update[current.len()..].to_string();
+    }
+    if current.starts_with(update) {
+        return String::new();
+    }
+    update.to_string()
 }
 
 fn emit_text_delta(text_stream: Option<&TextStreamCallback>, delta: &str) {
@@ -877,8 +903,8 @@ fn apply_openai_like_sse_event(
         return Ok(());
     };
     if let Some(text) = extract_delta_text(delta.get("content")) {
-        emit_text_delta(text_stream, &text);
-        state.content.push_str(&text);
+        let text_delta = state.push_content_update(&text);
+        emit_text_delta(text_stream, &text_delta);
     }
     if let Some(reasoning) = delta.get("reasoning_content").and_then(Value::as_str) {
         state.reasoning_content.push_str(reasoning);
@@ -1017,7 +1043,7 @@ pub type SharedProvider = Arc<dyn LlmProvider>;
 mod tests {
     use super::{
         LlmProvider, LlmResponse, LlmUsage, ToolCallRequest, is_transient_error_message,
-        parse_openai_like_sse_text,
+        normalize_stream_text_update, parse_openai_like_sse_text,
     };
     use crate::storage::ChatMessage;
     use anyhow::{Result, anyhow};
@@ -1096,6 +1122,33 @@ mod tests {
         assert_eq!(response.content.as_deref(), Some("Hello world"));
         assert_eq!(response.usage.prompt_tokens, 12);
         assert_eq!(response.usage.completion_tokens, 4);
+    }
+
+    #[test]
+    fn parses_cumulative_openai_compatible_stream_chunks() {
+        let response = parse_openai_like_sse_text(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n\
+             data: {\"choices\":[{\"delta\":{\"content\":\"Hello world\"},\"finish_reason\":null}]}\n\n\
+             data: {\"choices\":[{\"delta\":{\"content\":\"Hello world\"},\"finish_reason\":null}]}\n\n\
+             data: {\"choices\":[{\"delta\":{\"content\":\"Hello world!\"},\"finish_reason\":\"stop\"}]}\n\n\
+             data: [DONE]\n\n",
+        )
+        .unwrap();
+        assert_eq!(response.content.as_deref(), Some("Hello world!"));
+    }
+
+    #[test]
+    fn normalizes_cumulative_stream_updates_to_suffixes() {
+        assert_eq!(normalize_stream_text_update("", "Hello"), "Hello");
+        assert_eq!(
+            normalize_stream_text_update("Hello", "Hello world"),
+            " world"
+        );
+        assert_eq!(
+            normalize_stream_text_update("Hello world", "Hello world"),
+            ""
+        );
+        assert_eq!(normalize_stream_text_update("Hello", " there"), " there");
     }
 
     #[test]

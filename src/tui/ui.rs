@@ -168,16 +168,6 @@ fn render_transcript(f: &mut Frame, area: Rect, app: &mut App) {
         ));
     }
 
-    let pending_preview = app.line_buffer.pending_preview();
-    if !pending_preview.is_empty() && app.is_busy() {
-        let md = markdown::markdown_to_lines(pending_preview, inner_width.saturating_sub(2).max(1));
-        for ml in md {
-            let mut prefixed = vec![Span::raw("  ")];
-            prefixed.extend(ml.spans);
-            lines.push(Line::from(prefixed));
-        }
-    }
-
     if app.agent_state == AgentState::WaitingSubagents {
         lines.push(Line::from(""));
         let running = app.running_subagent_count();
@@ -211,7 +201,7 @@ fn render_transcript(f: &mut Frame, area: Rect, app: &mut App) {
         }
     } else if app.is_busy()
         && app.active.as_ref().map_or(true, |a| !a.has_content())
-        && pending_preview.is_empty()
+        && app.line_buffer.pending_preview().is_empty()
     {
         lines.push(Line::from(""));
         let label = match app.agent_state {
