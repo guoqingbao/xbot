@@ -437,11 +437,16 @@ async fn status(config_path: Option<&Path>, model_override: Option<String>) -> R
         .provider_name_for_model(Some(&model))
         .unwrap_or_else(|| "unknown".to_string());
     let api_base = config.provider_api_base_for_model(Some(&model));
+    let api_key = config
+        .provider_for_model(Some(&model))
+        .map(|(_, cfg)| cfg.api_key)
+        .filter(|k| !k.trim().is_empty());
     let system = rbot::observability::collect_system_snapshot().await;
     let provider = rbot::observability::collect_provider_model_snapshot(
         &provider_name,
         &model,
         api_base.as_deref(),
+        api_key.as_deref(),
     )
     .await;
     let session_manager = rbot::storage::SessionManager::new(&workspace)?;

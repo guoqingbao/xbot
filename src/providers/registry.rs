@@ -108,7 +108,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         is_local: false,
         detect_by_key_prefix: "",
         detect_by_base_keyword: "",
-        default_api_base: "",
+        default_api_base: "https://api.deepseek.com",
         is_oauth: false,
     },
     ProviderSpec {

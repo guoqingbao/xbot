@@ -78,16 +78,17 @@ pub async fn run_config_provider(config_path: Option<&Path>) -> Result<()> {
                 None
             }
         });
-        let api_key_for_snapshot = if provider_cfg.api_key.trim().is_empty() {
-            "dummy"
+        let api_key_opt = if provider_cfg.api_key.trim().is_empty() {
+            None
         } else {
-            &provider_cfg.api_key
+            Some(provider_cfg.api_key.as_str())
         };
 
         let snapshot = rbot::observability::collect_provider_model_snapshot(
             &selected_provider_name,
-            api_key_for_snapshot,
+            &config.agents.defaults.model,
             api_base.as_deref(),
+            api_key_opt,
         )
         .await;
 
@@ -264,9 +265,38 @@ async fn prompt_provider_entry(
             );
         }
 
-        Text::new(model_prompt)
-            .with_default(&config.agents.defaults.model)
-            .prompt()?
+        let api_base = provider_cfg.api_base.clone().or_else(|| {
+            if !spec.default_api_base.is_empty() {
+                Some(spec.default_api_base.to_string())
+            } else {
+                None
+            }
+        });
+        let api_key_opt = if provider_cfg.api_key.trim().is_empty() {
+            None
+        } else {
+            Some(provider_cfg.api_key.as_str())
+        };
+
+        println!(
+            "{}",
+            Style::new().dim().apply_to("Fetching available models...")
+        );
+        let snapshot = rbot::observability::collect_provider_model_snapshot(
+            &selected_provider_name,
+            &config.agents.defaults.model,
+            api_base.as_deref(),
+            api_key_opt,
+        )
+        .await;
+
+        if !snapshot.available_models.is_empty() {
+            Select::new(model_prompt, snapshot.available_models).prompt()?
+        } else {
+            Text::new(model_prompt)
+                .with_default(&config.agents.defaults.model)
+                .prompt()?
+        }
     } else {
         let hint = if selected_provider_name == "ollama" {
             "(e.g. http://localhost:11434/v1)"

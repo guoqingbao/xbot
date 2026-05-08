@@ -394,6 +394,7 @@ pub async fn collect_provider_model_snapshot(
     provider_name: &str,
     model: &str,
     api_base: Option<&str>,
+    api_key: Option<&str>,
 ) -> ProviderModelSnapshot {
     let mut snapshot = ProviderModelSnapshot {
         provider_name: provider_name.to_string(),
@@ -417,7 +418,7 @@ pub async fn collect_provider_model_snapshot(
     if provider_name == "ollama" {
         collect_ollama_snapshot(&client, model, api_base, &mut snapshot).await;
     } else {
-        collect_openai_compatible_snapshot(&client, api_base, &mut snapshot).await;
+        collect_openai_compatible_snapshot(&client, api_base, api_key, &mut snapshot).await;
     }
     snapshot
 }
@@ -501,13 +502,14 @@ async fn collect_ollama_snapshot(
 async fn collect_openai_compatible_snapshot(
     client: &Client,
     api_base: &str,
+    api_key: Option<&str>,
     snapshot: &mut ProviderModelSnapshot,
 ) {
-    if let Ok(response) = client
-        .get(format!("{}/models", api_base.trim_end_matches('/')))
-        .send()
-        .await
-    {
+    let mut request = client.get(format!("{}/models", api_base.trim_end_matches('/')));
+    if let Some(key) = api_key.filter(|k| !k.trim().is_empty()) {
+        request = request.bearer_auth(key);
+    }
+    if let Ok(response) = request.send().await {
         if let Ok(payload) = response.json::<Value>().await {
             if let Some(models) = payload.get("data").and_then(Value::as_array) {
                 snapshot.available_models = models

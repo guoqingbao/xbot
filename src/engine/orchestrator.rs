@@ -423,15 +423,35 @@ impl AgentLoop {
         };
 
         let models = match self.provider.list_models().await {
-            Ok(models) => models,
-            Err(_) => return Ok(()),
+            Ok(models) if !models.is_empty() => models,
+            _ => {
+                // Provider doesn't support listing or returned empty; if the
+                // session model differs from the configured default, reset it
+                // so a stale model name from a previous provider isn't reused.
+                if session_model != self.model {
+                    let mut sessions = self.sessions.lock().expect("session manager lock poisoned");
+                    let mut session = sessions.get_or_create(session_key)?;
+                    session.metadata.insert(
+                        SESSION_MODEL_KEY.to_string(),
+                        Value::String(self.model.clone()),
+                    );
+                    sessions.save(&session)?;
+                }
+                return Ok(());
+            }
         };
-        let Some(resolved_model) = resolve_runtime_model_info(&models, &session_model) else {
-            return Ok(());
-        };
-        let resolved_context_window_tokens = resolved_model.context_window_tokens;
-        let model_changed = resolved_model.id != session_model;
-        let context_changed = resolved_context_window_tokens
+        let (new_model_id, new_context_window_tokens) =
+            if let Some(resolved) = resolve_runtime_model_info(&models, &session_model) {
+                (resolved.id.clone(), resolved.context_window_tokens)
+            } else {
+                // Session model not found in provider — reset to configured default
+                let fallback = resolve_runtime_model_info(&models, &self.model)
+                    .map(|m| (m.id.clone(), m.context_window_tokens))
+                    .unwrap_or_else(|| (self.model.clone(), None));
+                fallback
+            };
+        let model_changed = new_model_id != session_model;
+        let context_changed = new_context_window_tokens
             .is_some_and(|value| Some(value) != stored_context_window_tokens);
         if !model_changed && !context_changed {
             return Ok(());
@@ -442,9 +462,9 @@ impl AgentLoop {
             let mut session = sessions.get_or_create(session_key)?;
             session.metadata.insert(
                 SESSION_MODEL_KEY.to_string(),
-                Value::String(resolved_model.id.clone()),
+                Value::String(new_model_id.clone()),
             );
-            if let Some(context_window_tokens) = resolved_context_window_tokens {
+            if let Some(context_window_tokens) = new_context_window_tokens {
                 session.metadata.insert(
                     SESSION_CONTEXT_WINDOW_KEY.to_string(),
                     Value::from(context_window_tokens as u64),
@@ -459,10 +479,7 @@ impl AgentLoop {
             .expect("model switch callback lock poisoned")
             .clone()
         {
-            let _ = callback(
-                resolved_model.id.clone(),
-                resolved_model.context_window_tokens,
-            );
+            let _ = callback(new_model_id.clone(), new_context_window_tokens);
         }
 
         Ok(())

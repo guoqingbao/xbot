@@ -285,6 +285,11 @@ async fn admin_overview(State(state): State<GatewayState>) -> Response {
         .config
         .provider_name_for_model(Some(&agent_snapshot.model))
         .unwrap_or_else(|| "unknown".to_string());
+    let api_key = state
+        .config
+        .provider_for_model(Some(&agent_snapshot.model))
+        .map(|(_, cfg)| cfg.api_key)
+        .filter(|k| !k.trim().is_empty());
     let provider = collect_provider_model_snapshot(
         &provider_name,
         &agent_snapshot.model,
@@ -292,6 +297,7 @@ async fn admin_overview(State(state): State<GatewayState>) -> Response {
             .config
             .provider_api_base_for_model(Some(&agent_snapshot.model))
             .as_deref(),
+        api_key.as_deref(),
     )
     .await;
     let cron_status = admin.cron.status().ok();

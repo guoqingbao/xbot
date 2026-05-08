@@ -282,14 +282,17 @@ pub fn build_provider_client(
             proxy,
             provider_cfg.reasoning_effort.clone(),
         )?)),
-        _ => Ok(std::sync::Arc::new(OpenAiCompatibleProvider::new(
-            provider_cfg.api_key.clone(),
-            api_base,
-            model.to_string(),
-            provider_cfg.extra_headers.clone(),
-            generation,
-            proxy,
-        )?)),
+        _ => Ok(std::sync::Arc::new(
+            OpenAiCompatibleProvider::with_reasoning(
+                provider_cfg.api_key.clone(),
+                api_base,
+                model.to_string(),
+                provider_cfg.extra_headers.clone(),
+                generation,
+                proxy,
+                provider_cfg.reasoning_effort.clone(),
+            )?,
+        )),
     }
 }
 

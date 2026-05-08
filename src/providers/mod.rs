@@ -226,6 +226,7 @@ pub struct OpenAiCompatibleProvider {
     default_model: String,
     extra_headers: BTreeMap<String, String>,
     generation: GenerationSettings,
+    reasoning_effort: Option<String>,
 }
 
 impl OpenAiCompatibleProvider {
@@ -236,6 +237,26 @@ impl OpenAiCompatibleProvider {
         extra_headers: BTreeMap<String, String>,
         generation: GenerationSettings,
         proxy: Option<&str>,
+    ) -> Result<Self> {
+        Self::with_reasoning(
+            api_key,
+            api_base,
+            default_model,
+            extra_headers,
+            generation,
+            proxy,
+            None,
+        )
+    }
+
+    pub fn with_reasoning(
+        api_key: String,
+        api_base: Option<String>,
+        default_model: String,
+        extra_headers: BTreeMap<String, String>,
+        generation: GenerationSettings,
+        proxy: Option<&str>,
+        reasoning_effort: Option<String>,
     ) -> Result<Self> {
         let mut builder = Client::builder().timeout(Duration::from_secs(600));
         if let Some(proxy) = proxy {
@@ -248,6 +269,7 @@ impl OpenAiCompatibleProvider {
             default_model,
             extra_headers,
             generation,
+            reasoning_effort,
         })
     }
 
@@ -444,6 +466,12 @@ impl LlmProvider for OpenAiCompatibleProvider {
         });
         if let Some(temp) = effective_temp {
             payload["temperature"] = json!(temp);
+        }
+        if let Some(ref effort) = self.reasoning_effort {
+            let effort = effort.trim();
+            if !effort.is_empty() {
+                payload["reasoning_effort"] = json!(effort);
+            }
         }
         let mut request = self.client.post(endpoint).json(&payload);
         if !self.api_key.trim().is_empty() {
