@@ -208,12 +208,19 @@ impl SubagentManager {
     }
 
     pub async fn cancel_by_session(&self, session_key: &str) -> usize {
+        self.clear_session_state(session_key, false)
+    }
+
+    pub fn reset_session(&self, session_key: &str) -> usize {
+        self.clear_session_state(session_key, true)
+    }
+
+    fn clear_session_state(&self, session_key: &str, clear_results: bool) -> usize {
         let task_ids = self
             .session_tasks
             .lock()
             .expect("subagent session lock poisoned")
-            .get(session_key)
-            .cloned()
+            .remove(session_key)
             .unwrap_or_default()
             .into_iter()
             .collect::<Vec<_>>();
@@ -232,10 +239,23 @@ impl SubagentManager {
                 cancelled += 1;
             }
         }
-        self.session_tasks
-            .lock()
-            .expect("subagent session lock poisoned")
-            .remove(session_key);
+        if clear_results {
+            let cleared_results = self
+                .completed_results
+                .lock()
+                .expect("subagent results lock poisoned")
+                .remove(session_key)
+                .unwrap_or_default();
+            if !cleared_results.is_empty() {
+                let mut consumed = self
+                    .consumed_results
+                    .lock()
+                    .expect("subagent consumed results lock poisoned");
+                for result in cleared_results {
+                    consumed.insert(result.task_id);
+                }
+            }
+        }
         self.result_notify.notify_waiters();
         cancelled
     }

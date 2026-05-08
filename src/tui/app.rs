@@ -576,6 +576,10 @@ impl App {
                     return;
                 }
                 if is_reasoning {
+                    let clean = strip_runtime_metadata_from_reasoning(&clean);
+                    if clean.is_empty() {
+                        return;
+                    }
                     let streaming = self.active.get_or_insert_with(ActiveStreaming::default);
                     streaming.push_thinking(&clean);
                 } else {
@@ -645,7 +649,8 @@ impl App {
             } => {
                 self.flush_line_buffer();
                 let clean_content = strip_ansi(&content);
-                let clean_reasoning = reasoning.map(|r| strip_ansi(&r));
+                let clean_reasoning =
+                    reasoning.map(|r| strip_runtime_metadata_from_reasoning(&strip_ansi(&r)));
                 if self.running_subagent_count() > 0 {
                     let had_streamed_text =
                         self.active.as_ref().is_some_and(|a| a.has_text_content());
@@ -1108,6 +1113,20 @@ impl App {
         self.auto_scroll = true;
     }
 
+    fn reset_session_view(&mut self) {
+        self.history.clear();
+        self.active = None;
+        self.line_buffer = LineBuffer::new();
+        self.scroll_offset = 0;
+        self.auto_scroll = true;
+        self.last_summary = None;
+        self.session_msg_count = 0;
+        self.subagents.clear();
+        self.pending_subagent_results.clear();
+        self.held_turn = None;
+        self.show_sidebar = false;
+    }
+
     fn maybe_dequeue(&mut self) {
         if self.exit_after_turn {
             self.should_quit = true;
@@ -1331,12 +1350,8 @@ impl App {
                 }
             }
             LocalCommand::Clear => {
-                self.history.clear();
-                self.active = None;
-                self.line_buffer = LineBuffer::new();
-                self.scroll_offset = 0;
-                self.auto_scroll = true;
-                self.last_summary = None;
+                self.reset_session_view();
+                self.pending.clear();
                 self.pending
                     .push_back(QueuedPrompt::internal("/new".to_string()));
             }
@@ -1427,11 +1442,10 @@ fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "/help" | "help" | "?" => Some(LocalCommand::Help),
         "/exit" | "/quit" | "exit" | "quit" => Some(LocalCommand::Exit),
         "/stop" | "stop" | "[stop]" => Some(LocalCommand::Stop),
-        "/clear" | "clear" => Some(LocalCommand::Clear),
+        "/clear" | "clear" | "/new" | "new" => Some(LocalCommand::Clear),
         "/agents" => Some(LocalCommand::Agents),
         _ => {
-            if lower.starts_with("/new")
-                || lower.starts_with("/memorize")
+            if lower.starts_with("/memorize")
                 || lower.starts_with("/model")
                 || lower.starts_with("/status")
             {
@@ -1507,6 +1521,19 @@ fn strip_tool_markers(text: &str) -> String {
     } else {
         result.into_owned()
     }
+}
+
+fn strip_runtime_metadata_from_reasoning(text: &str) -> String {
+    text.lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !trimmed.starts_with(rbot::engine::ContextBuilder::RUNTIME_CONTEXT_TAG)
+                && !trimmed.starts_with("Current Time:")
+                && !trimmed.starts_with("Channel:")
+                && !trimmed.starts_with("Chat ID:")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn extract_edit_diff(tool_name: &str, args: Option<&Value>) -> Option<EditDiff> {
@@ -1804,6 +1831,10 @@ mod tests {
             Some(LocalCommand::Clear)
         ));
         assert!(matches!(
+            parse_local_command("/new"),
+            Some(LocalCommand::Clear)
+        ));
+        assert!(matches!(
             parse_local_command("/agents"),
             Some(LocalCommand::Agents)
         ));
@@ -1859,6 +1890,19 @@ mod tests {
         assert_eq!(strip_ansi("hello \x1b[1mworld\x1b[0m"), "hello world");
         assert_eq!(strip_ansi("no escapes"), "no escapes");
         assert_eq!(strip_ansi("\x1b[31mred\x1b[0m"), "red");
+    }
+
+    #[test]
+    fn strip_runtime_metadata_from_reasoning_hides_tui_noise() {
+        let reasoning = format!(
+            "I need context.\n{}\nCurrent Time: now\nChannel: cli\nChat ID: rbot\nNow solve.",
+            rbot::engine::ContextBuilder::RUNTIME_CONTEXT_TAG
+        );
+
+        assert_eq!(
+            strip_runtime_metadata_from_reasoning(&reasoning),
+            "I need context.\nNow solve."
+        );
     }
 
     #[test]
@@ -1936,5 +1980,51 @@ mod tests {
             app.subagents.get("abc").unwrap().status,
             SubagentStatus::Completed
         );
+    }
+
+    #[test]
+    fn clear_command_resets_subagent_render_state() {
+        let mut app = App::new(
+            "test".into(),
+            "test".into(),
+            PathBuf::from("/tmp"),
+            0,
+            "0/1000".into(),
+            None,
+        );
+        app.history.push(HistoryEntry::User("old prompt".into()));
+        app.session_msg_count = 3;
+        app.pending
+            .push_back(QueuedPrompt::user("stale queued".into()));
+        app.pending_subagent_results
+            .push(("abc".into(), "delegate".into(), "done fully".into()));
+        app.held_turn = Some(HeldTurn {
+            content: Some("held".into()),
+            reasoning: None,
+            summary: None,
+            note: None,
+        });
+        app.show_sidebar = true;
+        app.handle_engine_event(EngineEvent::SubagentStarted {
+            task_id: "abc".into(),
+            label: "delegate".into(),
+            task: "do something".into(),
+            model: "sub-model".into(),
+        });
+
+        app.composer.input = "/clear".into();
+        app.composer.cursor = app.composer.input.chars().count();
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(app.history.is_empty());
+        assert!(app.subagents.is_empty());
+        assert!(app.pending_subagent_results.is_empty());
+        assert!(app.held_turn.is_none());
+        assert!(!app.show_sidebar);
+        assert_eq!(app.session_msg_count, 0);
+        assert_eq!(app.pending.len(), 1);
+        let queued = app.pending.front().unwrap();
+        assert_eq!(queued.prompt, "/new");
+        assert!(!queued.show_in_history);
     }
 }

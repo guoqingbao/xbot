@@ -86,7 +86,7 @@ impl ContextBuilder {
         let mut system_prompt = self.build_system_prompt(current_message)?;
         if current_role == "user" {
             let runtime_ctx = self.build_runtime_context(channel, chat_id);
-            current_content = prepend_text_content(runtime_ctx, current_content);
+            current_content = append_text_content(current_content, runtime_ctx);
         }
         if !suggested_skills.is_empty() {
             let content = self.skills.load_skills_for_context(&suggested_skills);
@@ -396,14 +396,14 @@ Be concise and direct. State what you're doing, not how you feel about it.
     }
 }
 
-fn prepend_text_content(prefix: String, content: Value) -> Value {
+fn append_text_content(content: Value, suffix: String) -> Value {
     match content {
-        Value::String(text) => Value::String(format!("{prefix}\n\n{text}")),
+        Value::String(text) => Value::String(format!("{text}\n\n{suffix}")),
         Value::Array(mut blocks) => {
-            blocks.insert(0, json!({"type": "text", "text": prefix}));
+            blocks.push(json!({"type": "text", "text": suffix}));
             Value::Array(blocks)
         }
-        other => Value::Array(vec![json!({"type": "text", "text": prefix}), other]),
+        other => Value::Array(vec![other, json!({"type": "text", "text": suffix})]),
     }
 }
 
@@ -451,9 +451,9 @@ mod tests {
         let user = messages[1].content_as_text().unwrap();
 
         assert!(!system.contains(ContextBuilder::RUNTIME_CONTEXT_TAG));
-        assert!(user.starts_with(ContextBuilder::RUNTIME_CONTEXT_TAG));
+        assert!(user.starts_with("continue"));
         assert!(user.contains("Channel: cli"));
-        assert!(user.ends_with("continue"));
+        assert!(user.contains(ContextBuilder::RUNTIME_CONTEXT_TAG));
     }
 
     #[test]

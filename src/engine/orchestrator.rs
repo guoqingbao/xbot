@@ -355,6 +355,7 @@ impl AgentLoop {
                 self.maybe_consolidate_session(&mut session, context_window_tokens)?;
                 session.clear();
                 sessions.save(&session)?;
+                self.subagents.reset_session(session_key);
                 self.reset_session_announcement(session_key);
                 *self.last_usage.lock().expect("usage lock poisoned") = (0, 0, 0);
                 *self
@@ -2913,7 +2914,7 @@ fn truncate_for_diagnostic(text: &str, max_chars: usize) -> String {
 fn sanitize_message_for_storage(mut message: ChatMessage) -> Option<ChatMessage> {
     match &mut message.content {
         Some(Value::String(text)) => {
-            if text.starts_with(ContextBuilder::RUNTIME_CONTEXT_TAG) {
+            if text.contains(ContextBuilder::RUNTIME_CONTEXT_TAG) {
                 if message.role == "user" {
                     *text = strip_runtime_context_text(text);
                 } else {
@@ -2922,14 +2923,13 @@ fn sanitize_message_for_storage(mut message: ChatMessage) -> Option<ChatMessage>
             }
         }
         Some(Value::Array(blocks)) => {
-            if message.role == "user"
-                && blocks
-                    .first()
-                    .and_then(|block| block.get("text"))
-                    .and_then(Value::as_str)
-                    .is_some_and(|text| text.starts_with(ContextBuilder::RUNTIME_CONTEXT_TAG))
-            {
-                blocks.remove(0);
+            if message.role == "user" {
+                blocks.retain(|block| {
+                    !block
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| text.contains(ContextBuilder::RUNTIME_CONTEXT_TAG))
+                });
             }
             if blocks.is_empty() {
                 return None;
@@ -2941,12 +2941,20 @@ fn sanitize_message_for_storage(mut message: ChatMessage) -> Option<ChatMessage>
 }
 
 fn strip_runtime_context_text(text: &str) -> String {
-    if !text.starts_with(ContextBuilder::RUNTIME_CONTEXT_TAG) {
+    let Some(start) = text.find(ContextBuilder::RUNTIME_CONTEXT_TAG) else {
         return text.to_string();
+    };
+    let before = text[..start].trim_end();
+    let after_block = text[start..]
+        .split_once("\n\n")
+        .map(|(_, remainder)| remainder.trim_start())
+        .unwrap_or_default();
+    match (before.is_empty(), after_block.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => after_block.to_string(),
+        (false, true) => before.to_string(),
+        (false, false) => format!("{before}\n\n{after_block}"),
     }
-    text.split_once("\n\n")
-        .map(|(_, remainder)| remainder.to_string())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -3019,7 +3027,7 @@ mod tests {
         let message = ChatMessage::text(
             "user",
             format!(
-                "{}\nCurrent Time: now\nChannel: cli\nChat ID: direct\n\ncontinue investigating",
+                "continue investigating\n\n{}\nCurrent Time: now\nChannel: cli\nChat ID: direct",
                 crate::engine::ContextBuilder::RUNTIME_CONTEXT_TAG
             ),
         );
@@ -3035,15 +3043,15 @@ mod tests {
         let message = ChatMessage {
             role: "user".to_string(),
             content: Some(json!([
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                {"type": "text", "text": "look at this diagram"},
                 {
                     "type": "text",
                     "text": format!(
                         "{}\nCurrent Time: now\nChannel: cli\nChat ID: direct",
                         crate::engine::ContextBuilder::RUNTIME_CONTEXT_TAG
                     )
-                },
-                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
-                {"type": "text", "text": "look at this diagram"}
+                }
             ])),
             tool_calls: None,
             tool_call_id: None,

@@ -521,6 +521,71 @@ async fn stop_command_cancels_active_subagent_tasks() {
 }
 
 #[tokio::test]
+async fn clear_command_resets_active_subagent_tasks() {
+    let dir = tempdir().unwrap();
+    let provider = Arc::new(DeterministicSubagentProvider::new(SubagentMode::Slow));
+    let agent = AgentLoop::new(
+        provider,
+        dir.path(),
+        Some("test-model".to_string()),
+        6,
+        5,
+        8_000,
+        32 * 1024,
+        Default::default(),
+        None,
+        ExecToolConfig {
+            enable: false,
+            timeout: 60,
+            path_append: String::new(),
+        },
+        false,
+        None,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+
+    let agent = Arc::new(agent);
+    let active = {
+        let agent = agent.clone();
+        tokio::spawn(async move {
+            agent
+                .process_direct("delegate slow work", "cli:direct", "cli", "direct")
+                .await
+        })
+    };
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while agent.snapshot().unwrap().running_subagents == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "subagent did not start"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let cleared = agent
+        .process_direct("/clear", "cli:direct", "cli", "direct")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        cleared.content,
+        "New session started. Previous messages were cleared."
+    );
+    assert_eq!(agent.snapshot().unwrap().running_subagents, 0);
+
+    let active_response = tokio::time::timeout(Duration::from_secs(3), active)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(active_response.content, "Background task started.");
+}
+
+#[tokio::test]
 async fn runtime_stop_command_acknowledges_and_confirms_subagent_cancellation() {
     let dir = tempdir().unwrap();
     let provider = Arc::new(DeterministicSubagentProvider::new(SubagentMode::Slow));
