@@ -1,13 +1,16 @@
 use std::collections::{BTreeMap, VecDeque};
+use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
 use serde_json::Value;
 
-use rbot::util::tool_emoji;
+use rbot::util::{ensure_dir, tool_emoji, workspace_state_dir};
 
 const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const COMPOSER_HISTORY_LIMIT: usize = 10;
+const COMPOSER_HISTORY_FILE: &str = "tui_input_history.json";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentState {
@@ -219,6 +222,13 @@ impl ActiveStreaming {
             _ => false,
         })
     }
+
+    pub fn has_thinking_content(&self) -> bool {
+        self.segments.iter().any(|s| match s {
+            StreamSegment::Thinking(t) => !t.trim().is_empty(),
+            _ => false,
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -281,11 +291,16 @@ pub struct ComposerState {
 }
 
 impl ComposerState {
+    #[cfg(test)]
     fn new() -> Self {
+        Self::with_history(Vec::new())
+    }
+
+    fn with_history(history: Vec<String>) -> Self {
         Self {
             input: String::new(),
             cursor: 0,
-            history: Vec::new(),
+            history: trim_composer_history(history),
             history_index: None,
             draft: None,
         }
@@ -377,6 +392,7 @@ impl ComposerState {
         self.draft = None;
         if !text.trim().is_empty() {
             self.history.push(text.clone());
+            trim_composer_history_in_place(&mut self.history);
         }
         text
     }
@@ -464,6 +480,7 @@ pub struct App {
 
     pub approval_dialog: Option<ApprovalDialog>,
     pub approval_responder: Option<tokio::sync::oneshot::Sender<rbot::tools::ApprovalDecision>>,
+    composer_history_path: PathBuf,
 }
 
 #[derive(Clone)]
@@ -490,10 +507,12 @@ impl App {
         context_status: String,
         configured_subagent_model: Option<String>,
     ) -> Self {
+        let composer_history_path = composer_history_path(&workspace);
+        let composer_history = load_composer_history(&composer_history_path);
         Self {
             history: Vec::new(),
             active: None,
-            composer: ComposerState::new(),
+            composer: ComposerState::with_history(composer_history),
             line_buffer: LineBuffer::new(),
             scroll_offset: 0,
             auto_scroll: true,
@@ -519,6 +538,7 @@ impl App {
             held_turn: None,
             approval_dialog: None,
             approval_responder: None,
+            composer_history_path,
         }
     }
 
@@ -647,8 +667,13 @@ impl App {
             } => {
                 self.flush_line_buffer();
                 let clean_content = strip_ansi(&content);
+                let had_thinking = self
+                    .active
+                    .as_ref()
+                    .is_some_and(|a| a.has_thinking_content());
                 let clean_reasoning =
                     reasoning.map(|r| strip_runtime_metadata_from_reasoning(&strip_ansi(&r)));
+                let effective_reasoning = if had_thinking { None } else { clean_reasoning };
                 if self.running_subagent_count() > 0 {
                     let had_streamed_text =
                         self.active.as_ref().is_some_and(|a| a.has_text_content());
@@ -656,12 +681,12 @@ impl App {
                     if !had_streamed_text && !clean_content.trim().is_empty() {
                         self.history.push(HistoryEntry::Assistant {
                             content: clean_content.clone(),
-                            reasoning: clean_reasoning.clone(),
+                            reasoning: effective_reasoning.clone(),
                         });
                     }
                     self.held_turn = Some(HeldTurn {
                         content: Some(clean_content),
-                        reasoning: clean_reasoning,
+                        reasoning: effective_reasoning,
                         summary: Some(summary),
                         note: None,
                     });
@@ -674,12 +699,17 @@ impl App {
                     if !had_streamed_text && !clean_content.trim().is_empty() {
                         self.history.push(HistoryEntry::Assistant {
                             content: clean_content,
-                            reasoning: clean_reasoning,
+                            reasoning: effective_reasoning,
                         });
                     }
                     self.build_and_push_continuation();
                 } else {
-                    self.finalize_turn(Some(clean_content), clean_reasoning, Some(summary), None);
+                    self.finalize_turn(
+                        Some(clean_content),
+                        effective_reasoning,
+                        Some(summary),
+                        None,
+                    );
                 }
             }
             EngineEvent::TurnEmpty { note, summary } => {
@@ -935,12 +965,14 @@ impl App {
     ) {
         if let Some(streaming) = self.active.take() {
             let mut accumulated_text = String::new();
+            let mut had_thinking = false;
             for seg in streaming.segments {
                 match seg {
                     StreamSegment::Text(text) => {
                         accumulated_text.push_str(&text);
                     }
                     StreamSegment::Thinking(text) => {
+                        had_thinking = true;
                         if !accumulated_text.trim().is_empty() {
                             self.history.push(HistoryEntry::Assistant {
                                 content: std::mem::take(&mut accumulated_text),
@@ -1008,16 +1040,17 @@ impl App {
                 }
             }
 
-            let final_text = if accumulated_text.trim().is_empty() {
-                content.unwrap_or_default()
-            } else {
-                accumulated_text
+            let final_text = match content {
+                Some(final_content) if !final_content.trim().is_empty() => final_content,
+                _ => accumulated_text,
             };
+
+            let effective_reasoning = if had_thinking { None } else { reasoning };
 
             if !final_text.trim().is_empty() {
                 self.history.push(HistoryEntry::Assistant {
                     content: final_text,
-                    reasoning,
+                    reasoning: effective_reasoning,
                 });
             } else if let Some(note) = note {
                 self.history.push(HistoryEntry::System(format!("· {note}")));
@@ -1263,7 +1296,7 @@ impl App {
                     self.handle_local_command(local);
                     return;
                 }
-                let prompt = self.composer.take_input();
+                let prompt = self.take_composer_input();
                 self.pending.push_back(QueuedPrompt::user(prompt));
             }
             KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1328,7 +1361,7 @@ impl App {
     }
 
     fn handle_local_command(&mut self, cmd: LocalCommand) {
-        self.composer.take_input();
+        self.take_composer_input();
         match cmd {
             LocalCommand::Help => self.show_help = true,
             LocalCommand::Exit => {
@@ -1421,6 +1454,54 @@ impl App {
             parts.push(format_elapsed(s.elapsed));
         }
         parts.join(" · ")
+    }
+
+    fn take_composer_input(&mut self) -> String {
+        let text = self.composer.take_input();
+        save_composer_history(&self.composer_history_path, &self.composer.history);
+        text
+    }
+}
+
+fn composer_history_path(workspace: &std::path::Path) -> PathBuf {
+    workspace_state_dir(workspace).join(COMPOSER_HISTORY_FILE)
+}
+
+fn load_composer_history(path: &std::path::Path) -> Vec<String> {
+    let Ok(content) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(history) = serde_json::from_str::<Vec<String>>(&content) else {
+        return Vec::new();
+    };
+    trim_composer_history(history)
+}
+
+fn save_composer_history(path: &std::path::Path, history: &[String]) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if ensure_dir(parent).is_err() {
+        return;
+    }
+    let Ok(content) = serde_json::to_string_pretty(history) else {
+        return;
+    };
+    let _ = fs::write(path, format!("{content}\n"));
+}
+
+fn trim_composer_history(history: Vec<String>) -> Vec<String> {
+    let mut history = history
+        .into_iter()
+        .filter(|entry| !entry.trim().is_empty())
+        .collect::<Vec<_>>();
+    trim_composer_history_in_place(&mut history);
+    history
+}
+
+fn trim_composer_history_in_place(history: &mut Vec<String>) {
+    if history.len() > COMPOSER_HISTORY_LIMIT {
+        history.drain(..history.len() - COMPOSER_HISTORY_LIMIT);
     }
 }
 
@@ -1667,6 +1748,7 @@ pub fn format_elapsed(d: Duration) -> String {
 mod tests {
     use super::*;
     use crate::tui::ui::compute_cursor_position;
+    use tempfile::tempdir;
 
     #[test]
     fn composer_basic_editing() {
@@ -1811,6 +1893,76 @@ mod tests {
     }
 
     #[test]
+    fn composer_history_keeps_last_ten_inputs() {
+        let mut c = ComposerState::new();
+        for i in 0..12 {
+            c.input = format!("prompt {i}");
+            c.cursor = c.input.chars().count();
+            c.take_input();
+        }
+
+        assert_eq!(c.history.len(), 10);
+        assert_eq!(c.history.first().map(String::as_str), Some("prompt 2"));
+        assert_eq!(c.history.last().map(String::as_str), Some("prompt 11"));
+    }
+
+    #[test]
+    fn app_persists_composer_history_across_instances() {
+        let dir = tempdir().unwrap();
+        let workspace = dir.path().to_path_buf();
+        let mut app = App::new(
+            "main".into(),
+            "test".into(),
+            workspace.clone(),
+            0,
+            "0/1000".into(),
+            None,
+        );
+        app.composer.input = "remember me".into();
+        app.composer.cursor = app.composer.input.chars().count();
+
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let app = App::new(
+            "main".into(),
+            "test".into(),
+            workspace,
+            0,
+            "0/1000".into(),
+            None,
+        );
+        assert_eq!(app.composer.history, vec!["remember me"]);
+    }
+
+    #[test]
+    fn app_loads_only_last_ten_persisted_history_entries() {
+        let dir = tempdir().unwrap();
+        let history_path = composer_history_path(dir.path());
+        ensure_dir(history_path.parent().unwrap()).unwrap();
+        let history = (0..12).map(|i| format!("prompt {i}")).collect::<Vec<_>>();
+        fs::write(&history_path, serde_json::to_string(&history).unwrap()).unwrap();
+
+        let app = App::new(
+            "main".into(),
+            "test".into(),
+            dir.path().to_path_buf(),
+            0,
+            "0/1000".into(),
+            None,
+        );
+
+        assert_eq!(app.composer.history.len(), 10);
+        assert_eq!(
+            app.composer.history.first().map(String::as_str),
+            Some("prompt 2")
+        );
+        assert_eq!(
+            app.composer.history.last().map(String::as_str),
+            Some("prompt 11")
+        );
+    }
+
+    #[test]
     fn local_commands_parsed() {
         assert!(matches!(
             parse_local_command("/help"),
@@ -1948,6 +2100,36 @@ mod tests {
         ));
         assert!(matches!(&active.segments[1], StreamSegment::Tool(_)));
         assert_eq!(app.line_buffer.pending_preview(), "");
+    }
+
+    #[test]
+    fn completed_turn_prefers_final_content_over_stream_tail() {
+        let mut app = App::new(
+            "test".into(),
+            "test".into(),
+            PathBuf::from("/tmp"),
+            0,
+            "0/1000".into(),
+            None,
+        );
+
+        app.handle_engine_event(EngineEvent::StreamDelta("first second - item".to_string()));
+        app.handle_engine_event(EngineEvent::TurnComplete {
+            content: "first\nsecond\n- item".to_string(),
+            reasoning: None,
+            summary: TurnSummary {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                cached_tokens: 0,
+                elapsed: Duration::from_millis(1),
+            },
+        });
+
+        let assistant = app.history.iter().find_map(|entry| match entry {
+            HistoryEntry::Assistant { content, .. } => Some(content.as_str()),
+            _ => None,
+        });
+        assert_eq!(assistant, Some("first\nsecond\n- item"));
     }
 
     #[test]

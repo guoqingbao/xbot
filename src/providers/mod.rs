@@ -820,11 +820,11 @@ fn normalize_stream_text_update(current: &str, update: &str) -> String {
     if current.is_empty() {
         return update.to_string();
     }
+    if update == current {
+        return String::new();
+    }
     if update.starts_with(current) {
         return update[current.len()..].to_string();
-    }
-    if current.starts_with(update) {
-        return String::new();
     }
     update.to_string()
 }
@@ -1149,6 +1149,16 @@ mod tests {
             ""
         );
         assert_eq!(normalize_stream_text_update("Hello", " there"), " there");
+        assert_eq!(
+            normalize_stream_text_update("\n\nHello world", "\n"),
+            "\n",
+            "short incremental newline must not be suppressed"
+        );
+        assert_eq!(
+            normalize_stream_text_update("Hello, world!", ","),
+            ",",
+            "short incremental punctuation must not be suppressed"
+        );
     }
 
     #[test]

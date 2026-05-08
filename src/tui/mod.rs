@@ -10,9 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-};
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -62,7 +60,6 @@ impl Drop for TerminalGuard {
         let mut stdout = io::stdout();
         let _ = execute!(
             stdout,
-            DisableMouseCapture,
             DisableBracketedPaste,
             LeaveAlternateScreen,
             cursor::Show
@@ -90,7 +87,6 @@ pub async fn run_tui_repl(
     execute!(
         stdout,
         EnterAlternateScreen,
-        EnableMouseCapture,
         EnableBracketedPaste,
         cursor::Hide
     )?;
@@ -486,7 +482,6 @@ fn install_panic_hook() {
         let mut stdout = io::stdout();
         let _ = execute!(
             stdout,
-            DisableMouseCapture,
             DisableBracketedPaste,
             LeaveAlternateScreen,
             cursor::Show

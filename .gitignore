@@ -1,5 +1,10 @@
 /target
-/Cargo.lock
+/vendor
+/npm/vendor
+/npm/README.md
+/npm/LICENSE.txt
+/npm/docs
+/npm/skills
 .vscode/
 .idea/
 AGENTS.md
@@ -11,3 +16,5 @@ CLAUDE.md
 *.sqlite
 .rbot/
 openrouter_models.json
+instruction.md
+Cargo.lock

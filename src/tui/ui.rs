@@ -538,7 +538,7 @@ fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let w = width.saturating_sub(4).max(1);
 
-    for entry in &app.history {
+    for (idx, entry) in app.history.iter().enumerate() {
         match entry {
             HistoryEntry::User(text) => {
                 push_blank(&mut lines);
@@ -564,8 +564,15 @@ fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                 }
             }
             HistoryEntry::Assistant { content, reasoning } => {
+                let follows_thinking =
+                    idx > 0 && matches!(app.history[idx - 1], HistoryEntry::Thinking(_));
+                let has_reasoning = reasoning
+                    .as_deref()
+                    .is_some_and(|text| !text.trim().is_empty());
                 render_reasoning_block(&mut lines, reasoning.as_deref());
-                push_blank(&mut lines);
+                if !follows_thinking && !has_reasoning {
+                    push_blank(&mut lines);
+                }
                 let md_lines = markdown::markdown_to_lines(content, w);
                 for ml in md_lines {
                     let mut prefixed = vec![Span::raw("  ")];
@@ -805,7 +812,9 @@ fn build_active_lines(
         match seg {
             StreamSegment::Text(content) => {
                 if !content.is_empty() {
-                    push_blank(&mut lines);
+                    if i == 0 || !matches!(active.segments[i - 1], StreamSegment::Thinking(_)) {
+                        push_blank(&mut lines);
+                    }
                     let md_lines = markdown::markdown_to_lines(content, w);
                     for ml in md_lines {
                         let mut prefixed = vec![Span::raw("  ")];
@@ -1089,6 +1098,70 @@ pub mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(plain, vec!["  ›   let", "    value = 1;"]);
+    }
+
+    #[test]
+    fn assistant_after_thinking_has_no_extra_blank_line() {
+        let mut app = App::new(
+            "main".into(),
+            "test".into(),
+            PathBuf::from("/tmp"),
+            0,
+            "0/1000".into(),
+            None,
+        );
+        app.history.push(HistoryEntry::Thinking("checking".into()));
+        app.history.push(HistoryEntry::Assistant {
+            content: "answer".into(),
+            reasoning: None,
+        });
+
+        let lines = build_transcript_lines(&app, 40);
+        let plain = lines
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            plain,
+            vec!["  ▼ Thinking Process", "    checking", "  answer"]
+        );
+    }
+
+    #[test]
+    fn active_text_after_thinking_has_no_extra_blank_line() {
+        let app = App::new(
+            "main".into(),
+            "test".into(),
+            PathBuf::from("/tmp"),
+            0,
+            "0/1000".into(),
+            None,
+        );
+        let mut active = ActiveStreaming::default();
+        active.push_thinking("checking");
+        active.push_text("answer");
+
+        let lines = build_active_lines(&active, &app, 40, 0);
+        let plain = lines
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            plain,
+            vec!["  ▼ Thinking Process", "    checking", "  answer", "  ▍"]
+        );
     }
 }
 
