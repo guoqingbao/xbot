@@ -132,6 +132,12 @@ pub async fn run_tui_repl(
                 detail,
                 step,
             },
+            SubagentNotification::Reasoning { task_id, content } => {
+                EngineEvent::SubagentReasoning { task_id, content }
+            }
+            SubagentNotification::TextDelta { task_id, content } => {
+                EngineEvent::SubagentTextDelta { task_id, content }
+            }
             SubagentNotification::Completed {
                 task_id,
                 label,
@@ -190,6 +196,7 @@ pub async fn run_tui_repl(
 
         if app.cancel_requested {
             app.cancel_requested = false;
+            agent.request_cancellation(&session_key);
             if let Some(handle) = active_turn.take() {
                 handle.abort();
                 agent.set_progress_sender(None);
@@ -199,6 +206,7 @@ pub async fn run_tui_repl(
             tokio::spawn(async move {
                 agent_c.cancel_subagents(&sk).await;
             });
+            agent.cancel_session(&session_key);
             app.agent_state = AS::Ready;
             app.pending.clear();
             app.flush_active_as_cancelled();
@@ -306,9 +314,14 @@ fn spawn_turn(
                 });
             }
             Ok(None) => {
+                let was_cancelled = agent.is_session_cancelled(&session_key);
                 let summary = summary_from_snapshot(started.elapsed());
                 let _ = tx.send(EngineEvent::TurnEmpty {
-                    note: "no direct reply".to_string(),
+                    note: if was_cancelled {
+                        "turn cancelled".to_string()
+                    } else {
+                        "no direct reply".to_string()
+                    },
                     summary,
                 });
             }

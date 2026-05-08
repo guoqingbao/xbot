@@ -64,6 +64,14 @@ pub enum EngineEvent {
         detail: String,
         step: u32,
     },
+    SubagentReasoning {
+        task_id: String,
+        content: String,
+    },
+    SubagentTextDelta {
+        task_id: String,
+        content: String,
+    },
     SubagentCompleted {
         task_id: String,
         label: String,
@@ -240,7 +248,11 @@ pub struct SubagentInfo {
     pub model: String,
     pub status: SubagentStatus,
     pub actions: Vec<String>,
+    pub all_actions: Vec<String>,
     pub result_preview: Option<String>,
+    pub full_result: Option<String>,
+    pub reasoning_chunks: Vec<String>,
+    pub text_chunks: Vec<String>,
     pub started_at: Instant,
 }
 
@@ -457,6 +469,9 @@ pub struct App {
 
     pub show_help: bool,
     pub show_sidebar: bool,
+    pub show_subagent_overlay: bool,
+    pub subagent_overlay_index: usize,
+    pub subagent_overlay_scroll: usize,
     pub should_quit: bool,
     pub agent_state: AgentState,
     pub needs_redraw: bool,
@@ -519,6 +534,9 @@ impl App {
             total_lines: 0,
             show_help: false,
             show_sidebar: false,
+            show_subagent_overlay: false,
+            subagent_overlay_index: 0,
+            subagent_overlay_scroll: 0,
             should_quit: false,
             agent_state: AgentState::Ready,
             needs_redraw: true,
@@ -770,7 +788,11 @@ impl App {
                     model: model.clone(),
                     status: SubagentStatus::Running,
                     actions: Vec::new(),
+                    all_actions: Vec::new(),
                     result_preview: None,
+                    full_result: None,
+                    reasoning_chunks: Vec::new(),
+                    text_chunks: Vec::new(),
                     started_at: Instant::now(),
                 };
                 self.subagents.insert(task_id.clone(), info);
@@ -799,6 +821,7 @@ impl App {
             } => {
                 let action = format!("{tool_name} {detail}");
                 if let Some(info) = self.subagents.get_mut(&task_id) {
+                    info.all_actions.push(format!("[{step}] {action}"));
                     info.actions.push(action.clone());
                     if info.actions.len() > 3 {
                         info.actions.remove(0);
@@ -813,6 +836,16 @@ impl App {
                     }
                 });
             }
+            EngineEvent::SubagentReasoning { task_id, content } => {
+                if let Some(info) = self.subagents.get_mut(&task_id) {
+                    info.reasoning_chunks.push(content);
+                }
+            }
+            EngineEvent::SubagentTextDelta { task_id, content } => {
+                if let Some(info) = self.subagents.get_mut(&task_id) {
+                    info.text_chunks.push(content);
+                }
+            }
             EngineEvent::SubagentCompleted {
                 task_id,
                 label,
@@ -822,6 +855,7 @@ impl App {
                 if let Some(info) = self.subagents.get_mut(&task_id) {
                     info.status = SubagentStatus::Completed;
                     info.result_preview = Some(result_preview.clone());
+                    info.full_result = Some(full_result.clone());
                 }
                 self.update_subagent_card(&task_id, |card| {
                     if let HistoryEntry::SubagentCard {
@@ -842,6 +876,7 @@ impl App {
                 if let Some(info) = self.subagents.get_mut(&task_id) {
                     info.status = SubagentStatus::Failed;
                     info.result_preview = Some(error.clone());
+                    info.full_result = Some(error.clone());
                 }
                 self.update_subagent_card(&task_id, |card| {
                     if let HistoryEntry::SubagentCard {
@@ -1156,6 +1191,9 @@ impl App {
         self.pending_subagent_results.clear();
         self.held_turn = None;
         self.show_sidebar = false;
+        self.show_subagent_overlay = false;
+        self.subagent_overlay_index = 0;
+        self.subagent_overlay_scroll = 0;
     }
 
     fn maybe_dequeue(&mut self) {
@@ -1263,6 +1301,44 @@ impl App {
             return;
         }
 
+        if self.show_subagent_overlay {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.show_subagent_overlay = false;
+                }
+                KeyCode::Char('4') if key.modifiers.contains(KeyModifiers::ALT) => {
+                    self.show_subagent_overlay = false;
+                }
+                KeyCode::Left | KeyCode::Char('h') => {
+                    if self.subagent_overlay_index > 0 {
+                        self.subagent_overlay_index -= 1;
+                        self.subagent_overlay_scroll = 0;
+                    }
+                }
+                KeyCode::Right | KeyCode::Char('l') => {
+                    let count = self.subagents.len();
+                    if count > 0 && self.subagent_overlay_index < count - 1 {
+                        self.subagent_overlay_index += 1;
+                        self.subagent_overlay_scroll = 0;
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.subagent_overlay_scroll = self.subagent_overlay_scroll.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.subagent_overlay_scroll += 1;
+                }
+                KeyCode::PageUp => {
+                    self.subagent_overlay_scroll = self.subagent_overlay_scroll.saturating_sub(20);
+                }
+                KeyCode::PageDown => {
+                    self.subagent_overlay_scroll += 20;
+                }
+                _ => {}
+            }
+            return;
+        }
+
         match key.code {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.is_busy() {
@@ -1279,7 +1355,19 @@ impl App {
                 }
             }
             KeyCode::Char('4') if key.modifiers.contains(KeyModifiers::ALT) => {
-                self.show_sidebar = !self.show_sidebar;
+                if self.show_subagent_overlay {
+                    self.show_subagent_overlay = false;
+                    self.show_sidebar = false;
+                } else if self.show_sidebar {
+                    if !self.subagents.is_empty() {
+                        self.show_subagent_overlay = true;
+                        self.subagent_overlay_scroll = 0;
+                    } else {
+                        self.show_sidebar = false;
+                    }
+                } else {
+                    self.show_sidebar = true;
+                }
             }
             KeyCode::Enter => {
                 if key.modifiers.contains(KeyModifiers::ALT)
@@ -1322,18 +1410,18 @@ impl App {
             KeyCode::End => self.composer.move_end(),
             KeyCode::Up => {
                 if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    self.scroll_up(1);
-                } else if !self.composer.history.is_empty() && !self.composer.input.contains('\n') {
-                    self.composer.history_up();
+                    if !self.composer.history.is_empty() && !self.composer.input.contains('\n') {
+                        self.composer.history_up();
+                    }
                 } else {
                     self.scroll_up(1);
                 }
             }
             KeyCode::Down => {
                 if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    self.scroll_down(1);
-                } else if self.composer.history_index.is_some() {
-                    self.composer.history_down();
+                    if self.composer.history_index.is_some() {
+                        self.composer.history_down();
+                    }
                 } else {
                     self.scroll_down(1);
                 }
@@ -1587,6 +1675,8 @@ fn strip_tool_markers(text: &str) -> String {
             </?tool_response> |
             </?tool_use> |
             </?function_call> |
+            </?invoke[^>]*> |
+            </?parameter[^>]*> |
             <\|/?tool_call\|?> |
             <\|/?endoftoolcall\|?> |
             <\|/?tool_response\|?>

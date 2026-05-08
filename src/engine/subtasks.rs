@@ -30,6 +30,14 @@ pub enum SubagentNotification {
         detail: String,
         step: u32,
     },
+    Reasoning {
+        task_id: String,
+        content: String,
+    },
+    TextDelta {
+        task_id: String,
+        content: String,
+    },
     Completed {
         task_id: String,
         label: String,
@@ -393,6 +401,22 @@ impl SubagentManager {
                     });
                     e
                 })?;
+            if let Some(ref rc) = response.reasoning_content {
+                if !rc.trim().is_empty() && !response.has_tool_calls() {
+                    self.notify(SubagentNotification::Reasoning {
+                        task_id: task_id.clone(),
+                        content: rc.clone(),
+                    });
+                }
+            }
+            if let Some(ref text) = response.content {
+                if !text.trim().is_empty() && !response.has_tool_calls() {
+                    self.notify(SubagentNotification::TextDelta {
+                        task_id: task_id.clone(),
+                        content: text.clone(),
+                    });
+                }
+            }
             if response.has_tool_calls() {
                 let tool_calls = response
                     .tool_calls

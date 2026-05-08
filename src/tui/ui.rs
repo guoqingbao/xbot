@@ -79,6 +79,10 @@ pub fn render(f: &mut Frame, app: &mut App) {
     if app.approval_dialog.is_some() {
         render_approval_overlay(f, area, app);
     }
+
+    if app.show_subagent_overlay {
+        render_subagent_overlay(f, area, app);
+    }
 }
 
 fn composer_height(input: &str, cursor: usize, area_width: u16) -> u16 {
@@ -1486,9 +1490,9 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let status = app.status_line();
     let busy = app.is_busy();
     let shortcuts = if busy {
-        "Ctrl+C:cancel  ↑↓:history  Shift+↑↓:scroll  Alt+4:agents  ?:help"
+        "Ctrl+C:cancel  ↑↓:scroll  Shift+↑↓:history  Alt+4:agents  ?:help"
     } else {
-        "Enter:send  Ctrl+C:quit  ↑↓:history  Alt+4:agents  ?:help"
+        "Enter:send  Ctrl+C:quit  ↑↓:scroll  Shift+↑↓:history  Alt+4:agents  ?:help"
     };
 
     let available = area.width as usize;
@@ -1548,8 +1552,8 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         (
             "Navigation",
             vec![
-                ("↑ / ↓", "Browse input history"),
-                ("Shift+↑ / Shift+↓", "Scroll transcript"),
+                ("↑ / ↓", "Scroll transcript"),
+                ("Shift+↑ / Shift+↓", "Browse input history"),
                 ("PgUp / PgDn", "Page scroll"),
                 ("Mouse wheel", "Scroll transcript"),
             ],
@@ -1557,7 +1561,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         (
             "Agents & Commands",
             vec![
-                ("Alt+4", "Toggle agents sidebar"),
+                ("Alt+4", "Cycle: sidebar / agent overlay / hide"),
                 ("/agents", "Toggle agents sidebar"),
                 ("/help or ?", "Toggle this help"),
                 ("/clear", "Clear & reset session"),
@@ -1752,6 +1756,231 @@ fn format_summary(s: &super::app::TurnSummary) -> String {
     }
     parts.push(super::app::format_elapsed(s.elapsed));
     parts.join(" · ")
+}
+
+fn overlay_push_wrapped(
+    lines: &mut Vec<Line<'static>>,
+    text: &str,
+    width: usize,
+    style: Style,
+    prefix: &str,
+) {
+    for src_line in text.lines() {
+        let avail = width.saturating_sub(prefix.len());
+        let wrapped = wrap_words(src_line, avail.max(1));
+        for wl in wrapped {
+            lines.push(Line::from(Span::styled(format!("{prefix}{wl}"), style)));
+        }
+    }
+    if text.is_empty() {
+        lines.push(Line::from(Span::styled(prefix.to_string(), style)));
+    }
+}
+
+fn render_subagent_overlay(f: &mut Frame, area: Rect, app: &mut super::app::App) {
+    let agents: Vec<_> = app.subagents.values().collect();
+    if agents.is_empty() {
+        app.show_subagent_overlay = false;
+        return;
+    }
+
+    let idx = app.subagent_overlay_index.min(agents.len() - 1);
+    app.subagent_overlay_index = idx;
+    let agent = &agents[idx];
+
+    let width = area.width.saturating_sub(4).max(40);
+    let height = area.height.saturating_sub(4).max(10);
+    let x = (area.width.saturating_sub(width)) / 2;
+    let y = (area.height.saturating_sub(height)) / 2;
+    let popup = Rect::new(x, y, width, height);
+
+    f.render_widget(Clear, popup);
+
+    let inner_w = width.saturating_sub(4) as usize;
+    let text_w = inner_w.saturating_sub(2);
+    let mut content_lines: Vec<Line<'static>> = Vec::new();
+
+    let (status_str, status_color) = match &agent.status {
+        SubagentStatus::Running => ("running", SUBAGENT_RUNNING),
+        SubagentStatus::Completed => ("completed", SUBAGENT_DONE),
+        SubagentStatus::Failed => ("failed", SUBAGENT_FAIL),
+        SubagentStatus::Cancelled => ("cancelled", TEXT_DIM),
+    };
+    content_lines.push(Line::from(vec![
+        Span::styled("  Status: ", Style::default().fg(TEXT_DIM)),
+        Span::styled(
+            status_str,
+            Style::default()
+                .fg(status_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
+    if !agent.model.is_empty() {
+        content_lines.push(Line::from(vec![
+            Span::styled("  Model:  ", Style::default().fg(TEXT_DIM)),
+            Span::styled(agent.model.clone(), Style::default().fg(TEXT_MUTED)),
+        ]));
+    }
+
+    let elapsed = agent.started_at.elapsed();
+    content_lines.push(Line::from(vec![
+        Span::styled("  Time:   ", Style::default().fg(TEXT_DIM)),
+        Span::styled(
+            super::app::format_elapsed(elapsed),
+            Style::default().fg(TEXT_MUTED),
+        ),
+    ]));
+
+    content_lines.push(Line::from(""));
+
+    content_lines.push(Line::from(Span::styled(
+        "  Task",
+        Style::default()
+            .fg(ACCENT)
+            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+    )));
+    overlay_push_wrapped(
+        &mut content_lines,
+        &agent.task,
+        inner_w,
+        Style::default().fg(TEXT_PRIMARY),
+        "  ",
+    );
+
+    if !agent.all_actions.is_empty() {
+        content_lines.push(Line::from(""));
+        content_lines.push(Line::from(Span::styled(
+            "  Tool Actions",
+            Style::default()
+                .fg(ACCENT)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        )));
+        for action in &agent.all_actions {
+            let action_w = text_w.saturating_sub(2);
+            let wrapped = wrap_words(action, action_w.max(1));
+            for (i, wl) in wrapped.iter().enumerate() {
+                let bullet = if i == 0 { "  ▸ " } else { "    " };
+                content_lines.push(Line::from(vec![
+                    Span::styled(bullet, Style::default().fg(TOOL_FG)),
+                    Span::styled(wl.clone(), Style::default().fg(TEXT_MUTED)),
+                ]));
+            }
+        }
+    }
+
+    if !agent.reasoning_chunks.is_empty() {
+        content_lines.push(Line::from(""));
+        content_lines.push(Line::from(Span::styled(
+            "  ▼ Thinking Process",
+            Style::default().fg(TEXT_DIM).add_modifier(Modifier::BOLD),
+        )));
+        for chunk in &agent.reasoning_chunks {
+            overlay_push_wrapped(
+                &mut content_lines,
+                chunk,
+                inner_w,
+                Style::default().fg(TEXT_DIM).add_modifier(Modifier::ITALIC),
+                "    ",
+            );
+        }
+    }
+
+    if !agent.text_chunks.is_empty() {
+        content_lines.push(Line::from(""));
+        content_lines.push(Line::from(Span::styled(
+            "  Response",
+            Style::default()
+                .fg(ACCENT)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        )));
+        for chunk in &agent.text_chunks {
+            let md_lines = markdown::markdown_to_lines(chunk, text_w);
+            for ml in md_lines {
+                let mut prefixed = vec![Span::raw("  ")];
+                prefixed.extend(ml.spans);
+                content_lines.push(Line::from(prefixed));
+            }
+        }
+    }
+
+    if let Some(result) = &agent.full_result {
+        if agent.text_chunks.is_empty() {
+            content_lines.push(Line::from(""));
+            content_lines.push(Line::from(Span::styled(
+                "  Result",
+                Style::default()
+                    .fg(ACCENT)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            )));
+            let md_lines = markdown::markdown_to_lines(result, text_w);
+            for ml in md_lines {
+                let mut prefixed = vec![Span::raw("  ")];
+                prefixed.extend(ml.spans);
+                content_lines.push(Line::from(prefixed));
+            }
+        }
+    }
+
+    let total_content_lines = content_lines.len();
+    let visible_height = height.saturating_sub(4) as usize;
+    let max_scroll = total_content_lines.saturating_sub(visible_height);
+    app.subagent_overlay_scroll = app.subagent_overlay_scroll.min(max_scroll);
+
+    let nav_left = if idx > 0 { "◀ " } else { "  " };
+    let nav_right = if idx < agents.len() - 1 { " ▶" } else { "  " };
+    let title = format!(
+        "{nav_left}{} [{}/{}]{nav_right}",
+        agent.label,
+        idx + 1,
+        agents.len()
+    );
+    let footer_str = " Esc:close  ←/→:switch  ↑/↓:scroll ";
+
+    let block = Block::default()
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ))
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT))
+        .style(Style::default().bg(HEADER_BG));
+
+    let para = Paragraph::new(Text::from(content_lines))
+        .block(block)
+        .scroll((app.subagent_overlay_scroll as u16, 0));
+
+    f.render_widget(para, popup);
+
+    if total_content_lines > visible_height {
+        let mut scrollbar_state = ScrollbarState::new(total_content_lines)
+            .position(app.subagent_overlay_scroll)
+            .viewport_content_length(visible_height);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None);
+        let scrollbar_area = Rect {
+            x: popup.x + popup.width - 1,
+            y: popup.y + 1,
+            width: 1,
+            height: popup.height.saturating_sub(2),
+        };
+        f.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+    }
+
+    let footer_line = Line::from(Span::styled(footer_str, Style::default().fg(TEXT_DIM)));
+    let footer_x = popup.x + (popup.width.saturating_sub(footer_str.len() as u16)) / 2;
+    let footer_y = popup.y + popup.height - 1;
+    if footer_y < area.height && footer_x < area.width {
+        let footer_area = Rect::new(
+            footer_x,
+            footer_y,
+            (footer_str.len() as u16).min(area.width - footer_x),
+            1,
+        );
+        f.render_widget(Paragraph::new(footer_line), footer_area);
+    }
 }
 
 fn truncate_end(text: &str, max: usize) -> String {

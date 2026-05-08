@@ -284,6 +284,27 @@ impl AgentLoop {
         self.subagents.cancel_by_session(session_key).await;
     }
 
+    pub fn request_cancellation(&self, session_key: &str) {
+        self.cancellations
+            .lock()
+            .expect("cancellations lock poisoned")
+            .insert(session_key.to_string());
+    }
+
+    pub fn is_session_cancelled(&self, session_key: &str) -> bool {
+        self.cancellations
+            .lock()
+            .expect("cancellations lock poisoned")
+            .contains(session_key)
+    }
+
+    pub fn cancel_session(&self, session_key: &str) {
+        self.cancellations
+            .lock()
+            .expect("cancellations lock poisoned")
+            .remove(session_key);
+    }
+
     pub fn set_model_switch_callback(&self, callback: Option<ModelSwitchCallback>) {
         *self
             .model_switch_callback
