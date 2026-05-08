@@ -173,6 +173,8 @@ Notes:
 
 By default, background subagents use the same provider and model as the main task. You can run subagents on a cheaper or faster model by setting `agents.subagents`.
 
+For a complete remote-main/local-subagent walkthrough, including DeepSeek `deepseek-v4-pro` as the main model and a local Qwen model for subagents, see [Hybrid Remote Main + Local Subagents](./HYBRID_MODELS.md).
+
 Example: main task uses a heavier OpenAI model, while subagents use a local OpenAI-compatible server:
 
 ```json

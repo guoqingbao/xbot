@@ -8,7 +8,7 @@
 - 📝 **Permanent Memory Capture** - LLM-driven memory consolidation, automatic task summaries, explicit `/memorize` support, and topic-relevant memory lookup
 - 🛠️ **Rich Toolset** - Filesystem, shell, web fetch, web search, messaging, cron, and background-task tools
 - 🌐 **Provider Integration** - OpenAI-compatible, Anthropic, GitHub Copilot (OAuth), Cursor, and local engines
-- 🧵 **Configurable Subagents** - Background subagents can inherit the main model or use a separate faster model/provider/API base
+- 🧵 **Hybrid Model Routing** - Run the main task on a remote frontier API such as DeepSeek `deepseek-v4-pro`, while background subagents use a local Qwen/vLLM/Ollama model for fast parallel work
 - 🔌 **MCP Support** - MCP stdio tool integration for external tool servers
 - 🧩 **Built-in Skills** - Software engineering, research/reporting, GitHub/CI, scheduled operations, memory management, cron, and clawhub marketplace
 - 📬 **Multi-Channel** - 13 channel backends: `email`, `slack`, `telegram`, `feishu`, `dingtalk`, `discord`, `matrix`, `whatsapp`, `qq`, `wecom`, `weixin`, `mochat`, and extensible plugin channels
@@ -16,12 +16,15 @@
 - 🔄 **Streaming** - Stream delta support with per-channel streaming, retry logic with exponential backoff
 - 🪝 **Hook System** - Extensible `AgentHook` trait for lifecycle callbacks without modifying the core agent loop
 
-## Overview
+## Overview (Hybrid Model Routing)
 <img src="docs/rbot.png" alt="rbot terminal" width="600">
+
+The screenshot highlights one of `rbot`'s core advantages: the main agent can use a remote high-capability model, while subagents fan out onto a separate local model. This lets you reserve paid remote tokens for synthesis and hard reasoning, and spend local GPU capacity on parallel exploration, code reading, tests, and report gathering.
 
 ## 📚 Documentation
 
 - [🚀 Getting Started](./docs/USAGE.md)
+- [🧵 Hybrid Remote Main + Local Subagents](./docs/HYBRID_MODELS.md)
 - [🏗️ Architecture](./docs/ARCHITECTURE.md)
 - [⚙️ Operations Guide](./docs/OPERATIONS.md)
 
@@ -52,6 +55,8 @@ cargo run --release -- config --provider
 ```
 
 Or manually edit `~/.rbot/config.json`. Refer to: [Getting Started](./docs/USAGE.md)
+
+For the recommended hybrid setup, use a remote main model such as DeepSeek `deepseek-v4-pro` and a local OpenAI-compatible server such as vLLM serving Qwen for subagents. See [Hybrid Remote Main + Local Subagents](./docs/HYBRID_MODELS.md).
 
 ### Config Communication Channels
 
