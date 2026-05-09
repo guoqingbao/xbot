@@ -13,7 +13,6 @@ use lettre::message::{Mailbox, Message, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{SmtpTransport, Transport};
 use mailparse::{MailHeaderMap, ParsedMail, parse_mail};
-use native_tls::TlsConnector;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -225,6 +224,8 @@ impl EmailBackend for SystemEmailBackend {
         mark_seen: bool,
         limit: usize,
     ) -> std::result::Result<Vec<RawEmail>, EmailBackendError> {
+        #[allow(unused)]
+        use axum::routing::connect;
         let config = config.clone();
         tokio::task::spawn_blocking(move || {
             let mailbox = if config.imap_mailbox.trim().is_empty() {
@@ -237,15 +238,10 @@ impl EmailBackend for SystemEmailBackend {
                     "plain IMAP is not supported by the current Rust backend",
                 ));
             }
-            let tls = TlsConnector::builder()
-                .build()
+            let client = imap::ClientBuilder::new(&config.imap_host, config.imap_port)
+                .mode(imap::ConnectionMode::Tls)
+                .connect()
                 .map_err(|err| EmailBackendError::other(err.to_string()))?;
-            let client = imap::connect(
-                (config.imap_host.as_str(), config.imap_port),
-                &config.imap_host,
-                &tls,
-            )
-            .map_err(|err| EmailBackendError::other(err.to_string()))?;
             let mut session = client
                 .login(&config.imap_username, &config.imap_password)
                 .map_err(|(err, _)| EmailBackendError::other(err.to_string()))?;

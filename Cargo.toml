@@ -68,13 +68,13 @@ glob = "0.3"
 hex = "0.4"
 hmac = "0.12"
 html2text = "0.13"
-imap = "2.4"
+imap = "3.0.0-alpha.15"
 ipnet = "2.11"
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "native-tls", "smtp-transport"] }
 local-ip-address = "0.6.5"
 mailparse = "0.15"
 mime_guess = "2.0"
-native-tls = "0.2"
+native-tls = { version = "0.2", features = ["vendored"] }
 regex = "1.12"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "charset", "gzip", "brotli", "deflate", "socks"] }
 scraper = "0.24"
