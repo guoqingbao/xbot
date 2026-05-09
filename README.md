@@ -1,6 +1,14 @@
-# 🤖 xbot: A Minimal AI Agent in Rust for Automation and Development
+<div align="center">
+  <img src="docs/logo.png" alt="xbot logo" width="180" style="margin-bottom: 0;" />
+  <p style="margin: 0;">
+    A Rust-native autonomous bot runtime for persistent task automation, vibe coding, and multi-channel message delivery. 🚀
+  </p>
+</div>
 
-`xbot` is a Rust-native autonomous bot runtime for persistent chat automation, tool execution, scheduled work, and multi-channel message delivery. 🚀
+<p align="center">
+  <a href="./README.md">English</a> |
+  <a href="./README-CN.md">简体中文</a> |
+</p>
 
 ## ✨ Features
 
@@ -34,9 +42,11 @@ The screenshot highlights one of `xbot`'s core advantages: the main agent can us
 ### Install xbot:
 
 ```bash
-cargo install xbot
+npm install -g @trusted-ai/xbot
+# or cargo install xbot
 # or install a .deb from GitHub Releases
-# or npm install -g @trusted-ai/xbot
+# or install from source code
+cargo install --path .
 ```
 
 The installed command is `xbot`. See [Installation](./docs/INSTALLATION.md) for details.
@@ -63,7 +73,6 @@ You can configure them interactively:
 
 ```bash
 xbot config --provider
-# cargo run --release -- config --provider
 ```
 
 Or manually edit `~/.xbot/config.json`. Refer to: [Getting Started](./docs/USAGE.md)
@@ -78,7 +87,6 @@ Use the interactive configuration tool:
 
 ```bash
 xbot config --channel
-# cargo run --release -- config --channel
 ```
 
 List, configure, and log in to channels:
@@ -101,21 +109,23 @@ Use `channels setup <name>` to see step-by-step instructions for obtaining the r
 
 ## CLI usage
 
+xbot working on current folder by default on CLI mode, add `--workspace` parameter to assign working directory for xbot.
+
 ### One-shot prompt:
 
 ```bash
 # this will scan and init the project for following tasks (XBOT.md)
 xbot chat /init
+# xbot chat /init --workspace ANOTHER_PROJECT_PATH
 # this will do one task a time
 xbot chat "find bugs in this project"
-# cargo run --release -- chat /init
 ```
 
 ### Interactive shell (TUI, rich terminal UI):
 
 ```bash
 xbot repl
-# cargo run --release -- repl
+# xbot repl --workspace ANOTHER_PROJECT_PATH
 ```
 
 The CLI includes:
@@ -138,7 +148,6 @@ xbot skills init my-custom-skill
 
 ```bash
 xbot run
-# cargo run --release -- run
 ```
 
 `run` uses the configured global workspace by default. Use `xbot run --workspace .` when the backend should run against the current project workspace.
