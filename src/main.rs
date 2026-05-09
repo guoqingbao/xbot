@@ -272,6 +272,9 @@ async fn chat(
     if let Some(notice) = &built.startup_notice {
         eprintln!("{notice}");
     }
+
+    let session_key = chat_select_session(&built.workspace, &built.session_key, &built.chat_id)?;
+
     let shell = CliShell::new(
         &built.workspace,
         &built.cwd,
@@ -291,7 +294,7 @@ async fn chat(
         .agent
         .process_direct_stream(
             &prompt,
-            &built.session_key,
+            &session_key,
             "cli",
             &built.chat_id,
             Some(stream.callback()),
@@ -307,6 +310,111 @@ async fn chat(
         );
     }
     Ok(())
+}
+
+fn chat_select_session(workspace: &Path, default_key: &str, chat_id: &str) -> Result<String> {
+    use std::io::{IsTerminal, Write};
+
+    let manager = SessionManager::new(workspace)?;
+    let summaries = manager.list_session_summaries()?;
+    let cli_sessions: Vec<_> = summaries
+        .iter()
+        .filter(|s| s.key.starts_with("cli:") && s.message_count > 0)
+        .collect();
+
+    if cli_sessions.is_empty() {
+        return Ok(default_key.to_string());
+    }
+
+    if cli_sessions.len() == 1 && cli_sessions[0].key == default_key {
+        let s = &cli_sessions[0];
+        eprintln!(
+            "{}",
+            format!(
+                "Continuing session: {} ({} msgs, ~{}k tokens, updated {})",
+                s.title,
+                s.message_count,
+                s.estimated_tokens / 1000,
+                format_relative_time(&s.updated_at),
+            )
+            .dimmed()
+        );
+        return Ok(default_key.to_string());
+    }
+
+    if !std::io::stdin().is_terminal() {
+        return Ok(default_key.to_string());
+    }
+
+    eprintln!("\n{}", "Available sessions:".bold());
+    eprintln!("  {} {} (new session)", "0.".bold(), chat_id.cyan().bold());
+    for (i, s) in cli_sessions.iter().enumerate() {
+        let current = if s.key == default_key { " ←" } else { "" };
+        eprintln!(
+            "  {} {} — {} msgs, ~{}k tokens, updated {}{}",
+            format!("{}.", i + 1).bold(),
+            truncate_display(&s.title, 50).cyan(),
+            s.message_count,
+            s.estimated_tokens / 1000,
+            format_relative_time(&s.updated_at),
+            current.yellow().bold(),
+        );
+    }
+    eprint!("\n  Select session [default: continue current]: ");
+    let _ = std::io::stderr().flush();
+
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    let choice = input.trim();
+
+    if choice.is_empty() {
+        return Ok(default_key.to_string());
+    }
+    if choice == "0" {
+        let new_key = format!("cli:{}:{:016x}", chat_id, rand_u64());
+        return Ok(new_key);
+    }
+    if let Ok(idx) = choice.parse::<usize>() {
+        if idx >= 1 && idx <= cli_sessions.len() {
+            return Ok(cli_sessions[idx - 1].key.clone());
+        }
+    }
+    Ok(default_key.to_string())
+}
+
+fn rand_u64() -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    std::time::SystemTime::now().hash(&mut hasher);
+    std::process::id().hash(&mut hasher);
+    hasher.finish()
+}
+
+fn format_relative_time(iso: &str) -> String {
+    use chrono::{DateTime, Utc};
+    let Ok(dt) = iso.parse::<DateTime<Utc>>() else {
+        return iso.to_string();
+    };
+    let now = Utc::now();
+    let dur = now.signed_duration_since(dt);
+    if dur.num_seconds() < 60 {
+        "just now".to_string()
+    } else if dur.num_minutes() < 60 {
+        format!("{}m ago", dur.num_minutes())
+    } else if dur.num_hours() < 24 {
+        format!("{}h ago", dur.num_hours())
+    } else {
+        format!("{}d ago", dur.num_days())
+    }
+}
+
+fn truncate_display(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max.saturating_sub(1)])
+    }
 }
 
 async fn repl(

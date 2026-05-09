@@ -83,6 +83,10 @@ pub fn render(f: &mut Frame, app: &mut App) {
     if app.show_subagent_overlay {
         render_subagent_overlay(f, area, app);
     }
+
+    if app.show_session_overlay {
+        render_session_overlay(f, area, app);
+    }
 }
 
 fn composer_height(input: &str, cursor: usize, area_width: u16) -> u16 {
@@ -931,16 +935,37 @@ pub mod tests {
     use super::super::app::EngineEvent;
     use super::*;
 
-    #[test]
-    fn distinct_subagent_models_keeps_same_provider_different_model_visible() {
-        let mut app = App::new(
-            "Qwen3.6-27B-FP8".into(),
+    fn test_app_with_model(model: &str, subagent_model: Option<&str>) -> App {
+        App::new(
+            model.into(),
             "vllmrs".into(),
             PathBuf::from("/tmp"),
             0,
             "0/262144".into(),
+            subagent_model.map(Into::into),
+            String::new(),
+            "test:key".into(),
+            Vec::new(),
+        )
+    }
+
+    fn test_app_simple() -> App {
+        App::new(
+            "main".into(),
+            "test".into(),
+            PathBuf::from("/tmp"),
+            0,
+            "0/1000".into(),
             None,
-        );
+            String::new(),
+            "test:key".into(),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn distinct_subagent_models_keeps_same_provider_different_model_visible() {
+        let mut app = test_app_with_model("Qwen3.6-27B-FP8", None);
 
         app.handle_engine_event(EngineEvent::SubagentStarted {
             task_id: "sub1".into(),
@@ -958,14 +983,7 @@ pub mod tests {
 
     #[test]
     fn distinct_subagent_models_hides_inherited_model() {
-        let mut app = App::new(
-            "Qwen3.6-27B-FP8".into(),
-            "vllmrs".into(),
-            PathBuf::from("/tmp"),
-            0,
-            "0/262144".into(),
-            None,
-        );
+        let mut app = test_app_with_model("Qwen3.6-27B-FP8", None);
 
         app.handle_engine_event(EngineEvent::SubagentStarted {
             task_id: "sub1".into(),
@@ -979,14 +997,7 @@ pub mod tests {
 
     #[test]
     fn distinct_subagent_models_uses_configured_model_before_any_subagent_starts() {
-        let app = App::new(
-            "Qwen3.6-27B-FP8".into(),
-            "vllmrs".into(),
-            PathBuf::from("/tmp"),
-            0,
-            "0/262144".into(),
-            Some("Qwen3.5-35B-A3B-FP8".into()),
-        );
+        let app = test_app_with_model("Qwen3.6-27B-FP8", Some("Qwen3.5-35B-A3B-FP8"));
 
         assert_eq!(
             distinct_subagent_models(&app),
@@ -1049,14 +1060,7 @@ pub mod tests {
 
     #[test]
     fn user_history_wraps_long_and_multiline_prompts() {
-        let mut app = App::new(
-            "main".into(),
-            "test".into(),
-            PathBuf::from("/tmp"),
-            0,
-            "0/1000".into(),
-            None,
-        );
+        let mut app = test_app_simple();
         app.history
             .push(HistoryEntry::User("one two three\nfour five six".into()));
 
@@ -1079,14 +1083,7 @@ pub mod tests {
 
     #[test]
     fn user_history_wrap_keeps_prompt_indentation() {
-        let mut app = App::new(
-            "main".into(),
-            "test".into(),
-            PathBuf::from("/tmp"),
-            0,
-            "0/1000".into(),
-            None,
-        );
+        let mut app = test_app_simple();
         app.history
             .push(HistoryEntry::User("  let value = 1;".into()));
 
@@ -1106,14 +1103,7 @@ pub mod tests {
 
     #[test]
     fn assistant_after_thinking_has_no_extra_blank_line() {
-        let mut app = App::new(
-            "main".into(),
-            "test".into(),
-            PathBuf::from("/tmp"),
-            0,
-            "0/1000".into(),
-            None,
-        );
+        let mut app = test_app_simple();
         app.history.push(HistoryEntry::Thinking("checking".into()));
         app.history.push(HistoryEntry::Assistant {
             content: "answer".into(),
@@ -1139,14 +1129,7 @@ pub mod tests {
 
     #[test]
     fn active_text_after_thinking_has_no_extra_blank_line() {
-        let app = App::new(
-            "main".into(),
-            "test".into(),
-            PathBuf::from("/tmp"),
-            0,
-            "0/1000".into(),
-            None,
-        );
+        let app = test_app_simple();
         let mut active = ActiveStreaming::default();
         active.push_thinking("checking");
         active.push_text("answer");
@@ -1568,6 +1551,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
                 ("/exit or /quit", "Exit xbot"),
                 ("/stop", "Cancel current turn"),
                 ("/new", "Start new session"),
+                ("/session", "Switch between sessions"),
                 ("/model [name]", "Switch or show model"),
                 ("/memorize <text>", "Save to memory"),
                 ("/status", "Show session status"),
@@ -2005,5 +1989,130 @@ fn truncate_end(text: &str, max: usize) -> String {
         let mut out: String = text.chars().take(max - 1).collect();
         out.push('…');
         out
+    }
+}
+
+fn render_session_overlay(f: &mut Frame, area: Rect, app: &mut super::app::App) {
+    if app.available_sessions.is_empty() {
+        app.show_session_overlay = false;
+        return;
+    }
+
+    let count = app.available_sessions.len();
+    let list_height = (count as u16).min(12);
+    let height = list_height + 4;
+    let width = area.width.saturating_sub(8).min(72).max(40);
+    let x = (area.width.saturating_sub(width)) / 2;
+    let y = (area.height.saturating_sub(height)) / 2;
+    let popup = Rect::new(x, y, width, height);
+
+    f.render_widget(Clear, popup);
+
+    let inner_w = width.saturating_sub(4) as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let idx = app.session_overlay_index.min(count.saturating_sub(1));
+    app.session_overlay_index = idx;
+
+    for (i, s) in app.available_sessions.iter().enumerate() {
+        let is_selected = i == idx;
+        let is_current = s.key == app.session_key;
+        let marker = if is_current { "● " } else { "  " };
+        let prefix = if is_selected { "▸ " } else { "  " };
+
+        let title = truncate_end(&s.title, inner_w.saturating_sub(30));
+        let ago = format_relative_time_short(&s.updated_at);
+        let tokens_k = s.estimated_tokens / 1000;
+        let detail = format!("{} msgs · ~{}k tok · {}", s.message_count, tokens_k, ago);
+
+        let title_style = if is_selected {
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+        } else if is_current {
+            Style::default().fg(Color::Rgb(160, 200, 240))
+        } else {
+            Style::default().fg(TEXT_MUTED)
+        };
+
+        let detail_style = if is_selected {
+            Style::default().fg(Color::Rgb(140, 160, 180))
+        } else {
+            Style::default().fg(TEXT_DIM)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{marker}{prefix}"),
+                if is_current {
+                    Style::default().fg(ACCENT)
+                } else {
+                    Style::default().fg(TEXT_DIM)
+                },
+            ),
+            Span::styled(title, title_style),
+        ]));
+        lines.push(Line::from(vec![
+            Span::raw("      "),
+            Span::styled(detail, detail_style),
+        ]));
+    }
+
+    let block = Block::default()
+        .title(Span::styled(
+            format!(" Sessions [{count}] "),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ))
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT))
+        .style(Style::default().bg(HEADER_BG));
+
+    let scroll_offset = {
+        let visible = height.saturating_sub(4) as usize;
+        let line_idx = idx * 2;
+        if line_idx + 2 > app.session_overlay_scroll + visible {
+            line_idx.saturating_sub(visible.saturating_sub(2))
+        } else if line_idx < app.session_overlay_scroll {
+            line_idx
+        } else {
+            app.session_overlay_scroll
+        }
+    };
+    app.session_overlay_scroll = scroll_offset;
+
+    let para = Paragraph::new(Text::from(lines))
+        .block(block)
+        .scroll((scroll_offset as u16, 0));
+
+    f.render_widget(para, popup);
+
+    let footer_str = " ↑/↓:select  Enter:switch  Esc:close ";
+    let footer_line = Line::from(Span::styled(footer_str, Style::default().fg(TEXT_DIM)));
+    let footer_x = popup.x + (popup.width.saturating_sub(footer_str.len() as u16)) / 2;
+    let footer_y = popup.y + popup.height - 1;
+    if footer_y < area.height && footer_x < area.width {
+        let footer_area = Rect::new(
+            footer_x,
+            footer_y,
+            (footer_str.len() as u16).min(area.width - footer_x),
+            1,
+        );
+        f.render_widget(Paragraph::new(footer_line), footer_area);
+    }
+}
+
+fn format_relative_time_short(iso: &str) -> String {
+    use chrono::{DateTime, Utc};
+    let Ok(dt) = iso.parse::<DateTime<Utc>>() else {
+        return iso.to_string();
+    };
+    let dur = Utc::now().signed_duration_since(dt);
+    if dur.num_seconds() < 60 {
+        "just now".to_string()
+    } else if dur.num_minutes() < 60 {
+        format!("{}m ago", dur.num_minutes())
+    } else if dur.num_hours() < 24 {
+        format!("{}h ago", dur.num_hours())
+    } else {
+        format!("{}d ago", dur.num_days())
     }
 }

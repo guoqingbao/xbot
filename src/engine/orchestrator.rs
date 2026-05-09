@@ -425,7 +425,31 @@ impl AgentLoop {
                     context_window_tokens,
                 });
             }
-            _ => {}
+            _ => {
+                if let Some(new_key) = trimmed_lower.strip_prefix("/switch ") {
+                    let new_key = new_key.trim().to_string();
+                    self.subagents.reset_session(session_key);
+                    self.reset_session_announcement(session_key);
+                    *self.last_usage.lock().expect("usage lock poisoned") = (0, 0, 0);
+                    *self
+                        .last_context_prompt_tokens
+                        .lock()
+                        .expect("context prompt lock poisoned") = 0;
+                    let switched = sessions.get_or_create(&new_key)?;
+                    let msg_count = switched.get_history(0).len();
+                    return Ok(SessionSetup {
+                        response: Some(
+                            target
+                                .outbound(
+                                    format!("Switched to session ({} messages).", msg_count,),
+                                ),
+                        ),
+                        session_notice: None,
+                        active_model: self.session_model(&switched),
+                        context_window_tokens: self.session_context_window_tokens(&switched),
+                    });
+                }
+            }
         }
 
         self.maybe_consolidate_session(&mut session, context_window_tokens)?;

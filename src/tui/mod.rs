@@ -103,6 +103,16 @@ pub async fn run_tui_repl(
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
+    let session_title = {
+        let summaries = agent.session_summaries().unwrap_or_default();
+        summaries
+            .iter()
+            .find(|s| s.key == session_key)
+            .map(|s| s.title.clone())
+            .unwrap_or_else(|| "(new session)".to_string())
+    };
+    let available_sessions = agent.session_summaries().unwrap_or_default();
+
     let mut app = App::new(
         model,
         provider_name,
@@ -110,6 +120,9 @@ pub async fn run_tui_repl(
         session_msg_count,
         context_status,
         subagent_model,
+        session_title,
+        session_key.clone(),
+        available_sessions,
     );
 
     let (engine_tx, mut engine_rx) = mpsc::unbounded_channel::<EngineEvent>();
@@ -203,8 +216,9 @@ pub async fn run_tui_repl(
 
         if app.cancel_requested {
             app.cancel_requested = false;
-            agent.request_cancellation(&session_key);
-            agent.cancel_subagents(&session_key).await;
+            let sk = app.session_key().to_string();
+            agent.request_cancellation(&sk);
+            agent.cancel_subagents(&sk).await;
             if let Some(handle) = active_turn.take() {
                 let abort = handle.abort_handle();
                 let grace = tokio::time::timeout(Duration::from_millis(500), handle).await;
@@ -213,8 +227,8 @@ pub async fn run_tui_repl(
                 }
                 agent.set_progress_sender(None);
             }
-            agent.persist_session_safe(&session_key);
-            agent.cancel_session(&session_key);
+            agent.persist_session_safe(&sk);
+            agent.cancel_session(&sk);
             app.agent_state = AS::Ready;
             app.pending.clear();
             app.flush_active_as_cancelled();
@@ -223,15 +237,20 @@ pub async fn run_tui_repl(
 
         if !app.is_busy() {
             if let Some(prompt) = app.pop_next_prompt() {
+                let sk = app.session_key().to_string();
                 active_turn = Some(spawn_turn(
                     agent.clone(),
                     prompt,
-                    session_key.clone(),
+                    sk,
                     chat_id.clone(),
                     engine_tx.clone(),
                 ));
                 app.agent_state = AS::Working;
                 app.needs_redraw = true;
+            } else if app.show_session_overlay || app.available_sessions.is_empty() {
+                if let Ok(summaries) = agent.session_summaries() {
+                    app.refresh_available_sessions(summaries);
+                }
             }
         }
 

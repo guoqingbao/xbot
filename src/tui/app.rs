@@ -499,6 +499,13 @@ pub struct App {
     pub approval_dialog: Option<ApprovalDialog>,
     pub approval_responder: Option<tokio::sync::oneshot::Sender<xbot::tools::ApprovalDecision>>,
     composer_history_path: PathBuf,
+
+    pub session_title: String,
+    pub session_key: String,
+    pub show_session_overlay: bool,
+    pub session_overlay_index: usize,
+    pub session_overlay_scroll: usize,
+    pub available_sessions: Vec<xbot::storage::SessionSummary>,
 }
 
 #[derive(Clone)]
@@ -518,6 +525,7 @@ struct HeldTurn {
 }
 
 impl App {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         model: String,
         provider: String,
@@ -525,11 +533,21 @@ impl App {
         session_msg_count: usize,
         context_status: String,
         configured_subagent_model: Option<String>,
+        session_title: String,
+        session_key: String,
+        available_sessions: Vec<xbot::storage::SessionSummary>,
     ) -> Self {
         let composer_history_path = composer_history_path(&workspace);
         let composer_history = load_composer_history(&composer_history_path);
+        let mut history = Vec::new();
+        if session_msg_count > 0 {
+            history.push(HistoryEntry::System(format!(
+                "Continuing session: {} ({} msgs, {})\n Use /session to switch sessions, /new to start fresh.",
+                session_title, session_msg_count, context_status
+            )));
+        }
         Self {
-            history: Vec::new(),
+            history,
             active: None,
             composer: ComposerState::with_history(composer_history),
             line_buffer: LineBuffer::new(),
@@ -561,6 +579,12 @@ impl App {
             approval_dialog: None,
             approval_responder: None,
             composer_history_path,
+            session_title,
+            session_key,
+            show_session_overlay: false,
+            session_overlay_index: 0,
+            session_overlay_scroll: 0,
+            available_sessions,
         }
     }
 
@@ -1202,6 +1226,39 @@ impl App {
         self.show_subagent_overlay = false;
         self.subagent_overlay_index = 0;
         self.subagent_overlay_scroll = 0;
+        self.show_session_overlay = false;
+    }
+
+    fn switch_to_session(&mut self, new_key: String, new_title: String, new_msg_count: usize) {
+        self.reset_session_view();
+        self.pending.clear();
+        self.session_key = new_key;
+        self.session_title = new_title.clone();
+        self.session_msg_count = new_msg_count;
+        self.pending.push_back(QueuedPrompt::internal(format!(
+            "/switch {}",
+            self.session_key
+        )));
+        if new_msg_count > 0 {
+            self.history.push(HistoryEntry::System(format!(
+                "Switched to session: {} ({} msgs)\nUse /session to switch, /new for fresh.",
+                new_title, new_msg_count
+            )));
+        } else {
+            self.history.push(HistoryEntry::System(format!(
+                "Switched to session: {} (empty)\nUse /session to switch, /new for fresh.",
+                new_title
+            )));
+        }
+        self.auto_scroll = true;
+    }
+
+    pub fn session_key(&self) -> &str {
+        &self.session_key
+    }
+
+    pub fn refresh_available_sessions(&mut self, summaries: Vec<xbot::storage::SessionSummary>) {
+        self.available_sessions = summaries;
     }
 
     fn maybe_dequeue(&mut self) {
@@ -1304,6 +1361,39 @@ impl App {
                 KeyCode::Down | KeyCode::Char('j') => self.scroll_down(1),
                 KeyCode::PageUp => self.scroll_up(20),
                 KeyCode::PageDown => self.scroll_down(20),
+                _ => {}
+            }
+            return;
+        }
+
+        if self.show_session_overlay {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.show_session_overlay = false;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if self.session_overlay_index > 0 {
+                        self.session_overlay_index -= 1;
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let count = self.available_sessions.len();
+                    if count > 0 && self.session_overlay_index < count - 1 {
+                        self.session_overlay_index += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    if let Some(selected) = self.available_sessions.get(self.session_overlay_index)
+                    {
+                        let new_key = selected.key.clone();
+                        let new_title = selected.title.clone();
+                        let new_msg_count = selected.message_count;
+                        self.show_session_overlay = false;
+                        if new_key != self.session_key {
+                            self.switch_to_session(new_key, new_title, new_msg_count);
+                        }
+                    }
+                }
                 _ => {}
             }
             return;
@@ -1485,6 +1575,22 @@ impl App {
             LocalCommand::Agents => {
                 self.show_sidebar = !self.show_sidebar;
             }
+            LocalCommand::Sessions => {
+                if self.available_sessions.len() > 1 {
+                    self.show_session_overlay = true;
+                    self.session_overlay_index = self
+                        .available_sessions
+                        .iter()
+                        .position(|s| s.key == self.session_key)
+                        .unwrap_or(0);
+                    self.session_overlay_scroll = 0;
+                } else {
+                    self.history.push(HistoryEntry::System(
+                        "No other sessions available. Use /new to create one.".into(),
+                    ));
+                    self.auto_scroll = true;
+                }
+            }
             LocalCommand::Agent(text) => {
                 self.pending.push_back(QueuedPrompt::user(text));
             }
@@ -1607,6 +1713,7 @@ enum LocalCommand {
     Stop,
     Clear,
     Agents,
+    Sessions,
     Agent(String),
 }
 
@@ -1619,6 +1726,7 @@ fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "/stop" | "stop" | "[stop]" => Some(LocalCommand::Stop),
         "/clear" | "clear" | "/new" | "new" => Some(LocalCommand::Clear),
         "/agents" => Some(LocalCommand::Agents),
+        "/session" | "/sessions" => Some(LocalCommand::Sessions),
         _ => {
             if lower.starts_with("/memorize")
                 || lower.starts_with("/model")
@@ -1878,16 +1986,23 @@ mod tests {
         assert_eq!(c.cursor, 5);
     }
 
-    #[test]
-    fn enter_while_busy_queues_without_history_entry() {
-        let mut app = App::new(
-            "main".into(),
+    fn test_app() -> App {
+        App::new(
+            "test".into(),
             "test".into(),
             PathBuf::from("/tmp"),
             0,
             "0/1000".into(),
             None,
-        );
+            String::new(),
+            "test:key".into(),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn enter_while_busy_queues_without_history_entry() {
+        let mut app = test_app();
         app.agent_state = AgentState::Working;
         app.composer.input = "follow up".into();
         app.composer.cursor = app.composer.input.chars().count();
@@ -1903,14 +2018,7 @@ mod tests {
 
     #[test]
     fn pop_next_prompt_inserts_user_prompt_at_start_of_turn() {
-        let mut app = App::new(
-            "main".into(),
-            "test".into(),
-            PathBuf::from("/tmp"),
-            0,
-            "0/1000".into(),
-            None,
-        );
+        let mut app = test_app();
         app.pending
             .push_back(QueuedPrompt::user("queued user".into()));
 
@@ -1924,14 +2032,7 @@ mod tests {
 
     #[test]
     fn pop_next_prompt_hides_internal_prompt_from_history() {
-        let mut app = App::new(
-            "main".into(),
-            "test".into(),
-            PathBuf::from("/tmp"),
-            0,
-            "0/1000".into(),
-            None,
-        );
+        let mut app = test_app();
         app.pending.push_back(QueuedPrompt::internal("/new".into()));
 
         assert_eq!(app.pop_next_prompt().as_deref(), Some("/new"));
@@ -2015,6 +2116,9 @@ mod tests {
             0,
             "0/1000".into(),
             None,
+            String::new(),
+            "test:key".into(),
+            Vec::new(),
         );
         app.composer.input = "remember me".into();
         app.composer.cursor = app.composer.input.chars().count();
@@ -2028,6 +2132,9 @@ mod tests {
             0,
             "0/1000".into(),
             None,
+            String::new(),
+            "test:key".into(),
+            Vec::new(),
         );
         assert_eq!(app.composer.history, vec!["remember me"]);
     }
@@ -2047,6 +2154,9 @@ mod tests {
             0,
             "0/1000".into(),
             None,
+            String::new(),
+            "test:key".into(),
+            Vec::new(),
         );
 
         assert_eq!(app.composer.history.len(), 10);
@@ -2087,10 +2197,63 @@ mod tests {
             Some(LocalCommand::Agents)
         ));
         assert!(matches!(
+            parse_local_command("/session"),
+            Some(LocalCommand::Sessions)
+        ));
+        assert!(matches!(
+            parse_local_command("/sessions"),
+            Some(LocalCommand::Sessions)
+        ));
+        assert!(matches!(
             parse_local_command("/model gpt-4"),
             Some(LocalCommand::Agent(_))
         ));
         assert!(parse_local_command("hello world").is_none());
+    }
+
+    #[test]
+    fn session_overlay_opens_only_with_multiple_sessions() {
+        let mut app = test_app();
+        app.handle_local_command(LocalCommand::Sessions);
+        assert!(!app.show_session_overlay);
+        assert_eq!(app.history.len(), 1);
+
+        app.available_sessions = vec![
+            xbot::storage::SessionSummary {
+                key: "cli:a:1".into(),
+                updated_at: "2026-01-01T00:00:00Z".into(),
+                message_count: 5,
+                last_consolidated: 0,
+                title: "Fix bugs".into(),
+                estimated_tokens: 2000,
+            },
+            xbot::storage::SessionSummary {
+                key: "cli:b:2".into(),
+                updated_at: "2026-01-02T00:00:00Z".into(),
+                message_count: 3,
+                last_consolidated: 0,
+                title: "Add tests".into(),
+                estimated_tokens: 1000,
+            },
+        ];
+        app.handle_local_command(LocalCommand::Sessions);
+        assert!(app.show_session_overlay);
+    }
+
+    #[test]
+    fn session_switch_resets_state_and_queues_switch_command() {
+        let mut app = test_app();
+        app.history.push(HistoryEntry::User("old prompt".into()));
+        app.session_msg_count = 3;
+        app.switch_to_session("cli:new:key".into(), "New session".into(), 5);
+
+        assert_eq!(app.session_key, "cli:new:key");
+        assert_eq!(app.session_title, "New session");
+        assert_eq!(app.session_msg_count, 5);
+        assert_eq!(app.pending.len(), 1);
+        let queued = app.pending.front().unwrap();
+        assert!(queued.prompt.starts_with("/switch "));
+        assert!(!queued.show_in_history);
     }
 
     #[test]
@@ -2175,14 +2338,7 @@ mod tests {
 
     #[test]
     fn stream_delta_without_newline_stays_before_later_tool() {
-        let mut app = App::new(
-            "test".into(),
-            "test".into(),
-            PathBuf::from("/tmp"),
-            0,
-            "0/1000".into(),
-            None,
-        );
+        let mut app = test_app();
 
         app.handle_engine_event(EngineEvent::StreamDelta("partial answer".into()));
         app.handle_engine_event(EngineEvent::ToolHint {
@@ -2202,14 +2358,7 @@ mod tests {
 
     #[test]
     fn completed_turn_prefers_final_content_over_stream_tail() {
-        let mut app = App::new(
-            "test".into(),
-            "test".into(),
-            PathBuf::from("/tmp"),
-            0,
-            "0/1000".into(),
-            None,
-        );
+        let mut app = test_app();
 
         app.handle_engine_event(EngineEvent::StreamDelta("first second - item".to_string()));
         app.handle_engine_event(EngineEvent::TurnComplete {
@@ -2241,28 +2390,14 @@ mod tests {
 
     #[test]
     fn agent_state_transitions() {
-        let app = App::new(
-            "test".into(),
-            "test".into(),
-            PathBuf::from("/tmp"),
-            0,
-            "0/1000".into(),
-            None,
-        );
+        let app = test_app();
         assert_eq!(app.agent_state, AgentState::Ready);
         assert!(!app.is_busy());
     }
 
     #[test]
     fn subagent_tracking() {
-        let mut app = App::new(
-            "test".into(),
-            "test".into(),
-            PathBuf::from("/tmp"),
-            0,
-            "0/1000".into(),
-            None,
-        );
+        let mut app = test_app();
         app.handle_engine_event(EngineEvent::SubagentStarted {
             task_id: "abc".into(),
             label: "test task".into(),
@@ -2290,14 +2425,7 @@ mod tests {
 
     #[test]
     fn clear_command_resets_subagent_render_state() {
-        let mut app = App::new(
-            "test".into(),
-            "test".into(),
-            PathBuf::from("/tmp"),
-            0,
-            "0/1000".into(),
-            None,
-        );
+        let mut app = test_app();
         app.history.push(HistoryEntry::User("old prompt".into()));
         app.session_msg_count = 3;
         app.pending

@@ -120,6 +120,10 @@ pub struct SessionSummary {
     pub updated_at: String,
     pub message_count: usize,
     pub last_consolidated: usize,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub estimated_tokens: usize,
 }
 
 impl Session {
@@ -138,6 +142,47 @@ impl Session {
     pub fn add_message(&mut self, role: &str, content: impl Into<String>) {
         self.messages.push(ChatMessage::text(role, content));
         self.updated_at = now_iso();
+    }
+
+    pub fn title(&self, max_len: usize) -> String {
+        self.messages
+            .iter()
+            .find(|m| m.role == "user")
+            .and_then(|m| match &m.content {
+                Some(Value::String(s)) => Some(s.as_str()),
+                Some(Value::Array(blocks)) => blocks
+                    .iter()
+                    .find_map(|b| b.get("text").and_then(Value::as_str)),
+                _ => None,
+            })
+            .map(|text| {
+                let first_line = text.lines().next().unwrap_or(text);
+                if first_line.len() <= max_len {
+                    first_line.to_string()
+                } else {
+                    format!("{}…", &first_line[..max_len.saturating_sub(1)])
+                }
+            })
+            .unwrap_or_else(|| "(empty session)".to_string())
+    }
+
+    pub fn estimated_tokens(&self) -> usize {
+        self.messages
+            .iter()
+            .map(|m| {
+                let mut t = 4;
+                if let Some(c) = &m.content {
+                    t += c.to_string().len() / 4;
+                }
+                if let Some(tc) = &m.tool_calls {
+                    t += tc.iter().map(|v| v.to_string().len() / 4).sum::<usize>();
+                }
+                if let Some(r) = &m.reasoning_content {
+                    t += r.len() / 4;
+                }
+                t
+            })
+            .sum()
     }
 
     pub fn clear(&mut self) {
@@ -301,6 +346,70 @@ mod tests {
 
         assert!(payload.get("reasoning_content").is_none());
     }
+
+    #[test]
+    fn session_title_from_first_user_message() {
+        use super::Session;
+        let mut s = Session::new("test-key");
+        assert_eq!(s.title(40), "(empty session)");
+
+        s.add_message("user", "Find all bugs in the authentication module");
+        s.add_message("assistant", "I'll look at that.");
+
+        assert_eq!(s.title(40), "Find all bugs in the authentication mod…");
+        assert_eq!(s.title(100), "Find all bugs in the authentication module");
+    }
+
+    #[test]
+    fn session_title_from_multiline_uses_first_line() {
+        use super::Session;
+        let mut s = Session::new("test-key");
+        s.add_message("user", "First line\nSecond line\nThird line");
+        assert_eq!(s.title(100), "First line");
+    }
+
+    #[test]
+    fn session_estimated_tokens_rough_count() {
+        use super::Session;
+        let mut s = Session::new("test-key");
+        assert_eq!(s.estimated_tokens(), 0);
+
+        s.add_message("user", "Hello world");
+        let tokens = s.estimated_tokens();
+        assert!(tokens > 0);
+        assert!(tokens < 100);
+    }
+
+    #[test]
+    fn session_summary_includes_title_and_tokens() {
+        use super::{Session, SessionManager};
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_path_buf();
+        std::fs::create_dir_all(ws.join(".xbot").join("sessions")).unwrap();
+
+        let mut manager = SessionManager::new(&ws).unwrap();
+        let mut s1 = Session::new("cli:proj:aaa");
+        s1.add_message("user", "Fix the login page");
+        s1.add_message("assistant", "I'll fix it now.");
+        manager.save(&s1).unwrap();
+
+        let mut s2 = Session::new("cli:proj:bbb");
+        s2.add_message("user", "Run tests for module X");
+        manager.save(&s2).unwrap();
+
+        let summaries = manager.list_session_summaries().unwrap();
+        assert_eq!(summaries.len(), 2);
+
+        for s in &summaries {
+            assert!(!s.title.is_empty());
+            assert_ne!(s.title, "(empty session)");
+            assert!(s.estimated_tokens > 0);
+        }
+
+        let fix_login = summaries.iter().find(|s| s.key == "cli:proj:aaa").unwrap();
+        assert_eq!(fix_login.message_count, 2);
+        assert_eq!(fix_login.title, "Fix the login page");
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -392,10 +501,12 @@ impl SessionManager {
             };
             if let Some(session) = self.load(stem)? {
                 summaries.push(SessionSummary {
-                    key: session.key,
-                    updated_at: session.updated_at,
+                    key: session.key.clone(),
+                    updated_at: session.updated_at.clone(),
                     message_count: session.messages.len(),
                     last_consolidated: session.last_consolidated,
+                    title: session.title(60),
+                    estimated_tokens: session.estimated_tokens(),
                 });
             }
         }
