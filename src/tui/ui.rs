@@ -36,6 +36,7 @@ const SIDEBAR_BG: Color = Color::Rgb(14, 17, 26);
 const SUBAGENT_RUNNING: Color = Color::Rgb(100, 180, 230);
 const SUBAGENT_DONE: Color = Color::Rgb(80, 200, 120);
 const SUBAGENT_FAIL: Color = Color::Rgb(230, 80, 80);
+const SESSION_HINT_FG: Color = Color::Rgb(120, 205, 255);
 
 const SIDEBAR_MIN_WIDTH: u16 = 100;
 const SIDEBAR_WIDTH: u16 = 28;
@@ -655,6 +656,31 @@ fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                     format!("  {msg}"),
                     Style::default().fg(TEXT_DIM),
                 )));
+            }
+            HistoryEntry::SessionHint(msg) => {
+                let follows_session_hint =
+                    idx > 0 && matches!(app.history[idx - 1], HistoryEntry::SessionHint(_));
+                if !follows_session_hint {
+                    push_blank(&mut lines);
+                }
+                let wrap_width = w.saturating_sub(4).max(20);
+                for (line_idx, wrapped) in wrap_words(msg, wrap_width).into_iter().enumerate() {
+                    let prefix = if line_idx == 0 { "  ◆ " } else { "    " };
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            prefix,
+                            Style::default()
+                                .fg(SESSION_HINT_FG)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            wrapped,
+                            Style::default()
+                                .fg(SESSION_HINT_FG)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                }
             }
             HistoryEntry::Separator { summary } => {
                 render_turn_separator(&mut lines, summary, w);
@@ -1473,9 +1499,9 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let status = app.status_line();
     let busy = app.is_busy();
     let shortcuts = if busy {
-        "Ctrl+C:cancel  ↑↓:scroll  Shift+↑↓:history  Alt+4:agents  ?:help"
+        "Ctrl+C:cancel  ↑↓:scroll  Shift+↑↓:history  Ctrl+4:agents  ?:help"
     } else {
-        "Enter:send  Ctrl+C:quit  ↑↓:scroll  Shift+↑↓:history  Alt+4:agents  ?:help"
+        "Enter:send  Ctrl+C:quit  ↑↓:scroll  Shift+↑↓:history  Ctrl+4:agents  ?:help"
     };
 
     let available = area.width as usize;
@@ -1544,7 +1570,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         (
             "Agents & Commands",
             vec![
-                ("Alt+4", "Cycle: sidebar / agent overlay / hide"),
+                ("Ctrl+4", "Cycle: sidebar / agent overlay / hide"),
                 ("/agents", "Toggle agents sidebar"),
                 ("/help or ?", "Toggle this help"),
                 ("/clear", "Clear & reset session"),
@@ -1931,7 +1957,7 @@ fn render_subagent_overlay(f: &mut Frame, area: Rect, app: &mut super::app::App)
         idx + 1,
         agents.len()
     );
-    let footer_str = " Esc:close  ←/→:switch  ↑/↓:scroll ";
+    let footer_str = " Esc/Ctrl+4:close  ←/→:switch  ↑/↓:scroll ";
 
     let block = Block::default()
         .title(Span::styled(
@@ -1992,6 +2018,14 @@ fn truncate_end(text: &str, max: usize) -> String {
     }
 }
 
+fn format_session_context_tokens(tokens: Option<usize>) -> String {
+    match tokens {
+        Some(tokens) if tokens >= 1000 => format!("{}k tok", tokens / 1000),
+        Some(tokens) => format!("{tokens} tok"),
+        None => "ctx n/a".to_string(),
+    }
+}
+
 fn render_session_overlay(f: &mut Frame, area: Rect, app: &mut super::app::App) {
     if app.available_sessions.is_empty() {
         app.show_session_overlay = false;
@@ -2022,8 +2056,8 @@ fn render_session_overlay(f: &mut Frame, area: Rect, app: &mut super::app::App) 
 
         let title = truncate_end(&s.title, inner_w.saturating_sub(30));
         let ago = format_relative_time_short(&s.updated_at);
-        let tokens_k = s.estimated_tokens / 1000;
-        let detail = format!("{} msgs · ~{}k tok · {}", s.message_count, tokens_k, ago);
+        let tokens = format_session_context_tokens(s.context_tokens);
+        let detail = format!("{} msgs · {} · {}", s.message_count, tokens, ago);
 
         let title_style = if is_selected {
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)

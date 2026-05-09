@@ -121,6 +121,7 @@ pub enum HistoryEntry {
     },
     Error(String),
     System(String),
+    SessionHint(String),
     Separator {
         summary: TurnSummary,
     },
@@ -490,6 +491,7 @@ pub struct App {
     pub session_msg_count: usize,
     pub context_status: String,
     pub last_summary: Option<TurnSummary>,
+    active_turn_started_at: Option<Instant>,
     pub animation_frame: u16,
 
     pub subagents: BTreeMap<String, SubagentInfo>,
@@ -541,10 +543,13 @@ impl App {
         let composer_history = load_composer_history(&composer_history_path);
         let mut history = Vec::new();
         if session_msg_count > 0 {
-            history.push(HistoryEntry::System(format!(
-                "Continuing session: {} ({} msgs, {})\n Use /session to switch sessions, /new to start fresh.",
+            history.push(HistoryEntry::SessionHint(format!(
+                "Continuing session: {} ({} msgs, {})",
                 session_title, session_msg_count, context_status
             )));
+            history.push(HistoryEntry::SessionHint(
+                "Use /session to switch sessions, /new to start fresh.".to_string(),
+            ));
         }
         Self {
             history,
@@ -572,6 +577,7 @@ impl App {
             session_msg_count,
             context_status,
             last_summary: None,
+            active_turn_started_at: None,
             animation_frame: 0,
             subagents: BTreeMap::new(),
             pending_subagent_results: Vec::new(),
@@ -590,6 +596,12 @@ impl App {
 
     pub fn is_busy(&self) -> bool {
         !matches!(self.agent_state, AgentState::Ready)
+    }
+
+    pub fn mark_turn_started(&mut self) {
+        self.active_turn_started_at = Some(Instant::now());
+        self.last_summary = None;
+        self.needs_redraw = true;
     }
 
     pub fn pop_next_prompt(&mut self) -> Option<String> {
@@ -963,6 +975,7 @@ impl App {
                 self.finalize_turn(held.content, held.reasoning, held.summary, held.note);
             } else {
                 self.agent_state = AgentState::Ready;
+                self.active_turn_started_at = None;
                 self.auto_scroll = true;
                 self.needs_redraw = true;
                 self.maybe_dequeue();
@@ -1134,6 +1147,7 @@ impl App {
             }
         }
 
+        let summary = self.finish_turn_summary(summary);
         if let Some(summary) = summary.clone() {
             self.history.push(HistoryEntry::Separator { summary });
         }
@@ -1208,6 +1222,8 @@ impl App {
         self.flush_active_to_history();
         self.history
             .push(HistoryEntry::System("⏹ turn cancelled".into()));
+        self.active_turn_started_at = None;
+        self.last_summary = None;
         self.auto_scroll = true;
     }
 
@@ -1218,6 +1234,7 @@ impl App {
         self.scroll_offset = 0;
         self.auto_scroll = true;
         self.last_summary = None;
+        self.active_turn_started_at = None;
         self.session_msg_count = 0;
         self.subagents.clear();
         self.pending_subagent_results.clear();
@@ -1401,10 +1418,11 @@ impl App {
 
         if self.show_subagent_overlay {
             match key.code {
-                KeyCode::Esc | KeyCode::Char('q') => {
+                _ if is_agents_overlay_shortcut(&key) => {
                     self.show_subagent_overlay = false;
+                    self.show_sidebar = false;
                 }
-                KeyCode::Char('4') if key.modifiers.contains(KeyModifiers::ALT) => {
+                KeyCode::Esc | KeyCode::Char('q') => {
                     self.show_subagent_overlay = false;
                 }
                 KeyCode::Left | KeyCode::Char('h') => {
@@ -1452,7 +1470,7 @@ impl App {
                     self.should_quit = true;
                 }
             }
-            KeyCode::Char('4') if key.modifiers.contains(KeyModifiers::ALT) => {
+            _ if is_agents_overlay_shortcut(&key) => {
                 if self.show_subagent_overlay {
                     self.show_subagent_overlay = false;
                     self.show_sidebar = false;
@@ -1640,7 +1658,9 @@ impl App {
                 if running == 1 { "" } else { "s" }
             ));
         }
-        if let Some(ref s) = self.last_summary {
+        if let Some(started_at) = self.active_turn_started_at {
+            parts.push(format_elapsed(started_at.elapsed()));
+        } else if let Some(ref s) = self.last_summary {
             if s.prompt_tokens > 0 || s.completion_tokens > 0 {
                 let cache_hint = if s.cached_tokens > 0 && s.prompt_tokens > 0 {
                     let pct = (s.cached_tokens * 100) / s.prompt_tokens;
@@ -1663,6 +1683,26 @@ impl App {
         save_composer_history(&self.composer_history_path, &self.composer.history);
         text
     }
+
+    fn finish_turn_summary(&mut self, summary: Option<TurnSummary>) -> Option<TurnSummary> {
+        let elapsed = self
+            .active_turn_started_at
+            .take()
+            .map(|started_at| started_at.elapsed());
+        summary.map(|mut summary| {
+            if let Some(elapsed) = elapsed {
+                summary.elapsed = elapsed;
+            }
+            summary
+        })
+    }
+}
+
+fn is_agents_overlay_shortcut(key: &KeyEvent) -> bool {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    matches!(key.code, KeyCode::Char('4') if ctrl)
+        || matches!(key.code, KeyCode::Char('\\') if ctrl)
+        || matches!(key.code, KeyCode::Char('\u{1c}'))
 }
 
 fn composer_history_path(workspace: &std::path::Path) -> PathBuf {
@@ -2171,6 +2211,33 @@ mod tests {
     }
 
     #[test]
+    fn resumed_session_notice_uses_two_render_only_hints() {
+        let app = App::new(
+            "main".into(),
+            "test".into(),
+            PathBuf::from("/tmp"),
+            3,
+            "42/1000 (4%)".into(),
+            None,
+            "Fix issue".into(),
+            "test:key".into(),
+            Vec::new(),
+        );
+
+        assert_eq!(app.history.len(), 2);
+        assert!(matches!(
+            &app.history[0],
+            HistoryEntry::SessionHint(text)
+                if text == "Continuing session: Fix issue (3 msgs, 42/1000 (4%))"
+        ));
+        assert!(matches!(
+            &app.history[1],
+            HistoryEntry::SessionHint(text)
+                if text == "Use /session to switch sessions, /new to start fresh."
+        ));
+    }
+
+    #[test]
     fn local_commands_parsed() {
         assert!(matches!(
             parse_local_command("/help"),
@@ -2225,7 +2292,7 @@ mod tests {
                 message_count: 5,
                 last_consolidated: 0,
                 title: "Fix bugs".into(),
-                estimated_tokens: 2000,
+                context_tokens: Some(2000),
             },
             xbot::storage::SessionSummary {
                 key: "cli:b:2".into(),
@@ -2233,7 +2300,7 @@ mod tests {
                 message_count: 3,
                 last_consolidated: 0,
                 title: "Add tests".into(),
-                estimated_tokens: 1000,
+                context_tokens: Some(1000),
             },
         ];
         app.handle_local_command(LocalCommand::Sessions);
@@ -2396,6 +2463,15 @@ mod tests {
     }
 
     #[test]
+    fn status_line_counts_active_turn_elapsed_before_completion() {
+        let mut app = test_app();
+        app.agent_state = AgentState::Working;
+        app.active_turn_started_at = Some(Instant::now() - Duration::from_secs(65));
+
+        assert_eq!(app.status_line(), "working · 1m 5s");
+    }
+
+    #[test]
     fn subagent_tracking() {
         let mut app = test_app();
         app.handle_engine_event(EngineEvent::SubagentStarted {
@@ -2421,6 +2497,52 @@ mod tests {
             SubagentStatus::Completed
         );
         assert!(app.subagents.get("abc").unwrap().finished_at.is_some());
+    }
+
+    #[test]
+    fn ctrl_4_cycles_agents_sidebar_and_overlay() {
+        let mut app = test_app();
+        app.handle_engine_event(EngineEvent::SubagentStarted {
+            task_id: "abc".into(),
+            label: "test task".into(),
+            task: "do something".into(),
+            model: "sub-model".into(),
+        });
+        app.show_sidebar = false;
+        let ctrl_4 = KeyEvent::new(KeyCode::Char('4'), KeyModifiers::CONTROL);
+
+        app.handle_key(ctrl_4);
+        assert!(app.show_sidebar);
+        assert!(!app.show_subagent_overlay);
+
+        app.handle_key(ctrl_4);
+        assert!(app.show_sidebar);
+        assert!(app.show_subagent_overlay);
+
+        app.handle_key(ctrl_4);
+        assert!(!app.show_sidebar);
+        assert!(!app.show_subagent_overlay);
+    }
+
+    #[test]
+    fn ctrl_backslash_alias_cycles_agents_sidebar_and_overlay() {
+        let mut app = test_app();
+        app.handle_engine_event(EngineEvent::SubagentStarted {
+            task_id: "abc".into(),
+            label: "test task".into(),
+            task: "do something".into(),
+            model: "sub-model".into(),
+        });
+        app.show_sidebar = false;
+        let ctrl_backslash = KeyEvent::new(KeyCode::Char('\\'), KeyModifiers::CONTROL);
+
+        app.handle_key(ctrl_backslash);
+        assert!(app.show_sidebar);
+        assert!(!app.show_subagent_overlay);
+
+        app.handle_key(ctrl_backslash);
+        assert!(app.show_sidebar);
+        assert!(app.show_subagent_overlay);
     }
 
     #[test]

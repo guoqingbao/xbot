@@ -1145,6 +1145,23 @@ async fn provider_usage_emits_realtime_context_update() {
         .unwrap()
         .unwrap();
     assert!(status.content.contains("Context: 42/100 (42%)"));
+
+    let mut sessions = SessionManager::new(dir.path()).unwrap();
+    let session = sessions.get_or_create("cli:direct").unwrap();
+    assert_eq!(
+        session
+            .metadata
+            .get("contextTokens")
+            .and_then(Value::as_u64),
+        Some(42)
+    );
+    let summary = sessions
+        .list_session_summaries()
+        .unwrap()
+        .into_iter()
+        .find(|summary| summary.key == "cli:direct")
+        .unwrap();
+    assert_eq!(summary.context_tokens, Some(42));
 }
 
 #[tokio::test]

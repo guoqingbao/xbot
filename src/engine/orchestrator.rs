@@ -842,6 +842,7 @@ impl AgentLoop {
             } else {
                 self.save_turn(&mut session, &all_messages)?;
             }
+            self.apply_latest_context_usage_metadata(&mut session);
             self.maybe_consolidate_session(&mut session, context_window_tokens)?;
             sessions.save(&session)?;
         }
@@ -993,6 +994,7 @@ impl AgentLoop {
             } else {
                 self.save_turn(&mut session, &all_messages)?;
             }
+            self.apply_latest_context_usage_metadata(&mut session);
             self.maybe_consolidate_session(&mut session, context_window_tokens)?;
             sessions.save(&session)?;
         }
@@ -2120,7 +2122,7 @@ impl AgentLoop {
         let context_tokens = if latest_context_tokens > 0 {
             latest_context_tokens
         } else {
-            self.memory.estimate_session_prompt_tokens(session)
+            session.context_tokens().unwrap_or(0)
         };
         let active_model = self.session_model(session);
         let context_window_tokens = self.session_context_window_tokens(session);
@@ -2157,6 +2159,14 @@ impl AgentLoop {
                 .lock()
                 .expect("context prompt lock poisoned") = response.usage.prompt_tokens;
         }
+    }
+
+    fn apply_latest_context_usage_metadata(&self, session: &mut Session) {
+        let latest_context_tokens = *self
+            .last_context_prompt_tokens
+            .lock()
+            .expect("context prompt lock poisoned");
+        session.set_context_tokens(latest_context_tokens);
     }
 
     fn save_turn(&self, session: &mut Session, messages: &[ChatMessage]) -> Result<()> {
@@ -2215,6 +2225,7 @@ impl AgentLoop {
         let mut sessions = self.sessions.lock().expect("session manager lock poisoned");
         let mut session = sessions.get_or_create(session_key)?;
         self.save_turn(&mut session, messages)?;
+        self.apply_latest_context_usage_metadata(&mut session);
         let context_window_tokens = self.session_context_window_tokens(&session);
         self.maybe_consolidate_session(&mut session, context_window_tokens)?;
         sessions.save(&session)?;

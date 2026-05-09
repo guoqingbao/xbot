@@ -246,6 +246,7 @@ pub async fn run_tui_repl(
                     engine_tx.clone(),
                 ));
                 app.agent_state = AS::Working;
+                app.mark_turn_started();
                 app.needs_redraw = true;
             } else if app.show_session_overlay || app.available_sessions.is_empty() {
                 if let Ok(summaries) = agent.session_summaries() {

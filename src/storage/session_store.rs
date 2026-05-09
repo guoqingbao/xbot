@@ -9,6 +9,8 @@ use serde_json::{Value, json};
 
 use crate::util::{ensure_dir, now_iso, safe_filename, workspace_state_dir};
 
+pub const SESSION_CONTEXT_TOKENS_KEY: &str = "contextTokens";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatMessage {
     pub role: String,
@@ -123,7 +125,7 @@ pub struct SessionSummary {
     #[serde(default)]
     pub title: String,
     #[serde(default)]
-    pub estimated_tokens: usize,
+    pub context_tokens: Option<usize>,
 }
 
 impl Session {
@@ -166,28 +168,27 @@ impl Session {
             .unwrap_or_else(|| "(empty session)".to_string())
     }
 
-    pub fn estimated_tokens(&self) -> usize {
-        self.messages
-            .iter()
-            .map(|m| {
-                let mut t = 4;
-                if let Some(c) = &m.content {
-                    t += c.to_string().len() / 4;
-                }
-                if let Some(tc) = &m.tool_calls {
-                    t += tc.iter().map(|v| v.to_string().len() / 4).sum::<usize>();
-                }
-                if let Some(r) = &m.reasoning_content {
-                    t += r.len() / 4;
-                }
-                t
-            })
-            .sum()
+    pub fn context_tokens(&self) -> Option<usize> {
+        self.metadata
+            .get(SESSION_CONTEXT_TOKENS_KEY)
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+            .filter(|value| *value > 0)
+    }
+
+    pub fn set_context_tokens(&mut self, tokens: usize) {
+        if tokens > 0 {
+            self.metadata.insert(
+                SESSION_CONTEXT_TOKENS_KEY.to_string(),
+                Value::from(tokens as u64),
+            );
+        }
     }
 
     pub fn clear(&mut self) {
         self.messages.clear();
         self.last_consolidated = 0;
+        self.metadata.remove(SESSION_CONTEXT_TOKENS_KEY);
         self.updated_at = now_iso();
     }
 
@@ -369,19 +370,23 @@ mod tests {
     }
 
     #[test]
-    fn session_estimated_tokens_rough_count() {
+    fn session_context_tokens_come_from_metadata() {
         use super::Session;
         let mut s = Session::new("test-key");
-        assert_eq!(s.estimated_tokens(), 0);
+        assert_eq!(s.context_tokens(), None);
 
         s.add_message("user", "Hello world");
-        let tokens = s.estimated_tokens();
-        assert!(tokens > 0);
-        assert!(tokens < 100);
+        assert_eq!(s.context_tokens(), None);
+
+        s.set_context_tokens(1234);
+        assert_eq!(s.context_tokens(), Some(1234));
+
+        s.clear();
+        assert_eq!(s.context_tokens(), None);
     }
 
     #[test]
-    fn session_summary_includes_title_and_tokens() {
+    fn session_summary_includes_title_and_context_tokens() {
         use super::{Session, SessionManager};
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path().to_path_buf();
@@ -391,6 +396,7 @@ mod tests {
         let mut s1 = Session::new("cli:proj:aaa");
         s1.add_message("user", "Fix the login page");
         s1.add_message("assistant", "I'll fix it now.");
+        s1.set_context_tokens(2048);
         manager.save(&s1).unwrap();
 
         let mut s2 = Session::new("cli:proj:bbb");
@@ -403,12 +409,15 @@ mod tests {
         for s in &summaries {
             assert!(!s.title.is_empty());
             assert_ne!(s.title, "(empty session)");
-            assert!(s.estimated_tokens > 0);
         }
 
         let fix_login = summaries.iter().find(|s| s.key == "cli:proj:aaa").unwrap();
         assert_eq!(fix_login.message_count, 2);
         assert_eq!(fix_login.title, "Fix the login page");
+        assert_eq!(fix_login.context_tokens, Some(2048));
+
+        let run_tests = summaries.iter().find(|s| s.key == "cli:proj:bbb").unwrap();
+        assert_eq!(run_tests.context_tokens, None);
     }
 }
 
@@ -506,7 +515,7 @@ impl SessionManager {
                     message_count: session.messages.len(),
                     last_consolidated: session.last_consolidated,
                     title: session.title(60),
-                    estimated_tokens: session.estimated_tokens(),
+                    context_tokens: session.context_tokens(),
                 });
             }
         }

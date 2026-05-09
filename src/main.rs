@@ -326,23 +326,21 @@ fn chat_select_session(workspace: &Path, default_key: &str, chat_id: &str) -> Re
         return Ok(default_key.to_string());
     }
 
-    if cli_sessions.len() == 1 && cli_sessions[0].key == default_key {
-        let s = &cli_sessions[0];
-        eprintln!(
-            "{}",
-            format!(
-                "Continuing session: {} ({} msgs, ~{}k tokens, updated {})",
-                s.title,
-                s.message_count,
-                s.estimated_tokens / 1000,
-                format_relative_time(&s.updated_at),
-            )
-            .dimmed()
-        );
-        return Ok(default_key.to_string());
-    }
-
     if !std::io::stdin().is_terminal() {
+        if cli_sessions.len() == 1 && cli_sessions[0].key == default_key {
+            let s = &cli_sessions[0];
+            eprintln!(
+                "{}",
+                format!(
+                    "Continuing session: {} ({} msgs, {}, updated {})",
+                    s.title,
+                    s.message_count,
+                    format_session_context_tokens(s.context_tokens),
+                    format_relative_time(&s.updated_at),
+                )
+                .dimmed()
+            );
+        }
         return Ok(default_key.to_string());
     }
 
@@ -351,11 +349,11 @@ fn chat_select_session(workspace: &Path, default_key: &str, chat_id: &str) -> Re
     for (i, s) in cli_sessions.iter().enumerate() {
         let current = if s.key == default_key { " ←" } else { "" };
         eprintln!(
-            "  {} {} — {} msgs, ~{}k tokens, updated {}{}",
+            "  {} {} - {} msgs, {}, updated {}{}",
             format!("{}.", i + 1).bold(),
             truncate_display(&s.title, 50).cyan(),
             s.message_count,
-            s.estimated_tokens / 1000,
+            format_session_context_tokens(s.context_tokens),
             format_relative_time(&s.updated_at),
             current.yellow().bold(),
         );
@@ -414,6 +412,14 @@ fn truncate_display(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         format!("{}…", &s[..max.saturating_sub(1)])
+    }
+}
+
+fn format_session_context_tokens(tokens: Option<usize>) -> String {
+    match tokens {
+        Some(tokens) if tokens >= 1000 => format!("{}k context tokens", tokens / 1000),
+        Some(tokens) => format!("{tokens} context tokens"),
+        None => "context tokens unknown".to_string(),
     }
 }
 
@@ -1334,10 +1340,10 @@ mod tests {
         assert!(rendered.contains("mcp github  workspace-only"));
         assert!(rendered.contains("gateway           : bind=http://0.0.0.0:18790"));
         assert!(rendered.contains("public=http://127.0.0.1:18790/"));
-        assert!(rendered.contains("admin     : http://127.0.0.1:18790/admin"));
-        assert!(rendered.contains("metrics   : http://127.0.0.1:18790/metrics"));
-        assert!(rendered.contains("heartbeat : enabled (1800s)"));
-        assert!(rendered.contains("stop      : Press Ctrl-C to stop."));
+        assert!(rendered.contains("admin             : http://127.0.0.1:18790/admin"));
+        assert!(rendered.contains("metrics           : http://127.0.0.1:18790/metrics"));
+        assert!(rendered.contains("heartbeat         : enabled (1800s)"));
+        assert!(rendered.contains("stop              : Press Ctrl-C to stop."));
         assert!(rendered.ends_with("╰─"));
     }
 
@@ -1438,6 +1444,9 @@ mod tests {
         session
             .metadata
             .insert("model".to_string(), Value::String("demo-model".to_string()));
+        session
+            .metadata
+            .insert("contextTokens".to_string(), Value::from(5_u64));
         sessions.save(&session).unwrap();
 
         let agent = AgentLoop::new(
