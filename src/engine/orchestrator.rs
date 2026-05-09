@@ -154,6 +154,7 @@ impl AgentLoop {
             .unwrap_or_else(|| provider.default_model().to_string());
         let approval_callback = Arc::new(Mutex::new(None));
         let always_allow = Arc::new(Mutex::new(false));
+        let cancellations: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
         let resolved_context_window_tokens = provider
             .list_models()
             .await
@@ -172,6 +173,7 @@ impl AgentLoop {
             memory_enabled,
             approval_callback.clone(),
             always_allow.clone(),
+            cancellations.clone(),
         );
         let mut tools = ToolRegistry::new();
         let allowed_dir = restrict_to_workspace.then(|| workspace.clone());
@@ -247,7 +249,7 @@ impl AgentLoop {
             last_usage: Mutex::new((0, 0, 0)),
             last_context_prompt_tokens: Mutex::new(0),
             tool_semaphore,
-            cancellations: Arc::new(Mutex::new(HashSet::new())),
+            cancellations,
             active_turns: Arc::new(Mutex::new(BTreeMap::new())),
             stop_notifications: Arc::new(Mutex::new(BTreeMap::new())),
             announced_sessions: Arc::new(Mutex::new(HashSet::new())),

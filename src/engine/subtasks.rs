@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -87,6 +88,9 @@ pub struct SubagentManager {
     approval_callback: Arc<Mutex<Option<ApprovalCallback>>>,
     always_allow: Arc<Mutex<bool>>,
     max_concurrent: usize,
+    write_gate: Arc<tokio::sync::Mutex<()>>,
+    globally_denied: Arc<AtomicBool>,
+    cancellations: Arc<Mutex<HashSet<String>>>,
 }
 
 impl SubagentManager {
@@ -102,6 +106,7 @@ impl SubagentManager {
         memory_enabled: bool,
         approval_callback: Arc<Mutex<Option<ApprovalCallback>>>,
         always_allow: Arc<Mutex<bool>>,
+        cancellations: Arc<Mutex<HashSet<String>>>,
     ) -> Self {
         Self {
             provider,
@@ -122,11 +127,22 @@ impl SubagentManager {
             approval_callback,
             always_allow,
             max_concurrent: DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+            write_gate: Arc::new(tokio::sync::Mutex::new(())),
+            globally_denied: Arc::new(AtomicBool::new(false)),
+            cancellations,
         }
     }
 
     pub fn set_max_concurrent(&mut self, max: usize) {
         self.max_concurrent = max;
+    }
+
+    pub fn is_globally_denied(&self) -> bool {
+        self.globally_denied.load(Ordering::SeqCst)
+    }
+
+    pub fn reset_denied(&self) {
+        self.globally_denied.store(false, Ordering::SeqCst);
     }
 
     pub fn set_notification_callback(&self, callback: Option<SubagentNotificationCallback>) {
@@ -233,6 +249,7 @@ impl SubagentManager {
     }
 
     pub fn reset_session(&self, session_key: &str) -> usize {
+        self.globally_denied.store(false, Ordering::SeqCst);
         self.clear_session_state(session_key, true)
     }
 
@@ -396,6 +413,11 @@ impl SubagentManager {
         let mut final_result = None;
         let mut step: u32 = 0;
         for _ in 0..SUBAGENT_MAX_ITERATIONS {
+            if self.globally_denied.load(Ordering::SeqCst) {
+                final_result =
+                    Some("Subagent stopped: file modifications denied by user.".to_string());
+                break;
+            }
             let response = self
                 .provider
                 .chat_with_retry(
@@ -449,6 +471,10 @@ impl SubagentManager {
                 });
                 let mut denied_path: Option<String> = None;
                 for tool_call in response.tool_calls {
+                    if self.globally_denied.load(Ordering::SeqCst) {
+                        denied_path = Some("(globally denied)".to_string());
+                        break;
+                    }
                     step += 1;
                     self.notify(SubagentNotification::Progress {
                         task_id: task_id.clone(),
@@ -456,7 +482,10 @@ impl SubagentManager {
                         detail: summarize_tool_args_for_notify(&tool_call.arguments),
                         step,
                     });
-                    let output = match self.check_approval(&tool_call, &task_id, &label).await {
+                    let output = match self
+                        .check_approval(&tool_call, &task_id, &label, origin_session_key.as_deref())
+                        .await
+                    {
                         Some(denial_output) => {
                             let path = tool_call
                                 .arguments
@@ -623,11 +652,18 @@ impl SubagentManager {
         tool_call: &crate::providers::ToolCallRequest,
         task_id: &str,
         label: &str,
+        session_key: Option<&str>,
     ) -> Option<ToolOutput> {
         use crate::tools::{ApprovalDecision, ApprovalRequest};
 
         if !Self::is_file_modifying_tool(&tool_call.name) {
             return None;
+        }
+
+        if self.globally_denied.load(Ordering::SeqCst) {
+            return Some(ToolOutput::Text(
+                "Error: File modifications denied by user.".to_string(),
+            ));
         }
 
         if *self
@@ -678,10 +714,26 @@ impl SubagentManager {
 
         let request = ApprovalRequest {
             tool_name: tool_call.name.clone(),
-            path,
+            path: path.clone(),
             diff_lines,
             source: Some(format!("subagent '{label}' ({task_id})")),
         };
+
+        let _gate = self.write_gate.lock().await;
+
+        if self.globally_denied.load(Ordering::SeqCst) {
+            return Some(ToolOutput::Text(
+                "Error: File modifications denied by user.".to_string(),
+            ));
+        }
+
+        if *self
+            .always_allow
+            .lock()
+            .expect("subagent always_allow lock poisoned")
+        {
+            return None;
+        }
 
         match callback(request).await {
             ApprovalDecision::AllowOnce => None,
@@ -692,10 +744,42 @@ impl SubagentManager {
                     .expect("subagent always_allow lock poisoned") = true;
                 None
             }
-            ApprovalDecision::Deny => Some(ToolOutput::Text(
-                "Error: User denied this file change.".to_string(),
-            )),
+            ApprovalDecision::Deny => {
+                self.globally_denied.store(true, Ordering::SeqCst);
+                self.cancel_all_running();
+                if let Some(sk) = session_key {
+                    self.cancellations
+                        .lock()
+                        .expect("cancellations lock poisoned")
+                        .insert(sk.to_string());
+                }
+                Some(ToolOutput::Text(format!(
+                    "Error: User denied file modification for '{path}'. All tasks stopped.",
+                )))
+            }
         }
+    }
+
+    fn cancel_all_running(&self) {
+        let mut running = self
+            .running_tasks
+            .lock()
+            .expect("subagent running lock poisoned");
+        let task_ids: Vec<String> = running.keys().cloned().collect();
+        for task_id in task_ids {
+            if let Some(handle) = running.remove(&task_id) {
+                handle.abort();
+                self.notify(SubagentNotification::Cancelled {
+                    task_id: task_id.clone(),
+                });
+            }
+        }
+        drop(running);
+        self.session_tasks
+            .lock()
+            .expect("subagent session lock poisoned")
+            .clear();
+        self.result_notify.notify_waiters();
     }
 
     fn build_subagent_prompt(&self) -> String {

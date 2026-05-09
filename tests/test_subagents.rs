@@ -563,7 +563,6 @@ async fn subagent_write_file_uses_approval_callback_with_source() {
     let _response = agent
         .process_direct("delegate write test", "cli:direct", "cli", "direct")
         .await
-        .unwrap()
         .unwrap();
 
     assert!(
