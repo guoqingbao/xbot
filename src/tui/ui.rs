@@ -1639,9 +1639,18 @@ fn render_approval_overlay(f: &mut Frame, area: Rect, app: &super::app::App) {
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
+    if let Some(source) = &dialog.source {
+        text_lines.push(Line::from(vec![
+            Span::styled("  From: ", Style::default().fg(TEXT_DIM)),
+            Span::styled(
+                truncate_end(source, inner_w.saturating_sub(8)),
+                Style::default().fg(TEXT_MUTED),
+            ),
+        ]));
+    }
     text_lines.push(Line::from(""));
 
-    let max_lines = height.saturating_sub(8) as usize;
+    let max_lines = height.saturating_sub(if dialog.source.is_some() { 9 } else { 8 }) as usize;
     for dl in dialog.diff_lines.iter().take(max_lines) {
         let old_no = dl
             .old_lineno
@@ -1823,7 +1832,10 @@ fn render_subagent_overlay(f: &mut Frame, area: Rect, app: &mut super::app::App)
         ]));
     }
 
-    let elapsed = agent.started_at.elapsed();
+    let elapsed = agent
+        .finished_at
+        .map(|finished_at| finished_at.saturating_duration_since(agent.started_at))
+        .unwrap_or_else(|| agent.started_at.elapsed());
     content_lines.push(Line::from(vec![
         Span::styled("  Time:   ", Style::default().fg(TEXT_DIM)),
         Span::styled(

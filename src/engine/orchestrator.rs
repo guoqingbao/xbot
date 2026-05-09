@@ -152,6 +152,8 @@ impl AgentLoop {
         let resolved_model = model
             .clone()
             .unwrap_or_else(|| provider.default_model().to_string());
+        let approval_callback = Arc::new(Mutex::new(None));
+        let always_allow = Arc::new(Mutex::new(false));
         let resolved_context_window_tokens = provider
             .list_models()
             .await
@@ -168,6 +170,8 @@ impl AgentLoop {
             exec.clone(),
             restrict_to_workspace,
             memory_enabled,
+            approval_callback.clone(),
+            always_allow.clone(),
         );
         let mut tools = ToolRegistry::new();
         let allowed_dir = restrict_to_workspace.then(|| workspace.clone());
@@ -250,8 +254,8 @@ impl AgentLoop {
             model_switch_callback: Arc::new(Mutex::new(None)),
             auto_task_summary_enabled: AtomicBool::new(memory_enabled),
             memory_enabled: AtomicBool::new(memory_enabled),
-            approval_callback: Arc::new(Mutex::new(None)),
-            always_allow: Arc::new(Mutex::new(false)),
+            approval_callback,
+            always_allow,
         })
     }
 
@@ -1507,6 +1511,7 @@ impl AgentLoop {
                 tool_name: tc.name.clone(),
                 path,
                 diff_lines,
+                source: None,
             };
 
             let decision = callback(request).await;

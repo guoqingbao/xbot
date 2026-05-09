@@ -1744,6 +1744,7 @@ pub struct ApprovalRequest {
     pub tool_name: String,
     pub path: String,
     pub diff_lines: Vec<crate::diff::DiffLine>,
+    pub source: Option<String>,
 }
 
 /// Callback invoked to request user approval before file changes.

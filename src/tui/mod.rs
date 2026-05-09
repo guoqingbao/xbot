@@ -359,6 +359,7 @@ fn make_approval_callback(tx: mpsc::UnboundedSender<EngineEvent>) -> xbot::tools
                 tool_name: request.tool_name,
                 path: request.path,
                 diff_lines: request.diff_lines,
+                source: request.source,
                 responder: resp_tx,
             });
             if sent.is_err() {

@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use tempfile::tempdir;
 use xbot::config::ExecToolConfig;
 use xbot::engine::AgentLoop;
+use xbot::engine::subtasks::SubagentNotification;
 use xbot::providers::{LlmProvider, LlmResponse, LlmUsage, ToolCallRequest};
 use xbot::runtime::AgentRuntime;
 use xbot::storage::{ChatMessage, InboundMessage, MessageBus};
@@ -70,6 +71,13 @@ impl LlmProvider for DeterministicSubagentProvider {
             return Ok(stop_response("Main task continued with subagent result."));
         }
 
+        if last_text.contains("Subagent results for the current session")
+            && (last_text.contains("Write denied by user.")
+                || last_text.contains("Task stopped: user denied the file change."))
+        {
+            return Ok(stop_response("Main saw denied subagent result."));
+        }
+
         if last_text.contains("[Subagent 'delegate' completed]") {
             return Ok(stop_response("Background summary."));
         }
@@ -82,6 +90,10 @@ impl LlmProvider for DeterministicSubagentProvider {
             .iter()
             .filter_map(ChatMessage::content_as_text)
             .any(|text| text.contains("loop until budget"));
+        let is_subagent = messages
+            .iter()
+            .filter_map(ChatMessage::content_as_text)
+            .any(|text| text.contains("focused background subagent"));
 
         if last_text.contains("Budget final synthesized.") {
             return Ok(stop_response("Main saw synthesized budget result."));
@@ -92,6 +104,14 @@ impl LlmProvider for DeterministicSubagentProvider {
                 "spawn_budget_1",
                 "loop until budget",
                 "budget",
+            ));
+        }
+
+        if last_text.contains("delegate write test") {
+            return Ok(tool_response(
+                "spawn_write_1",
+                "write protected file from subagent with a task description long enough to ensure it is not truncated in the started notification",
+                "writer",
             ));
         }
 
@@ -121,6 +141,14 @@ impl LlmProvider for DeterministicSubagentProvider {
                 ));
             }
             return Ok(list_dir_response(format!("budget_{}", messages.len())));
+        }
+
+        if last_text.contains("Error: User denied this file change.") {
+            return Ok(stop_response("Write denied by user."));
+        }
+
+        if is_subagent && last_text.contains("write protected file from subagent") {
+            return Ok(write_file_response(format!("write_{}", messages.len())));
         }
 
         if last_text.contains("collect report") {
@@ -245,6 +273,24 @@ fn list_dir_response(id: String) -> LlmResponse {
             name: "list_dir".to_string(),
             arguments: json!({
                 "path": ".",
+            }),
+        }],
+        finish_reason: "tool_calls".to_string(),
+        usage: LlmUsage::default(),
+        reasoning_content: None,
+        thinking_blocks: None,
+    }
+}
+
+fn write_file_response(id: String) -> LlmResponse {
+    LlmResponse {
+        content: Some("Writing protected file.".to_string()),
+        tool_calls: vec![ToolCallRequest {
+            id,
+            name: "write_file".to_string(),
+            arguments: json!({
+                "path": "protected.txt",
+                "content": "subagent write",
             }),
         }],
         finish_reason: "tool_calls".to_string(),
@@ -464,6 +510,81 @@ async fn subagent_iteration_budget_gets_final_synthesis_not_tool_snippets() {
         .unwrap();
 
     assert_eq!(response.content, "Main saw synthesized budget result.");
+}
+
+#[tokio::test]
+async fn subagent_write_file_uses_approval_callback_with_source() {
+    let dir = tempdir().unwrap();
+    let provider = Arc::new(DeterministicSubagentProvider::new(SubagentMode::Complete));
+    let agent = AgentLoop::new(
+        provider,
+        dir.path(),
+        Some("test-model".to_string()),
+        8,
+        5,
+        8_000,
+        32 * 1024,
+        Default::default(),
+        None,
+        ExecToolConfig {
+            enable: false,
+            timeout: 60,
+            path_append: String::new(),
+        },
+        false,
+        None,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+
+    let approval_source = Arc::new(Mutex::new(None::<String>));
+    let approval_path = Arc::new(Mutex::new(None::<String>));
+    let source_for_callback = approval_source.clone();
+    let path_for_callback = approval_path.clone();
+    agent.set_approval_callback(Some(Arc::new(move |request| {
+        let source_for_callback = source_for_callback.clone();
+        let path_for_callback = path_for_callback.clone();
+        Box::pin(async move {
+            *source_for_callback.lock().unwrap() = request.source;
+            *path_for_callback.lock().unwrap() = Some(request.path);
+            xbot::tools::ApprovalDecision::Deny
+        })
+    })));
+
+    let started_task = Arc::new(Mutex::new(None::<String>));
+    let started_task_for_callback = started_task.clone();
+    agent.set_subagent_notification_callback(Some(Arc::new(move |notification| {
+        if let SubagentNotification::Started { task, .. } = notification {
+            *started_task_for_callback.lock().unwrap() = Some(task);
+        }
+    })));
+
+    let _response = agent
+        .process_direct("delegate write test", "cli:direct", "cli", "direct")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(
+        approval_source
+            .lock()
+            .unwrap()
+            .as_deref()
+            .is_some_and(|source| source.starts_with("subagent 'writer' ("))
+    );
+    assert_eq!(
+        approval_path.lock().unwrap().as_deref(),
+        Some("protected.txt")
+    );
+    assert!(
+        started_task
+            .lock()
+            .unwrap()
+            .as_deref()
+            .is_some_and(|task| task.contains("not truncated in the started notification"))
+    );
+    assert!(!dir.path().join("protected.txt").exists());
 }
 
 #[tokio::test]

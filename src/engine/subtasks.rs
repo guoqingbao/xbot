@@ -11,8 +11,8 @@ use crate::engine::SkillsLoader;
 use crate::providers::SharedProvider;
 use crate::storage::{ChatMessage, InboundMessage, MessageBus};
 use crate::tools::{
-    EditFileTool, ExecTool, GrepFilesTool, ListDirTool, ReadFileTool, ToolRegistry, WebFetchTool,
-    WebSearchTool, WriteFileTool,
+    ApprovalCallback, EditFileTool, ExecTool, GrepFilesTool, ListDirTool, ReadFileTool, ToolOutput,
+    ToolRegistry, WebFetchTool, WebSearchTool, WriteFileTool,
 };
 use crate::util::workspace_state_dir;
 
@@ -84,6 +84,8 @@ pub struct SubagentManager {
     consumed_results: Arc<Mutex<HashSet<String>>>,
     result_notify: Arc<tokio::sync::Notify>,
     notification_callback: Arc<Mutex<Option<SubagentNotificationCallback>>>,
+    approval_callback: Arc<Mutex<Option<ApprovalCallback>>>,
+    always_allow: Arc<Mutex<bool>>,
     max_concurrent: usize,
 }
 
@@ -98,6 +100,8 @@ impl SubagentManager {
         exec_config: ExecToolConfig,
         restrict_to_workspace: bool,
         memory_enabled: bool,
+        approval_callback: Arc<Mutex<Option<ApprovalCallback>>>,
+        always_allow: Arc<Mutex<bool>>,
     ) -> Self {
         Self {
             provider,
@@ -115,6 +119,8 @@ impl SubagentManager {
             consumed_results: Arc::new(Mutex::new(HashSet::new())),
             result_notify: Arc::new(tokio::sync::Notify::new()),
             notification_callback: Arc::new(Mutex::new(None)),
+            approval_callback,
+            always_allow,
             max_concurrent: DEFAULT_MAX_CONCURRENT_SUBAGENTS,
         }
     }
@@ -128,6 +134,13 @@ impl SubagentManager {
             .notification_callback
             .lock()
             .expect("subagent notification lock poisoned") = callback;
+    }
+
+    pub fn set_approval_callback(&self, callback: Option<ApprovalCallback>) {
+        *self
+            .approval_callback
+            .lock()
+            .expect("subagent approval lock poisoned") = callback;
     }
 
     fn notify(&self, event: SubagentNotification) {
@@ -207,7 +220,7 @@ impl SubagentManager {
         self.notify(SubagentNotification::Started {
             task_id: task_id.clone(),
             label: display_label.clone(),
-            task: task.chars().take(120).collect(),
+            task,
             model: self.model.clone(),
         });
         format!(
@@ -442,7 +455,10 @@ impl SubagentManager {
                         detail: summarize_tool_args_for_notify(&tool_call.arguments),
                         step,
                     });
-                    let output = tools.execute(&tool_call.name, tool_call.arguments).await;
+                    let output = match self.check_approval(&tool_call, &task_id, &label).await {
+                        Some(output) => output,
+                        None => tools.execute(&tool_call.name, tool_call.arguments).await,
+                    };
                     messages.push(ChatMessage {
                         role: "tool".to_string(),
                         content: Some(output.into_value()),
@@ -579,6 +595,90 @@ impl SubagentManager {
         tools
     }
 
+    fn is_file_modifying_tool(name: &str) -> bool {
+        matches!(name, "write_file" | "edit_file")
+    }
+
+    async fn check_approval(
+        &self,
+        tool_call: &crate::providers::ToolCallRequest,
+        task_id: &str,
+        label: &str,
+    ) -> Option<ToolOutput> {
+        use crate::tools::{ApprovalDecision, ApprovalRequest};
+
+        if !Self::is_file_modifying_tool(&tool_call.name) {
+            return None;
+        }
+
+        if *self
+            .always_allow
+            .lock()
+            .expect("subagent always_allow lock poisoned")
+        {
+            return None;
+        }
+
+        let callback = self
+            .approval_callback
+            .lock()
+            .expect("subagent approval lock poisoned")
+            .clone()?;
+
+        let path = tool_call
+            .arguments
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let diff_lines = match tool_call.name.as_str() {
+            "edit_file" => {
+                let old = tool_call
+                    .arguments
+                    .get("old_text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let new = tool_call
+                    .arguments
+                    .get("new_text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                crate::diff::compute_diff(old, new).lines
+            }
+            "write_file" => {
+                let content = tool_call
+                    .arguments
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                crate::diff::compute_write_diff(content).lines
+            }
+            _ => Vec::new(),
+        };
+
+        let request = ApprovalRequest {
+            tool_name: tool_call.name.clone(),
+            path,
+            diff_lines,
+            source: Some(format!("subagent '{label}' ({task_id})")),
+        };
+
+        match callback(request).await {
+            ApprovalDecision::AllowOnce => None,
+            ApprovalDecision::AlwaysAllow => {
+                *self
+                    .always_allow
+                    .lock()
+                    .expect("subagent always_allow lock poisoned") = true;
+                None
+            }
+            ApprovalDecision::Deny => Some(ToolOutput::Text(
+                "Error: User denied this file change.".to_string(),
+            )),
+        }
+    }
+
     fn build_subagent_prompt(&self) -> String {
         let skills_summary = SkillsLoader::new(&self.workspace, None).build_skills_summary();
         let mut prompt = format!(
@@ -660,6 +760,7 @@ You are a focused background subagent working on a delegated subtask within a la
                 }
             }
         }
+        self.result_notify.notify_waiters();
     }
 }
 

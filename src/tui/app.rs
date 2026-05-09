@@ -92,6 +92,7 @@ pub enum EngineEvent {
         tool_name: String,
         path: String,
         diff_lines: Vec<xbot::diff::DiffLine>,
+        source: Option<String>,
         responder: tokio::sync::oneshot::Sender<xbot::tools::ApprovalDecision>,
     },
 }
@@ -254,6 +255,7 @@ pub struct SubagentInfo {
     pub reasoning_chunks: Vec<String>,
     pub text_chunks: Vec<String>,
     pub started_at: Instant,
+    pub finished_at: Option<Instant>,
 }
 
 pub struct LineBuffer {
@@ -503,6 +505,7 @@ pub struct ApprovalDialog {
     pub tool_name: String,
     pub path: String,
     pub diff_lines: Vec<xbot::diff::DiffLine>,
+    pub source: Option<String>,
     pub selected: usize,
 }
 
@@ -794,6 +797,7 @@ impl App {
                     reasoning_chunks: Vec::new(),
                     text_chunks: Vec::new(),
                     started_at: Instant::now(),
+                    finished_at: None,
                 };
                 self.subagents.insert(task_id.clone(), info);
                 if self.active.is_some() {
@@ -856,6 +860,7 @@ impl App {
                     info.status = SubagentStatus::Completed;
                     info.result_preview = Some(result_preview.clone());
                     info.full_result = Some(full_result.clone());
+                    info.finished_at.get_or_insert_with(Instant::now);
                 }
                 self.update_subagent_card(&task_id, |card| {
                     if let HistoryEntry::SubagentCard {
@@ -877,6 +882,7 @@ impl App {
                     info.status = SubagentStatus::Failed;
                     info.result_preview = Some(error.clone());
                     info.full_result = Some(error.clone());
+                    info.finished_at.get_or_insert_with(Instant::now);
                 }
                 self.update_subagent_card(&task_id, |card| {
                     if let HistoryEntry::SubagentCard {
@@ -894,6 +900,7 @@ impl App {
             EngineEvent::SubagentCancelled { task_id } => {
                 if let Some(info) = self.subagents.get_mut(&task_id) {
                     info.status = SubagentStatus::Cancelled;
+                    info.finished_at.get_or_insert_with(Instant::now);
                 }
                 self.update_subagent_card(&task_id, |card| {
                     if let HistoryEntry::SubagentCard { status, .. } = card {
@@ -906,12 +913,14 @@ impl App {
                 tool_name,
                 path,
                 diff_lines,
+                source,
                 responder,
             } => {
                 self.approval_dialog = Some(ApprovalDialog {
                     tool_name,
                     path,
                     diff_lines,
+                    source,
                     selected: 0,
                 });
                 self.approval_responder = Some(responder);
@@ -2277,6 +2286,7 @@ mod tests {
             app.subagents.get("abc").unwrap().status,
             SubagentStatus::Completed
         );
+        assert!(app.subagents.get("abc").unwrap().finished_at.is_some());
     }
 
     #[test]

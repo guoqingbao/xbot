@@ -1381,9 +1381,15 @@ fn cli_approval_callback(_stream: cli::StreamRenderer) -> xbot::tools::ApprovalC
                     "\n\x1b[1;33m── Approve {} ──\x1b[0m",
                     request.tool_name
                 ));
+                if let Some(source) = &request.source {
+                    output.push_str(&format!("\n  \x1b[36mFrom:\x1b[0m {source}"));
+                }
                 output.push_str(&format!("\n  \x1b[36mFile:\x1b[0m {}\n", request.path));
             } else {
                 output.push_str(&format!("\n── Approve {} ──", request.tool_name));
+                if let Some(source) = &request.source {
+                    output.push_str(&format!("\n  From: {source}"));
+                }
                 output.push_str(&format!("\n  File: {}\n", request.path));
             }
 
