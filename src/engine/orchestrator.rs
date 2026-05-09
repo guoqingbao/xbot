@@ -1005,6 +1005,7 @@ impl AgentLoop {
         let mut completed_normally = false;
         let mut context_compressed = false;
         let mut compression_pending = false;
+        let mut empty_content_nudge_sent = false;
         let think_re = Regex::new(r"(?s)<think>.*?</think>").expect("valid think regex");
         let mut last_tool_call_fingerprint: Option<String> = None;
         let mut repeated_tool_call_streak = 0_usize;
@@ -1245,6 +1246,10 @@ impl AgentLoop {
                 if let Some(content) = &content {
                     last_assistant_content = Some(content.clone());
                 }
+                let has_reasoning = response
+                    .reasoning_content
+                    .as_ref()
+                    .is_some_and(|r| !r.trim().is_empty());
                 self.context.add_assistant_message(
                     &mut messages,
                     content.clone(),
@@ -1280,6 +1285,19 @@ impl AgentLoop {
                         }
                         continue;
                     }
+                }
+
+                if content.is_none() && has_reasoning && !empty_content_nudge_sent {
+                    empty_content_nudge_sent = true;
+                    messages.push(ChatMessage::text(
+                        "user",
+                        "[SYSTEM] You produced reasoning but no visible response text. \
+                         Please provide your answer or summary as regular text content.",
+                    ));
+                    if should_compress_after_response {
+                        compression_pending = true;
+                    }
+                    continue;
                 }
 
                 if should_compress_after_response {

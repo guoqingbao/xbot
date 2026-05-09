@@ -607,6 +607,9 @@ async fn parse_openai_like_response_stream_first(
         if let Some(content) = parsed.content.clone() {
             emit_text_delta(text_stream, &content);
         }
+        if let Some(reasoning) = parsed.reasoning_content.as_deref() {
+            emit_reasoning_delta(reasoning_stream, reasoning);
+        }
         return Ok(parsed);
     }
 
