@@ -58,8 +58,10 @@ jobs:
         include:
           - rust_target: x86_64-unknown-linux-gnu
             npm_target: linux-x64
+            deb_arch: amd64
           - rust_target: aarch64-unknown-linux-gnu
             npm_target: linux-arm64
+            deb_arch: arm64
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -67,6 +69,19 @@ jobs:
           targets: ${{ matrix.rust_target }}
       - uses: taiki-e/install-action@cross
       - uses: taiki-e/install-action@cargo-deb
+      - name: Install ARM64 Debian packaging dependencies
+        if: matrix.rust_target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu \
+            libc6:arm64 \
+            libc6-dev:arm64 \
+            libgcc-s1:arm64 \
+            dpkg-dev
+
       - name: Build binary
         run: cross build --release --target ${{ matrix.rust_target }}
       - name: Package npm binary artifact
@@ -75,7 +90,22 @@ jobs:
           cp "target/${{ matrix.rust_target }}/release/xbot" "dist/${{ matrix.npm_target }}/xbot"
           tar -C "dist/${{ matrix.npm_target }}" -czf "dist/xbot-${{ needs.validate.outputs.version }}-${{ matrix.npm_target }}.tar.gz" xbot
       - name: Package deb
-        run: cargo deb --no-build --target ${{ matrix.rust_target }} --output "dist/xbot-${{ matrix.npm_target }}.deb"
+        env:
+          DEB_HOST_ARCH: ${{ matrix.deb_arch }}
+        run: |
+          if [ "${{ matrix.rust_target }}" = "aarch64-unknown-linux-gnu" ]; then
+            cargo deb \
+              --no-build \
+              --no-strip \
+              --target ${{ matrix.rust_target }} \
+              --output "dist/xbot-${{ matrix.npm_target }}.deb"
+          else
+            cargo deb \
+              --no-build \
+              --target ${{ matrix.rust_target }} \
+              --output "dist/xbot-${{ matrix.npm_target }}.deb"
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: xbot-${{ matrix.npm_target }}
