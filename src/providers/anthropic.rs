@@ -9,8 +9,8 @@ use reqwest::Client;
 use serde_json::{Value, json};
 
 use crate::providers::{
-    GenerationSettings, LlmProvider, LlmResponse, LlmUsage, ProviderModelInfo, TextStreamCallback,
-    ToolCallRequest,
+    GenerationSettings, LlmProvider, LlmResponse, LlmUsage, ProviderModelInfo,
+    ReasoningStreamCallback, TextStreamCallback, ToolCallRequest,
 };
 use crate::storage::ChatMessage;
 
@@ -202,6 +202,7 @@ impl LlmProvider for AnthropicProvider {
         max_tokens: Option<usize>,
         temperature: Option<f32>,
         text_stream: Option<TextStreamCallback>,
+        _reasoning_stream: Option<ReasoningStreamCallback>,
     ) -> Result<LlmResponse> {
         self.send(
             messages,

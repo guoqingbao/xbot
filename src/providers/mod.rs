@@ -90,6 +90,7 @@ impl LlmResponse {
 }
 
 pub type TextStreamCallback = Arc<Mutex<Box<dyn FnMut(String) + Send>>>;
+pub type ReasoningStreamCallback = Arc<Mutex<Box<dyn FnMut(String) + Send>>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderModelInfo {
@@ -142,7 +143,9 @@ pub trait LlmProvider: Send + Sync {
         max_tokens: Option<usize>,
         temperature: Option<f32>,
         text_stream: Option<TextStreamCallback>,
+        reasoning_stream: Option<ReasoningStreamCallback>,
     ) -> Result<LlmResponse> {
+        let _ = reasoning_stream;
         let response = self
             .chat(messages, tools, model, max_tokens, temperature)
             .await?;
@@ -189,6 +192,7 @@ pub trait LlmProvider: Send + Sync {
         max_tokens: Option<usize>,
         temperature: Option<f32>,
         text_stream: Option<TextStreamCallback>,
+        reasoning_stream: Option<ReasoningStreamCallback>,
     ) -> Result<LlmResponse> {
         let delays = [1_u64, 2, 4];
         let mut last_error: Option<anyhow::Error> = None;
@@ -201,6 +205,7 @@ pub trait LlmProvider: Send + Sync {
                     max_tokens,
                     temperature,
                     text_stream.clone(),
+                    reasoning_stream.clone(),
                 )
                 .await
             {
@@ -366,9 +371,18 @@ impl LlmProvider for CustomProvider {
         max_tokens: Option<usize>,
         temperature: Option<f32>,
         text_stream: Option<TextStreamCallback>,
+        reasoning_stream: Option<ReasoningStreamCallback>,
     ) -> Result<LlmResponse> {
         self.inner
-            .chat_stream(messages, tools, model, max_tokens, temperature, text_stream)
+            .chat_stream(
+                messages,
+                tools,
+                model,
+                max_tokens,
+                temperature,
+                text_stream,
+                reasoning_stream,
+            )
             .await
     }
 
@@ -438,7 +452,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         max_tokens: Option<usize>,
         temperature: Option<f32>,
     ) -> Result<LlmResponse> {
-        self.chat_stream(messages, tools, model, max_tokens, temperature, None)
+        self.chat_stream(messages, tools, model, max_tokens, temperature, None, None)
             .await
     }
 
@@ -450,6 +464,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         max_tokens: Option<usize>,
         temperature: Option<f32>,
         text_stream: Option<TextStreamCallback>,
+        reasoning_stream: Option<ReasoningStreamCallback>,
     ) -> Result<LlmResponse> {
         let endpoint = format!("{}/chat/completions", self.api_base.trim_end_matches('/'));
         let openai_messages: Vec<Value> = messages.iter().map(|m| m.to_openai_payload()).collect();
@@ -487,7 +502,12 @@ impl LlmProvider for OpenAiCompatibleProvider {
             return Err(anyhow!("provider error {status}: {body}"));
         }
 
-        parse_openai_like_response_stream_first(response, text_stream.as_ref()).await
+        parse_openai_like_response_stream_first(
+            response,
+            text_stream.as_ref(),
+            reasoning_stream.as_ref(),
+        )
+        .await
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModelInfo>> {
@@ -513,7 +533,7 @@ impl LlmProvider for AzureOpenAiProvider {
         max_tokens: Option<usize>,
         temperature: Option<f32>,
     ) -> Result<LlmResponse> {
-        self.chat_stream(messages, tools, model, max_tokens, temperature, None)
+        self.chat_stream(messages, tools, model, max_tokens, temperature, None, None)
             .await
     }
 
@@ -525,6 +545,7 @@ impl LlmProvider for AzureOpenAiProvider {
         max_tokens: Option<usize>,
         temperature: Option<f32>,
         text_stream: Option<TextStreamCallback>,
+        reasoning_stream: Option<ReasoningStreamCallback>,
     ) -> Result<LlmResponse> {
         let endpoint = self.build_chat_url(model.unwrap_or(&self.default_model));
         let openai_messages: Vec<Value> = messages.iter().map(|m| m.to_openai_payload()).collect();
@@ -555,7 +576,12 @@ impl LlmProvider for AzureOpenAiProvider {
             let body = response.text().await.unwrap_or_default();
             return Err(anyhow!("provider error {status}: {body}"));
         }
-        parse_openai_like_response_stream_first(response, text_stream.as_ref()).await
+        parse_openai_like_response_stream_first(
+            response,
+            text_stream.as_ref(),
+            reasoning_stream.as_ref(),
+        )
+        .await
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModelInfo>> {
@@ -568,6 +594,7 @@ impl LlmProvider for AzureOpenAiProvider {
 async fn parse_openai_like_response_stream_first(
     mut response: reqwest::Response,
     text_stream: Option<&TextStreamCallback>,
+    reasoning_stream: Option<&ReasoningStreamCallback>,
 ) -> Result<LlmResponse> {
     let is_stream = response
         .headers()
@@ -600,7 +627,9 @@ async fn parse_openai_like_response_stream_first(
         };
         buffer.push_str(&String::from_utf8_lossy(&chunk));
         while let Some(event) = extract_next_sse_event(&mut buffer) {
-            if let Err(err) = apply_openai_like_sse_event(&mut state, &event, text_stream) {
+            if let Err(err) =
+                apply_openai_like_sse_event(&mut state, &event, text_stream, reasoning_stream)
+            {
                 if state.has_partial_response() {
                     return Ok(state.into_response());
                 }
@@ -609,7 +638,9 @@ async fn parse_openai_like_response_stream_first(
         }
     }
     if !buffer.trim().is_empty() {
-        if let Err(err) = apply_openai_like_sse_event(&mut state, &buffer, text_stream) {
+        if let Err(err) =
+            apply_openai_like_sse_event(&mut state, &buffer, text_stream, reasoning_stream)
+        {
             if state.has_partial_response() {
                 return Ok(state.into_response());
             }
@@ -718,7 +749,7 @@ fn parse_openai_like_sse_text(raw: &str) -> Result<LlmResponse> {
     let mut state = OpenAiLikeStreamState::default();
     let normalized = raw.replace("\r\n", "\n");
     for event in normalized.split("\n\n") {
-        if let Err(err) = apply_openai_like_sse_event(&mut state, event, None) {
+        if let Err(err) = apply_openai_like_sse_event(&mut state, event, None, None) {
             if state.has_partial_response() {
                 return Ok(state.into_response());
             }
@@ -839,6 +870,16 @@ fn emit_text_delta(text_stream: Option<&TextStreamCallback>, delta: &str) {
     }
 }
 
+fn emit_reasoning_delta(reasoning_stream: Option<&ReasoningStreamCallback>, delta: &str) {
+    if delta.is_empty() {
+        return;
+    }
+    if let Some(cb) = reasoning_stream {
+        let mut callback = cb.lock().expect("reasoning stream lock poisoned");
+        (callback)(delta.to_string());
+    }
+}
+
 fn extract_next_sse_event(buffer: &mut String) -> Option<String> {
     let unix = buffer.find("\n\n");
     let windows = buffer.find("\r\n\r\n");
@@ -858,6 +899,7 @@ fn apply_openai_like_sse_event(
     state: &mut OpenAiLikeStreamState,
     event: &str,
     text_stream: Option<&TextStreamCallback>,
+    reasoning_stream: Option<&ReasoningStreamCallback>,
 ) -> Result<()> {
     let data_lines = event
         .lines()
@@ -908,7 +950,7 @@ fn apply_openai_like_sse_event(
     }
     if let Some(reasoning) = delta.get("reasoning_content").and_then(Value::as_str) {
         state.reasoning_content.push_str(reasoning);
-        emit_text_delta(text_stream, &format!("\x1b[2;3m{reasoning}\x1b[0m"));
+        emit_reasoning_delta(reasoning_stream, reasoning);
     }
     if let Some(blocks) = delta.get("thinking_blocks").and_then(Value::as_array) {
         state.thinking_blocks.extend(blocks.iter().cloned());

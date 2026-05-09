@@ -447,6 +447,7 @@ impl SubagentManager {
                     thinking_blocks: response.thinking_blocks.clone(),
                     metadata: None,
                 });
+                let mut denied_path: Option<String> = None;
                 for tool_call in response.tool_calls {
                     step += 1;
                     self.notify(SubagentNotification::Progress {
@@ -456,7 +457,16 @@ impl SubagentManager {
                         step,
                     });
                     let output = match self.check_approval(&tool_call, &task_id, &label).await {
-                        Some(output) => output,
+                        Some(denial_output) => {
+                            let path = tool_call
+                                .arguments
+                                .get("path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            denied_path = Some(path);
+                            denial_output
+                        }
                         None => tools.execute(&tool_call.name, tool_call.arguments).await,
                     };
                     messages.push(ChatMessage {
@@ -470,6 +480,15 @@ impl SubagentManager {
                         thinking_blocks: None,
                         metadata: None,
                     });
+                    if denied_path.is_some() {
+                        break;
+                    }
+                }
+                if let Some(path) = denied_path {
+                    final_result = Some(format!(
+                        "Subagent stopped: user denied file modification for '{path}'."
+                    ));
+                    break;
                 }
             } else {
                 final_result = response

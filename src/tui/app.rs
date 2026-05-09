@@ -30,6 +30,7 @@ pub struct TurnSummary {
 
 pub enum EngineEvent {
     StreamDelta(String),
+    ReasoningDelta(String),
     ToolHint {
         tool_name: Option<String>,
         tool_args: Option<Value>,
@@ -613,22 +614,20 @@ impl App {
         self.needs_redraw = true;
         match event {
             EngineEvent::StreamDelta(delta) => {
-                let is_reasoning = delta.contains("\x1b[2;3m");
                 let clean = strip_tool_markers(&strip_ansi(&delta));
                 if clean.is_empty() {
                     return;
                 }
-                if is_reasoning {
-                    let clean = strip_runtime_metadata_from_reasoning(&clean);
-                    if clean.is_empty() {
-                        return;
-                    }
-                    let streaming = self.active.get_or_insert_with(ActiveStreaming::default);
-                    streaming.push_thinking(&clean);
-                } else {
-                    let streaming = self.active.get_or_insert_with(ActiveStreaming::default);
-                    streaming.push_text(&clean);
+                let streaming = self.active.get_or_insert_with(ActiveStreaming::default);
+                streaming.push_text(&clean);
+            }
+            EngineEvent::ReasoningDelta(delta) => {
+                let clean = strip_runtime_metadata_from_reasoning(&delta);
+                if clean.is_empty() {
+                    return;
                 }
+                let streaming = self.active.get_or_insert_with(ActiveStreaming::default);
+                streaming.push_thinking(&clean);
             }
             EngineEvent::CollapseThinking => {}
             EngineEvent::ToolHint {

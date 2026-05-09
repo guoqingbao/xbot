@@ -11,8 +11,8 @@ use sysinfo::System;
 use tokio::process::Command;
 
 use crate::providers::{
-    GenerationSettings, LlmProvider, LlmResponse, ProviderModelInfo, SharedProvider,
-    TextStreamCallback,
+    GenerationSettings, LlmProvider, LlmResponse, ProviderModelInfo, ReasoningStreamCallback,
+    SharedProvider, TextStreamCallback,
 };
 use crate::storage::ChatMessage;
 
@@ -252,11 +252,20 @@ impl LlmProvider for InstrumentedProvider {
         max_tokens: Option<usize>,
         temperature: Option<f32>,
         text_stream: Option<TextStreamCallback>,
+        reasoning_stream: Option<ReasoningStreamCallback>,
     ) -> Result<LlmResponse> {
         let started_at = Instant::now();
         match self
             .inner
-            .chat_stream(messages, tools, model, max_tokens, temperature, text_stream)
+            .chat_stream(
+                messages,
+                tools,
+                model,
+                max_tokens,
+                temperature,
+                text_stream,
+                reasoning_stream,
+            )
             .await
         {
             Ok(response) => {
@@ -311,11 +320,20 @@ impl LlmProvider for InstrumentedProvider {
         max_tokens: Option<usize>,
         temperature: Option<f32>,
         text_stream: Option<TextStreamCallback>,
+        reasoning_stream: Option<ReasoningStreamCallback>,
     ) -> Result<LlmResponse> {
         let started_at = Instant::now();
         match self
             .inner
-            .chat_with_retry_stream(messages, tools, model, max_tokens, temperature, text_stream)
+            .chat_with_retry_stream(
+                messages,
+                tools,
+                model,
+                max_tokens,
+                temperature,
+                text_stream,
+                reasoning_stream,
+            )
             .await
         {
             Ok(response) => {

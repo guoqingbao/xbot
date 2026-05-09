@@ -269,6 +269,7 @@ fn spawn_turn(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let stream_callback = make_stream_callback(tx.clone());
+        let reasoning_callback = make_reasoning_callback(tx.clone());
         agent.set_progress_sender(Some(make_progress_callback(
             tx.clone(),
             agent.clone(),
@@ -284,6 +285,7 @@ fn spawn_turn(
                 "cli",
                 &chat_id,
                 Some(stream_callback),
+                Some(reasoning_callback),
             )
             .await;
 
@@ -346,6 +348,14 @@ fn spawn_turn(
 fn make_stream_callback(tx: mpsc::UnboundedSender<EngineEvent>) -> TextStreamCallback {
     Arc::new(std::sync::Mutex::new(Box::new(move |delta: String| {
         let _ = tx.send(EngineEvent::StreamDelta(delta));
+    })))
+}
+
+fn make_reasoning_callback(
+    tx: mpsc::UnboundedSender<EngineEvent>,
+) -> xbot::providers::ReasoningStreamCallback {
+    Arc::new(std::sync::Mutex::new(Box::new(move |delta: String| {
+        let _ = tx.send(EngineEvent::ReasoningDelta(delta));
     })))
 }
 

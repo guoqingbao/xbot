@@ -637,7 +637,7 @@ impl AgentLoop {
         channel: &str,
         chat_id: &str,
     ) -> Result<Option<OutboundMessage>> {
-        self.process_direct_stream(content, session_key, channel, chat_id, None)
+        self.process_direct_stream(content, session_key, channel, chat_id, None, None)
             .await
     }
 
@@ -648,6 +648,7 @@ impl AgentLoop {
         channel: &str,
         chat_id: &str,
         text_stream: Option<TextStreamCallback>,
+        reasoning_stream: Option<crate::providers::ReasoningStreamCallback>,
     ) -> Result<Option<OutboundMessage>> {
         self.process_inbound_with_stream(
             InboundMessage {
@@ -661,18 +662,20 @@ impl AgentLoop {
                 session_key_override: Some(session_key.to_string()),
             },
             text_stream,
+            reasoning_stream,
         )
         .await
     }
 
     pub async fn process_inbound(&self, msg: InboundMessage) -> Result<Option<OutboundMessage>> {
-        self.process_inbound_with_stream(msg, None).await
+        self.process_inbound_with_stream(msg, None, None).await
     }
 
     async fn process_inbound_with_stream(
         &self,
         msg: InboundMessage,
         text_stream: Option<TextStreamCallback>,
+        reasoning_stream: Option<crate::providers::ReasoningStreamCallback>,
     ) -> Result<Option<OutboundMessage>> {
         if msg.channel == "system" {
             return self.process_system_inbound(msg).await;
@@ -768,6 +771,7 @@ impl AgentLoop {
                 context_window_tokens,
                 initial_messages.clone(),
                 text_stream,
+                reasoning_stream,
                 Some(target.clone()),
             )
             .await
@@ -918,6 +922,7 @@ impl AgentLoop {
                 context_window_tokens,
                 initial_messages.clone(),
                 None,
+                None,
                 Some(progress_target.clone()),
             )
             .await
@@ -980,6 +985,7 @@ impl AgentLoop {
         context_window_tokens: usize,
         mut messages: Vec<ChatMessage>,
         text_stream: Option<TextStreamCallback>,
+        reasoning_stream: Option<crate::providers::ReasoningStreamCallback>,
         progress_target: Option<ProgressTarget>,
     ) -> Result<(
         Option<String>,
@@ -1047,6 +1053,7 @@ impl AgentLoop {
                     None,
                     None,
                     text_stream.clone(),
+                    reasoning_stream.clone(),
                 )
                 .await?;
             self.record_usage(&response);
