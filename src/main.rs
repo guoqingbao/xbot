@@ -295,7 +295,7 @@ async fn chat(
             "cli",
             &built.chat_id,
             Some(stream.callback()),
-            None,
+            Some(stream.reasoning_callback()),
         )
         .await?
     {

@@ -1817,3 +1817,320 @@ async fn backend_announces_when_resuming_existing_session() {
     assert!(session_messages[0].content.contains("Workspace:"));
     assert!(session_messages[0].content.contains("Session messages: 1"));
 }
+
+#[tokio::test]
+async fn reasoning_content_preserved_in_session_after_turn() {
+    let dir = tempdir().unwrap();
+    let provider = Arc::new(QueuedProvider::new(
+        "test-model",
+        vec![LlmResponse {
+            content: Some("The answer is 42.".to_string()),
+            tool_calls: Vec::new(),
+            finish_reason: "stop".to_string(),
+            usage: LlmUsage::default(),
+            reasoning_content: Some("Let me think step by step...".to_string()),
+            thinking_blocks: None,
+        }],
+    ));
+    let agent = AgentLoop::new(
+        provider,
+        dir.path(),
+        Some("test-model".to_string()),
+        8,
+        5,
+        8_000,
+        32 * 1024,
+        Default::default(),
+        None,
+        ExecToolConfig {
+            enable: false,
+            timeout: 60,
+            path_append: String::new(),
+        },
+        false,
+        None,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+    let response = agent
+        .process_direct(
+            "What is the meaning of life?",
+            "cli:reason",
+            "cli",
+            "reason",
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(response.content, "The answer is 42.");
+    assert_eq!(
+        response.reasoning_content.as_deref(),
+        Some("Let me think step by step...")
+    );
+
+    let mut sessions = SessionManager::new(dir.path()).unwrap();
+    let session = sessions.get_or_create("cli:reason").unwrap();
+    let assistant_msgs: Vec<_> = session
+        .messages
+        .iter()
+        .filter(|m| m.role == "assistant")
+        .collect();
+    assert_eq!(assistant_msgs.len(), 1);
+    assert_eq!(
+        assistant_msgs[0].reasoning_content.as_deref(),
+        Some("Let me think step by step...")
+    );
+}
+
+#[tokio::test]
+async fn reasoning_only_assistant_message_preserved_in_session() {
+    let dir = tempdir().unwrap();
+    let file = dir.path().join("test.txt");
+    std::fs::write(&file, "test content").unwrap();
+    let provider = Arc::new(QueuedProvider::new(
+        "test-model",
+        vec![
+            LlmResponse {
+                content: None,
+                tool_calls: vec![ToolCallRequest {
+                    id: "call_1".to_string(),
+                    name: "read_file".to_string(),
+                    arguments: json!({"path": file.display().to_string()}),
+                }],
+                finish_reason: "tool_calls".to_string(),
+                usage: LlmUsage::default(),
+                reasoning_content: Some("I need to read this file first.".to_string()),
+                thinking_blocks: None,
+            },
+            LlmResponse {
+                content: Some("File has test content.".to_string()),
+                tool_calls: Vec::new(),
+                finish_reason: "stop".to_string(),
+                usage: LlmUsage::default(),
+                reasoning_content: None,
+                thinking_blocks: None,
+            },
+        ],
+    ));
+    let agent = AgentLoop::new(
+        provider,
+        dir.path(),
+        Some("test-model".to_string()),
+        8,
+        5,
+        8_000,
+        32 * 1024,
+        Default::default(),
+        None,
+        ExecToolConfig {
+            enable: false,
+            timeout: 60,
+            path_append: String::new(),
+        },
+        false,
+        None,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+    let response = agent
+        .process_direct("read the file", "cli:reason_only", "cli", "reason_only")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(response.content, "File has test content.");
+
+    let mut sessions = SessionManager::new(dir.path()).unwrap();
+    let session = sessions.get_or_create("cli:reason_only").unwrap();
+
+    let reasoning_msgs: Vec<_> = session
+        .messages
+        .iter()
+        .filter(|m| m.reasoning_content.is_some())
+        .collect();
+    assert_eq!(
+        reasoning_msgs.len(),
+        1,
+        "assistant message with reasoning_content (but no text) must be preserved"
+    );
+    assert_eq!(
+        reasoning_msgs[0].reasoning_content.as_deref(),
+        Some("I need to read this file first.")
+    );
+}
+
+#[tokio::test]
+async fn session_persisted_incrementally_during_tool_loop() {
+    let dir = tempdir().unwrap();
+    let file = dir.path().join("data.txt");
+    std::fs::write(&file, "some data").unwrap();
+
+    let provider = Arc::new(QueuedProvider::new(
+        "test-model",
+        vec![
+            LlmResponse {
+                content: Some("Reading file".to_string()),
+                tool_calls: vec![ToolCallRequest {
+                    id: "call_1".to_string(),
+                    name: "read_file".to_string(),
+                    arguments: json!({"path": file.display().to_string()}),
+                }],
+                finish_reason: "tool_calls".to_string(),
+                usage: LlmUsage::default(),
+                reasoning_content: None,
+                thinking_blocks: None,
+            },
+            LlmResponse {
+                content: Some("Reading again".to_string()),
+                tool_calls: vec![ToolCallRequest {
+                    id: "call_2".to_string(),
+                    name: "read_file".to_string(),
+                    arguments: json!({"path": file.display().to_string()}),
+                }],
+                finish_reason: "tool_calls".to_string(),
+                usage: LlmUsage::default(),
+                reasoning_content: None,
+                thinking_blocks: None,
+            },
+            LlmResponse {
+                content: Some("All done.".to_string()),
+                tool_calls: Vec::new(),
+                finish_reason: "stop".to_string(),
+                usage: LlmUsage::default(),
+                reasoning_content: None,
+                thinking_blocks: None,
+            },
+        ],
+    ));
+    let agent = AgentLoop::new(
+        provider,
+        dir.path(),
+        Some("test-model".to_string()),
+        8,
+        5,
+        8_000,
+        32 * 1024,
+        Default::default(),
+        None,
+        ExecToolConfig {
+            enable: false,
+            timeout: 60,
+            path_append: String::new(),
+        },
+        false,
+        None,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+    let response = agent
+        .process_direct("read data", "cli:incremental", "cli", "incremental")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(response.content, "All done.");
+
+    let mut sessions = SessionManager::new(dir.path()).unwrap();
+    let session = sessions.get_or_create("cli:incremental").unwrap();
+    let tool_msgs: Vec<_> = session
+        .messages
+        .iter()
+        .filter(|m| m.role == "tool")
+        .collect();
+    assert_eq!(tool_msgs.len(), 2, "both tool results must be persisted");
+
+    let assistant_msgs: Vec<_> = session
+        .messages
+        .iter()
+        .filter(|m| m.role == "assistant")
+        .collect();
+    assert!(
+        assistant_msgs.len() >= 2,
+        "intermediate assistant messages with tool calls must be persisted"
+    );
+}
+
+#[tokio::test]
+async fn persist_session_safe_keeps_complete_history_intact() {
+    let dir = tempdir().unwrap();
+    let file = dir.path().join("note.txt");
+    std::fs::write(&file, "hello").unwrap();
+
+    let provider = Arc::new(QueuedProvider::new(
+        "test-model",
+        vec![
+            LlmResponse {
+                content: Some("Reading".to_string()),
+                tool_calls: vec![ToolCallRequest {
+                    id: "call_1".to_string(),
+                    name: "read_file".to_string(),
+                    arguments: json!({"path": file.display().to_string()}),
+                }],
+                finish_reason: "tool_calls".to_string(),
+                usage: LlmUsage::default(),
+                reasoning_content: Some("Let me read the file first.".to_string()),
+                thinking_blocks: None,
+            },
+            LlmResponse {
+                content: Some("Done reading.".to_string()),
+                tool_calls: Vec::new(),
+                finish_reason: "stop".to_string(),
+                usage: LlmUsage::default(),
+                reasoning_content: None,
+                thinking_blocks: None,
+            },
+        ],
+    ));
+    let agent = AgentLoop::new(
+        provider,
+        dir.path(),
+        Some("test-model".to_string()),
+        8,
+        5,
+        8_000,
+        32 * 1024,
+        Default::default(),
+        None,
+        ExecToolConfig {
+            enable: false,
+            timeout: 60,
+            path_append: String::new(),
+        },
+        false,
+        None,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+
+    let _ = agent
+        .process_direct("read note.txt", "cli:persist_test", "cli", "persist_test")
+        .await
+        .unwrap();
+
+    let before_count = {
+        let mut sessions = SessionManager::new(dir.path()).unwrap();
+        sessions
+            .get_or_create("cli:persist_test")
+            .unwrap()
+            .messages
+            .len()
+    };
+
+    agent.persist_session_safe("cli:persist_test");
+
+    let mut sessions = SessionManager::new(dir.path()).unwrap();
+    let session = sessions.get_or_create("cli:persist_test").unwrap();
+    assert_eq!(
+        session.messages.len(),
+        before_count,
+        "completed turn has all pairs matched; nothing should be trimmed"
+    );
+    let has_user = session.messages.iter().any(|m| m.role == "user");
+    let has_assistant = session.messages.iter().any(|m| m.role == "assistant");
+    let has_tool = session.messages.iter().any(|m| m.role == "tool");
+    assert!(has_user, "session must contain user message");
+    assert!(has_assistant, "session must contain assistant message");
+    assert!(has_tool, "session must contain tool result");
+}

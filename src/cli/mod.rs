@@ -584,6 +584,8 @@ struct StreamState {
     code_language: Option<String>,
     pending_table: Option<PendingTable>,
     trailing_newlines: usize,
+    in_reasoning: bool,
+    reasoning_streamed: bool,
 }
 
 #[derive(Default)]
@@ -619,6 +621,12 @@ impl StreamRenderer {
                 state.started = true;
                 note_output(&mut state, "\n");
             }
+            if state.in_reasoning {
+                state.in_reasoning = false;
+                target.write_raw("\n");
+                note_output(&mut state, "\n");
+                state.trailing_newlines = 1;
+            }
             let rendered = render_stream_delta(
                 &target.style,
                 &mut state,
@@ -630,6 +638,25 @@ impl StreamRenderer {
                 target.write_raw(&rendered);
                 note_output(&mut state, &rendered);
             }
+        })))
+    }
+
+    pub fn reasoning_callback(&self) -> xbot::providers::ReasoningStreamCallback {
+        let target = self.target.clone();
+        let state = self.state.clone();
+        Arc::new(Mutex::new(Box::new(move |delta: String| {
+            let mut state = state.lock().expect("cli stream state lock poisoned");
+            if !state.started {
+                target.write_raw("\n".to_string());
+                state.started = true;
+                note_output(&mut state, "\n");
+            }
+            if !state.in_reasoning {
+                state.in_reasoning = true;
+                state.reasoning_streamed = true;
+            }
+            let styled = target.style.subtle(&delta);
+            target.write_raw(&styled);
         })))
     }
 
@@ -662,6 +689,11 @@ impl StreamRenderer {
 
     pub fn finish(&self, content: &str, reasoning_content: Option<&str>, summary: &TurnSummary) {
         let mut state = self.state.lock().expect("cli stream state lock poisoned");
+        if state.in_reasoning {
+            state.in_reasoning = false;
+            self.target.write_raw("\n");
+        }
+        let already_streamed_reasoning = state.reasoning_streamed;
         if state.started {
             let tail = render_stream_delta(
                 &self.target.style,
@@ -677,20 +709,24 @@ impl StreamRenderer {
             if state.trailing_newlines == 0 {
                 self.target.write_raw("\n");
             }
-            if let Some(reasoning) = reasoning_content {
-                if !reasoning.trim().is_empty() {
-                    let rendered_reasoning = self.render_reasoning_content(reasoning);
-                    self.target.write_raw(&rendered_reasoning);
+            if !already_streamed_reasoning {
+                if let Some(reasoning) = reasoning_content {
+                    if !reasoning.trim().is_empty() {
+                        let rendered_reasoning = self.render_reasoning_content(reasoning);
+                        self.target.write_raw(&rendered_reasoning);
+                    }
                 }
             }
             self.target
                 .write_raw(format!("\n{}\n", self.target.style.separator(60)));
             state.trailing_newlines = 1;
         } else {
-            if let Some(reasoning) = reasoning_content {
-                let rendered_reasoning = self.render_reasoning_content(reasoning);
-                self.target.write_raw(rendered_reasoning);
-                note_output(&mut state, "\n");
+            if !already_streamed_reasoning {
+                if let Some(reasoning) = reasoning_content {
+                    let rendered_reasoning = self.render_reasoning_content(reasoning);
+                    self.target.write_raw(rendered_reasoning);
+                    note_output(&mut state, "\n");
+                }
             }
             let rendered = render_markdown_response(&self.target.style, content);
             self.target.write_raw(format!(

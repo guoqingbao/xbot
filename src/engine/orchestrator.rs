@@ -311,6 +311,17 @@ impl AgentLoop {
             .remove(session_key);
     }
 
+    /// Best-effort save of the current session, trimming any trailing
+    /// unpaired tool-call / tool-result messages so the stored history
+    /// is always valid for provider replay.
+    pub fn persist_session_safe(&self, session_key: &str) {
+        let mut sessions = self.sessions.lock().expect("session manager lock poisoned");
+        if let Ok(mut session) = sessions.get_or_create(session_key) {
+            trim_unpaired_tool_tail(&mut session.messages);
+            let _ = sessions.save(&session);
+        }
+    }
+
     pub fn set_model_switch_callback(&self, callback: Option<ModelSwitchCallback>) {
         *self
             .model_switch_callback
@@ -1190,6 +1201,10 @@ impl AgentLoop {
                 }
                 if should_compress_after_response {
                     compression_pending = true;
+                }
+
+                if let Err(err) = self.persist_session_messages(session_key, &messages) {
+                    eprintln!("periodic session save failed: {err:#}");
                 }
 
                 // Break the main loop if cancellation was detected during tool execution
@@ -2143,9 +2158,19 @@ impl AgentLoop {
     }
 
     fn prepare_message_for_session_storage(&self, message: &ChatMessage) -> Option<ChatMessage> {
+        let has_reasoning = message
+            .reasoning_content
+            .as_ref()
+            .is_some_and(|r| !r.trim().is_empty());
+        let has_thinking = message
+            .thinking_blocks
+            .as_ref()
+            .is_some_and(|b| !b.is_empty());
         if message.role == "assistant"
             && message.content.is_none()
             && message.tool_calls.as_ref().is_none_or(Vec::is_empty)
+            && !has_reasoning
+            && !has_thinking
         {
             return None;
         }
@@ -2981,6 +3006,43 @@ fn truncate_for_diagnostic(text: &str, max_chars: usize) -> String {
     format!("{}...", truncated.trim_end())
 }
 
+/// Trim trailing messages that form an incomplete tool-call / tool-result
+/// group. An assistant message with `tool_calls` is only valid when followed
+/// by a `tool` result for every declared call id. If the tail is incomplete
+/// we remove the entire dangling group (the assistant + any partial tool
+/// results that belong to it).
+pub(crate) fn trim_unpaired_tool_tail(messages: &mut Vec<ChatMessage>) {
+    loop {
+        if messages.is_empty() {
+            return;
+        }
+        // Find the last assistant message that has tool_calls.
+        let last_tc_pos = messages.iter().rposition(|m| {
+            m.role == "assistant" && m.tool_calls.as_ref().is_some_and(|tcs| !tcs.is_empty())
+        });
+        let Some(pos) = last_tc_pos else {
+            return;
+        };
+        let declared_ids: HashSet<&str> = messages[pos]
+            .tool_calls
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter_map(|tc| tc.get("id").and_then(Value::as_str))
+            .collect();
+        let answered_ids: HashSet<&str> = messages[pos + 1..]
+            .iter()
+            .filter(|m| m.role == "tool")
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .collect();
+        if declared_ids.is_subset(&answered_ids) {
+            return;
+        }
+        messages.truncate(pos);
+        continue;
+    }
+}
+
 fn sanitize_message_for_storage(mut message: ChatMessage) -> Option<ChatMessage> {
     match &mut message.content {
         Some(Value::String(text)) => {
@@ -3146,5 +3208,156 @@ mod tests {
     fn strip_runtime_context_text_returns_empty_without_user_content() {
         let stripped = strip_runtime_context_text(ContextBuilder::RUNTIME_CONTEXT_TAG);
         assert!(stripped.is_empty());
+    }
+
+    #[test]
+    fn trim_unpaired_removes_assistant_with_unanswered_tool_calls() {
+        use super::trim_unpaired_tool_tail;
+
+        let mut msgs = vec![
+            ChatMessage::text("user", "hello"),
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: Some(json!("checking")),
+                tool_calls: Some(vec![
+                    json!({"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}),
+                ]),
+                tool_call_id: None,
+                name: None,
+                timestamp: None,
+                reasoning_content: None,
+                thinking_blocks: None,
+                metadata: None,
+            },
+        ];
+        trim_unpaired_tool_tail(&mut msgs);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].role, "user");
+    }
+
+    #[test]
+    fn trim_unpaired_removes_partial_tool_results() {
+        use super::trim_unpaired_tool_tail;
+
+        let mut msgs = vec![
+            ChatMessage::text("user", "go"),
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: None,
+                tool_calls: Some(vec![
+                    json!({"id": "c1", "type": "function", "function": {"name": "a", "arguments": "{}"}}),
+                    json!({"id": "c2", "type": "function", "function": {"name": "b", "arguments": "{}"}}),
+                ]),
+                tool_call_id: None,
+                name: None,
+                timestamp: None,
+                reasoning_content: None,
+                thinking_blocks: None,
+                metadata: None,
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: Some(json!("ok")),
+                tool_calls: None,
+                tool_call_id: Some("c1".to_string()),
+                name: Some("a".to_string()),
+                timestamp: None,
+                reasoning_content: None,
+                thinking_blocks: None,
+                metadata: None,
+            },
+        ];
+        trim_unpaired_tool_tail(&mut msgs);
+        assert_eq!(
+            msgs.len(),
+            1,
+            "assistant + partial tool result both removed"
+        );
+        assert_eq!(msgs[0].role, "user");
+    }
+
+    #[test]
+    fn trim_unpaired_keeps_complete_pairs() {
+        use super::trim_unpaired_tool_tail;
+
+        let mut msgs = vec![
+            ChatMessage::text("user", "go"),
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: None,
+                tool_calls: Some(vec![
+                    json!({"id": "c1", "type": "function", "function": {"name": "a", "arguments": "{}"}}),
+                ]),
+                tool_call_id: None,
+                name: None,
+                timestamp: None,
+                reasoning_content: None,
+                thinking_blocks: None,
+                metadata: None,
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: Some(json!("ok")),
+                tool_calls: None,
+                tool_call_id: Some("c1".to_string()),
+                name: Some("a".to_string()),
+                timestamp: None,
+                reasoning_content: None,
+                thinking_blocks: None,
+                metadata: None,
+            },
+            ChatMessage::text("assistant", "done"),
+        ];
+        trim_unpaired_tool_tail(&mut msgs);
+        assert_eq!(msgs.len(), 4, "complete pairs must not be trimmed");
+    }
+
+    #[test]
+    fn trim_unpaired_removes_nested_incomplete_after_complete() {
+        use super::trim_unpaired_tool_tail;
+
+        let mut msgs = vec![
+            ChatMessage::text("user", "go"),
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: None,
+                tool_calls: Some(vec![
+                    json!({"id": "c1", "type": "function", "function": {"name": "a", "arguments": "{}"}}),
+                ]),
+                tool_call_id: None,
+                name: None,
+                timestamp: None,
+                reasoning_content: None,
+                thinking_blocks: None,
+                metadata: None,
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: Some(json!("ok")),
+                tool_calls: None,
+                tool_call_id: Some("c1".to_string()),
+                name: Some("a".to_string()),
+                timestamp: None,
+                reasoning_content: None,
+                thinking_blocks: None,
+                metadata: None,
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: None,
+                tool_calls: Some(vec![
+                    json!({"id": "c2", "type": "function", "function": {"name": "b", "arguments": "{}"}}),
+                ]),
+                tool_call_id: None,
+                name: None,
+                timestamp: None,
+                reasoning_content: None,
+                thinking_blocks: None,
+                metadata: None,
+            },
+        ];
+        trim_unpaired_tool_tail(&mut msgs);
+        assert_eq!(msgs.len(), 3, "only the second incomplete group removed");
+        assert_eq!(msgs[2].role, "tool");
     }
 }

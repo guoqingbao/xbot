@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, ScrollUp, disable_raw_mode,
+    enable_raw_mode,
 };
 use crossterm::{cursor, execute};
 use ratatui::Terminal;
@@ -84,9 +85,15 @@ pub async fn run_tui_repl(
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
+    let (_, rows) = crossterm::terminal::size().unwrap_or((80, 24));
     execute!(
         stdout,
+        ScrollUp(rows),
+        cursor::MoveTo(0, 0),
+        Clear(ClearType::All),
         EnterAlternateScreen,
+        Clear(ClearType::Purge),
+        cursor::MoveTo(0, 0),
         EnableBracketedPaste,
         cursor::Hide
     )?;
@@ -197,15 +204,16 @@ pub async fn run_tui_repl(
         if app.cancel_requested {
             app.cancel_requested = false;
             agent.request_cancellation(&session_key);
+            agent.cancel_subagents(&session_key).await;
             if let Some(handle) = active_turn.take() {
-                handle.abort();
+                let abort = handle.abort_handle();
+                let grace = tokio::time::timeout(Duration::from_millis(500), handle).await;
+                if grace.is_err() {
+                    abort.abort();
+                }
                 agent.set_progress_sender(None);
             }
-            let agent_c = agent.clone();
-            let sk = session_key.clone();
-            tokio::spawn(async move {
-                agent_c.cancel_subagents(&sk).await;
-            });
+            agent.persist_session_safe(&session_key);
             agent.cancel_session(&session_key);
             app.agent_state = AS::Ready;
             app.pending.clear();
