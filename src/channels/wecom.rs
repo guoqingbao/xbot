@@ -99,7 +99,7 @@ impl WecomChannel {
         let config: WecomConfig = serde_json::from_value(config)?;
         let client = Client::builder()
             .timeout(Duration::from_secs(120))
-            .user_agent(concat!("rbot/", env!("CARGO_PKG_VERSION"), " (WeCom)"))
+            .user_agent(concat!("xbot/", env!("CARGO_PKG_VERSION"), " (WeCom)"))
             .build()?;
         Ok(Self {
             base: ChannelBase::new(
@@ -489,7 +489,7 @@ impl Channel for WecomChannel {
          2. Create a self-built application under 'App Management'\n\
          3. Note the Corp ID (from 'My Enterprise'), Agent ID, and Secret\n\
          4. For the AI Bot WebSocket mode, the Agent ID and Secret are used for auth\n\
-         5. Configure rbot:\n\
+         5. Configure xbot:\n\
          \n\
             \"wecom\": {\n\
               \"enabled\": true,\n\
@@ -499,7 +499,7 @@ impl Channel for WecomChannel {
               \"secret\": \"<your-secret>\"\n\
             }\n\
          \n\
-         6. Run: rbot run"
+         6. Run: xbot run"
     }
 
     async fn start(&self) -> Result<()> {

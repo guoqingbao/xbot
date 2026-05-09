@@ -1293,7 +1293,7 @@ impl ExecTool {
         }
         if !self.blocked_dirs.is_empty() {
             let normalized = lower.replace('\\', "/");
-            if normalized.contains(".rbot/memory/")
+            if normalized.contains(".xbot/memory/")
                 || normalized.contains("memory/memory.md")
                 || normalized.contains("memory/history.md")
             {
@@ -1509,7 +1509,7 @@ impl WebSearchTool {
         match client
             .get("https://duckduckgo.com/html/")
             .query(&[("q", query)])
-            .header("User-Agent", "rbot/0.1")
+            .header("User-Agent", "xbot/0.1")
             .send()
             .await
         {
@@ -1643,7 +1643,7 @@ impl Tool for WebFetchTool {
         };
         match client
             .get(&url)
-            .header("User-Agent", "rbot/0.1")
+            .header("User-Agent", "xbot/0.1")
             .send()
             .await
         {

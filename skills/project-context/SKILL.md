@@ -1,7 +1,7 @@
 ---
 name: project-context
 description: "Workspace template for project-specific architecture, commands, and conventions."
-metadata: {"rbot":{"triggers":["project","context","architecture","overview"]}}
+metadata: {"xbot":{"triggers":["project","context","architecture","overview"]}}
 ---
 
 # Project Context Template

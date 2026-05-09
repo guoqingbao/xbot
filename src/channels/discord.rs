@@ -80,7 +80,7 @@ impl DiscordChannel {
         let client = Client::builder()
             .timeout(Duration::from_secs(120))
             .user_agent(concat!(
-                "rbot/",
+                "xbot/",
                 env!("CARGO_PKG_VERSION"),
                 " (Discord bot)"
             ))
@@ -185,8 +185,8 @@ impl DiscordChannel {
                         "intents": GATEWAY_INTENTS,
                         "properties": {
                             "os": "linux",
-                            "browser": "rbot",
-                            "device": "rbot"
+                            "browser": "xbot",
+                            "device": "xbot"
                         }
                     }
                 }),
@@ -637,7 +637,7 @@ impl Channel for DiscordChannel {
          3. Under 'Bot', enable 'Message Content Intent' in Privileged Gateway Intents\n\
          4. Under 'OAuth2 > URL Generator', select 'bot' scope with 'Send Messages' permission\n\
          5. Use the generated URL to invite the bot to your server\n\
-         6. Configure rbot:\n\
+         6. Configure xbot:\n\
          \n\
             \"discord\": {\n\
               \"enabled\": true,\n\
@@ -646,7 +646,7 @@ impl Channel for DiscordChannel {
               \"groupPolicy\": \"mention\"\n\
             }\n\
          \n\
-         7. Run: rbot run"
+         7. Run: xbot run"
     }
 
     async fn start(&self) -> Result<()> {

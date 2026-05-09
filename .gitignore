@@ -14,7 +14,8 @@ AGENTS.md
 CLAUDE.md
 *.nsys-rep
 *.sqlite
-.rbot/
+.xbot/
 openrouter_models.json
 instruction.md
 Cargo.lock
+XBOT.md

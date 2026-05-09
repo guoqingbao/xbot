@@ -636,7 +636,7 @@ impl EmailChannel {
 
     fn reply_subject(&self, base_subject: &str) -> String {
         let subject = if base_subject.trim().is_empty() {
-            "rbot reply"
+            "xbot reply"
         } else {
             base_subject.trim()
         };
@@ -692,7 +692,7 @@ impl Channel for EmailChannel {
          1. Use an email account that supports IMAP/SMTP (Gmail, Outlook, etc.)\n\
          2. For Gmail: enable 'Less secure apps' or generate an App Password\n\
          3. Note the IMAP host/port and SMTP host/port for your provider\n\
-         4. Configure rbot:\n\
+         4. Configure xbot:\n\
          \n\
             \"email\": {\n\
               \"enabled\": true,\n\
@@ -705,7 +705,7 @@ impl Channel for EmailChannel {
               \"password\": \"<app-password>\"\n\
             }\n\
          \n\
-         5. Run: rbot run"
+         5. Run: xbot run"
     }
 
     async fn start(&self) -> Result<()> {
@@ -802,7 +802,7 @@ impl Channel for EmailChannel {
             .expect("email subject lock poisoned")
             .get(&to_addr)
             .cloned()
-            .unwrap_or_else(|| "rbot reply".to_string());
+            .unwrap_or_else(|| "xbot reply".to_string());
         let subject = msg
             .metadata
             .get("subject")

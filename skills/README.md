@@ -1,6 +1,6 @@
-# rbot Built-in Skills
+# xbot Built-in Skills
 
-Built-in skills are optional workflow guides that `rbot` can load into the prompt context.
+Built-in skills are optional workflow guides that `xbot` can load into the prompt context.
 
 - `workspace-operator`: always-on guidance for safe file, shell, and reporting workflows
 - `memory-hygiene`: always-on guidance for maintaining durable memory and searching history

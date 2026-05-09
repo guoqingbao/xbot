@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use rbot::config::ExecToolConfig;
-use rbot::engine::AgentLoop;
-use rbot::providers::{LlmProvider, LlmResponse, LlmUsage, ToolCallRequest};
-use rbot::runtime::AgentRuntime;
-use rbot::storage::{ChatMessage, InboundMessage, MessageBus};
 use serde_json::{Value, json};
 use tempfile::tempdir;
+use xbot::config::ExecToolConfig;
+use xbot::engine::AgentLoop;
+use xbot::providers::{LlmProvider, LlmResponse, LlmUsage, ToolCallRequest};
+use xbot::runtime::AgentRuntime;
+use xbot::storage::{ChatMessage, InboundMessage, MessageBus};
 
 #[derive(Clone, Copy)]
 enum SubagentMode {
@@ -156,7 +156,7 @@ fn outbound_metadata(base: &BTreeMap<String, Value>, session_key: &str) -> BTree
     m
 }
 
-use rbot::storage::OutboundMessage;
+use xbot::storage::OutboundMessage;
 
 async fn consume_non_progress(bus: &MessageBus, timeout_secs: u64) -> OutboundMessage {
     let deadline = Duration::from_secs(timeout_secs);
@@ -179,7 +179,7 @@ async fn consume_non_progress(bus: &MessageBus, timeout_secs: u64) -> OutboundMe
             .get("_tool_hint")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        if !is_progress && !is_tool_hint {
+        if !is_progress && !is_tool_hint && !msg.content.is_empty() {
             return msg;
         }
     }

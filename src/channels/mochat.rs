@@ -86,7 +86,7 @@ impl MochatChannel {
         let config: MochatConfig = serde_json::from_value(config)?;
         let client = Client::builder()
             .timeout(Duration::from_secs(120))
-            .user_agent(concat!("rbot/", env!("CARGO_PKG_VERSION"), " (Mochat)"))
+            .user_agent(concat!("xbot/", env!("CARGO_PKG_VERSION"), " (Mochat)"))
             .build()?;
         Ok(Self {
             base: ChannelBase::new(
@@ -546,7 +546,7 @@ impl Channel for MochatChannel {
          \n\
          1. Obtain a Claw Token from your Mochat or OpenClaw instance admin\n\
          2. Note the session IDs and/or panel IDs you want the bot to monitor\n\
-         3. Configure rbot:\n\
+         3. Configure xbot:\n\
          \n\
             \"mochat\": {\n\
               \"enabled\": true,\n\
@@ -557,7 +557,7 @@ impl Channel for MochatChannel {
               \"panels\": []\n\
             }\n\
          \n\
-         4. Run: rbot run"
+         4. Run: xbot run"
     }
 
     async fn start(&self) -> Result<()> {

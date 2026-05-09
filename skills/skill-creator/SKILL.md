@@ -1,12 +1,12 @@
 ---
 name: skill-creator
-description: Create or update rbot Agent Skills (SKILL.md format, metadata, layout, validation). Use when designing skills, authoring frontmatter, or packaging scripts, references, and assets.
-metadata: {"rbot":{"emoji":"🛠️","triggers":["skill","skill creator","SKILL.md","frontmatter","metadata","packaging","agent skill"]}}
+description: Create or update xbot Agent Skills (SKILL.md format, metadata, layout, validation). Use when designing skills, authoring frontmatter, or packaging scripts, references, and assets.
+metadata: {"xbot":{"emoji":"🛠️","triggers":["skill","skill creator","SKILL.md","frontmatter","metadata","packaging","agent skill"]}}
 ---
 
-# Skill Creator (rbot)
+# Skill Creator (xbot)
 
-This skill guides creation of **rbot** skills: modular packages that extend the agent with workflows, tool usage, and domain knowledge.
+This skill guides creation of **xbot** skills: modular packages that extend the agent with workflows, tool usage, and domain knowledge.
 
 ## About Skills
 
@@ -46,8 +46,8 @@ Every `SKILL.md` **must** start with YAML between `---` delimiters, then Markdow
 
 | Key | Meaning |
 |-----|---------|
-| `metadata` | JSON object (often a single line). See **rbot metadata** below. |
-| `always` | Boolean. If `true`, skill is treated as always-on (same effect can be set inside `metadata.rbot`). |
+| `metadata` | JSON object (often a single line). See **xbot metadata** below. |
+| `always` | Boolean. If `true`, skill is treated as always-on (same effect can be set inside `metadata.xbot`). |
 | `allowed-tools` | Comma-separated tool names; restricts which tools may be used with this skill when the runtime enforces it. |
 | `homepage` | URL for humans or docs (optional). |
 
@@ -57,19 +57,19 @@ Example minimal frontmatter:
 ---
 name: pdf-tools
 description: Extract and redact text from PDFs. Use when the user works with .pdf files, scanned documents, or asks for PDF text extraction or redaction.
-metadata: {"rbot":{"emoji":"📄","triggers":["pdf","extract text","redact"],"requires":{"bins":["pdftotext"]}}}
+metadata: {"xbot":{"emoji":"📄","triggers":["pdf","extract text","redact"],"requires":{"bins":["pdftotext"]}}}
 ---
 ```
 
 ---
 
-## rbot `metadata` JSON
+## xbot `metadata` JSON
 
-The `metadata` frontmatter value is JSON. rbot reads a **`rbot`** object first (fallbacks exist for other hosts; prefer `rbot` for this project).
+The `metadata` frontmatter value is JSON. xbot reads a **`xbot`** object first (fallbacks exist for other hosts; prefer `xbot` for this project).
 
 ```json
 {
-  "rbot": {
+  "xbot": {
     "always": false,
     "triggers": ["keyword1", "keyword2"],
     "requires": {
@@ -92,7 +92,7 @@ The `metadata` frontmatter value is JSON. rbot reads a **`rbot`** object first (
   - **`os`** — Allowed OS names (e.g. `darwin`, `linux`); current OS must match one if the array is non-empty.
 - **`emoji`** (string) — Optional; for display or quick scanning in UIs.
 
-Nested values in `requires` are merged for availability checks as implemented by rbot.
+Nested values in `requires` are merged for availability checks as implemented by xbot.
 
 ---
 
@@ -107,7 +107,7 @@ Nested values in `requires` are merged for availability checks as implemented by
 
 ## Progressive Disclosure
 
-rbot uses a layered model:
+xbot uses a layered model:
 
 1. **Summary** — `name`, `description`, availability/requirements (lightweight).
 2. **SKILL.md body** — Loaded when the skill is relevant; keep under a few thousand words; split if needed.
@@ -134,7 +134,7 @@ skill-name/
 └── assets/           # optional; templates, images, binaries for outputs
 ```
 
-Rules enforced by rbot validation:
+Rules enforced by xbot validation:
 
 - **Only** these subdirectories are allowed at the skill root; no other folders or stray files (except `SKILL.md`).
 - **No symlinks** in the skill directory or under allowed subdirectories.
@@ -160,9 +160,9 @@ Before treating a skill as complete, verify:
 3. `name` is non-empty, valid characters, length ≤ 64, **matches folder name**.
 4. `description` is non-empty.
 5. No forbidden extra files at skill root; only `scripts/`, `references/`, `assets/` besides `SKILL.md`.
-6. `metadata` JSON parses and `rbot` object shape is intentional.
+6. `metadata` JSON parses and `xbot` object shape is intentional.
 
-rbot exposes `validate_skill(skill_dir)` in code for programmatic checks; fix any reported issues before shipping.
+xbot exposes `validate_skill(skill_dir)` in code for programmatic checks; fix any reported issues before shipping.
 
 ---
 
@@ -199,4 +199,4 @@ Do not add README-only clutter at the skill root (`README.md`, `CHANGELOG.md`, e
 - **Large reference files** — Add a table of contents at the top if longer than ~100 lines.
 - **One level of indirection** — Link references from `SKILL.md` directly; avoid deep chains.
 
-This structure aligns with how rbot lists skills, matches triggers, and loads full instructions on demand.
+This structure aligns with how xbot lists skills, matches triggers, and loads full instructions on demand.

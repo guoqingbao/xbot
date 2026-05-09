@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use rbot::channels::{
+use serde_json::{Value, json};
+use tempfile::tempdir;
+use xbot::channels::{
     Channel, ReplyParameters, SlackApi, SlackChannel, TelegramApi, TelegramBotIdentity,
     TelegramChannel,
 };
-use rbot::storage::{MessageBus, OutboundMessage};
-use serde_json::{Value, json};
-use tempfile::tempdir;
+use xbot::storage::{MessageBus, OutboundMessage};
 
 #[derive(Default)]
 struct FakeSlackApi {
@@ -92,7 +92,7 @@ impl TelegramApi for FakeTelegramApi {
         *self.get_me_calls.lock().unwrap() += 1;
         Ok(TelegramBotIdentity {
             id: 999,
-            username: "rbot_test".to_string(),
+            username: "xbot_test".to_string(),
         })
     }
 
@@ -511,7 +511,7 @@ async fn telegram_group_policy_mention_gates_group_messages() {
                 "chat": {"id": -100123, "type": "supergroup"},
                 "chat_id": -100123,
                 "from": {"id": 12345, "username": "alice"},
-                "text": "@rbot_test hi",
+                "text": "@xbot_test hi",
                 "message_id": 2
             }
         }))
@@ -521,6 +521,6 @@ async fn telegram_group_policy_mention_gates_group_messages() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(inbound.content, "@rbot_test hi");
+    assert_eq!(inbound.content, "@xbot_test hi");
     assert_eq!(*api.get_me_calls.lock().unwrap(), 1);
 }

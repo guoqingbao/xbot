@@ -83,7 +83,7 @@ impl QqChannel {
         let config: QqConfig = serde_json::from_value(config)?;
         let client = Client::builder()
             .timeout(Duration::from_secs(120))
-            .user_agent(concat!("rbot/", env!("CARGO_PKG_VERSION"), " (QQ bot)"))
+            .user_agent(concat!("xbot/", env!("CARGO_PKG_VERSION"), " (QQ bot)"))
             .build()?;
         Ok(Self {
             base: ChannelBase::new(
@@ -288,8 +288,8 @@ impl QqChannel {
                         "shard": [0, 1],
                         "properties": {
                             "$os": "linux",
-                            "$browser": "rbot",
-                            "$device": "rbot"
+                            "$browser": "xbot",
+                            "$device": "xbot"
                         }
                     }
                 }),
@@ -574,7 +574,7 @@ impl Channel for QqChannel {
          1. Go to https://q.qq.com and register as a QQ Bot developer\n\
          2. Create a bot application and obtain the App ID and Secret\n\
          3. Configure the bot's intents and permissions in the developer console\n\
-         4. Configure rbot:\n\
+         4. Configure xbot:\n\
          \n\
             \"qq\": {\n\
               \"enabled\": true,\n\
@@ -583,7 +583,7 @@ impl Channel for QqChannel {
               \"secret\": \"<your-secret>\"\n\
             }\n\
          \n\
-         5. Run: rbot run"
+         5. Run: xbot run"
     }
 
     async fn start(&self) -> Result<()> {

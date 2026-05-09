@@ -1,7 +1,7 @@
 ---
 name: software-engineer
 description: "Software engineering workflow for planning, code changes, tests, CI-style validation, subagent delegation, and release hygiene."
-metadata: {"rbot":{"triggers":["code","coding","vibe coding","implement","debug","bug","fix","test","tests","refactor","programming","repo","codebase"]}}
+metadata: {"xbot":{"triggers":["code","coding","vibe coding","implement","debug","bug","fix","test","tests","refactor","programming","repo","codebase"]}}
 ---
 
 # Software Engineer
@@ -10,7 +10,7 @@ Apply this workflow for autonomous software development tasks.
 
 ## Workflow
 
-1. Establish scope from the request and current code state.
+1. Establish scope from the request and current code state (find if there is a XBOT.md in the current workspace, use it if exists, otherwise ask user if we need to use /init command to create one).
 2. Read the touched code paths before proposing or applying edits.
 3. Prefer minimal coherent patches that preserve surrounding behavior.
 4. Run focused verification first, then broader tests if needed.

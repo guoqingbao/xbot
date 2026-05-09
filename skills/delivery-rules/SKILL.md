@@ -1,7 +1,7 @@
 ---
 name: delivery-rules
 description: "Workspace template for review, release, and delivery expectations."
-metadata: {"rbot":{"triggers":["deliver","send","message","channel"]}}
+metadata: {"xbot":{"triggers":["deliver","send","message","channel"]}}
 ---
 
 # Delivery Rules Template

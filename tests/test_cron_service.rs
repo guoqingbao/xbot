@@ -2,8 +2,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use rbot::cron::{CronSchedule, CronScheduleKind, CronService};
 use tempfile::tempdir;
+use xbot::cron::{CronSchedule, CronScheduleKind, CronService};
 
 #[test]
 fn add_job_rejects_unknown_timezone() {

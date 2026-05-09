@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use rbot::config::{Config, ExecToolConfig};
-use rbot::engine::AgentLoop;
-use rbot::providers::{LlmResponse, LlmUsage, QueuedProvider, ToolCallRequest};
-use rbot::runtime::AgentRuntime;
-use rbot::storage::{InboundMessage, MessageBus};
 use serde_json::json;
 use tempfile::tempdir;
+use xbot::config::{Config, ExecToolConfig};
+use xbot::engine::AgentLoop;
+use xbot::providers::{LlmResponse, LlmUsage, QueuedProvider, ToolCallRequest};
+use xbot::runtime::AgentRuntime;
+use xbot::storage::{InboundMessage, MessageBus};
 
 #[test]
 fn load_config_keeps_max_tokens_and_ignores_legacy_memory_window() {
@@ -44,7 +44,7 @@ fn provider_matching_prefers_keyword_and_local_base_detection() {
     let mut openrouter_only = Config::default();
     openrouter_only.providers.insert(
         "openrouter".to_string(),
-        rbot::config::ProviderConfig {
+        xbot::config::ProviderConfig {
             api_key: "sk-or-test".to_string(),
             api_base: None,
             extra_headers: Default::default(),
@@ -63,7 +63,7 @@ fn provider_matching_prefers_keyword_and_local_base_detection() {
     let mut config = openrouter_only.clone();
     config.providers.insert(
         "ollama".to_string(),
-        rbot::config::ProviderConfig {
+        xbot::config::ProviderConfig {
             api_key: String::new(),
             api_base: Some("http://localhost:11434/v1".to_string()),
             extra_headers: Default::default(),
@@ -89,7 +89,7 @@ fn subagent_config_can_select_separate_model_provider_and_api_base() {
     let mut config = Config::default();
     config.providers.insert(
         "subagent-fast".to_string(),
-        rbot::config::ProviderConfig {
+        xbot::config::ProviderConfig {
             api_key: String::new(),
             api_base: Some("http://127.0.0.1:8001/v1".to_string()),
             extra_headers: Default::default(),
@@ -168,10 +168,16 @@ async fn runtime_processes_bus_messages_and_message_tool_delivers_outbound() {
     .await
     .unwrap();
 
-    let outbound = tokio::time::timeout(std::time::Duration::from_secs(2), bus.consume_outbound())
-        .await
-        .unwrap()
-        .unwrap();
+    let outbound = loop {
+        let outbound =
+            tokio::time::timeout(std::time::Duration::from_secs(2), bus.consume_outbound())
+                .await
+                .unwrap()
+                .unwrap();
+        if outbound.content == "pushed via message tool" {
+            break outbound;
+        }
+    };
     assert_eq!(outbound.channel, "cli");
     assert_eq!(outbound.chat_id, "direct");
     assert_eq!(outbound.content, "pushed via message tool");

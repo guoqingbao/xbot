@@ -1,6 +1,6 @@
-# 🤖 rbot: A Minimal AI Agent in Rust for Automation and Development
+# 🤖 xbot: A Minimal AI Agent in Rust for Automation and Development
 
-`rbot` is a Rust-native autonomous bot runtime for persistent chat automation, tool execution, scheduled work, and multi-channel message delivery. 🚀
+`xbot` is a Rust-native autonomous bot runtime for persistent chat automation, tool execution, scheduled work, and multi-channel message delivery. 🚀
 
 ## ✨ Features
 
@@ -17,44 +17,56 @@
 - 🪝 **Hook System** - Extensible `AgentHook` trait for lifecycle callbacks without modifying the core agent loop
 
 ## Overview (Hybrid Model Routing)
-<img src="docs/rbot.png" alt="rbot terminal" width="600">
+<img src="docs/xbot.png" alt="xbot terminal" width="600">
 
-The screenshot highlights one of `rbot`'s core advantages: the main agent can use a remote high-capability model, while subagents fan out onto a separate local model. This lets you reserve paid remote tokens for synthesis and hard reasoning, and spend local GPU capacity on parallel exploration, code reading, tests, and report gathering.
+The screenshot highlights one of `xbot`'s core advantages: the main agent can use a remote high-capability model, while subagents fan out onto a separate local model. This lets you reserve paid remote tokens for synthesis and hard reasoning, and spend local GPU capacity on parallel exploration, code reading, tests, and report gathering.
 
 ## 📚 Documentation
 
 - [🚀 Getting Started](./docs/USAGE.md)
+- [📦 Installation](./docs/INSTALLATION.md)
 - [🧵 Hybrid Remote Main + Local Subagents](./docs/HYBRID_MODELS.md)
 - [🏗️ Architecture](./docs/ARCHITECTURE.md)
 - [⚙️ Operations Guide](./docs/OPERATIONS.md)
 
 ## ⚡ Quick Start
 
+### Install xbot:
+
+```bash
+cargo install xbot
+# or install a .deb from GitHub Releases
+# or npm install -g @trusted-ai/xbot
+```
+
+The installed command is `xbot`. See [Installation](./docs/INSTALLATION.md) for details.
+
 ### Initialize config and workspace:
 
 ```bash
-cargo run --release -- onboard
+xbot onboard
 ```
 
 This will generate:
 
 ```python
 # Global config file
-Config: ~/.rbot/config.json
+Config: ~/.xbot/config.json
 # Global workspace
-Workspace: ~/.rbot/workspace
+Workspace: ~/.xbot/workspace
 ```
 
 ### Config Providers
 
-`rbot` supports both remote and local OpenAI-compatible backends. 🎯
+`xbot` supports both remote and local OpenAI-compatible backends. 🎯
 You can configure them interactively:
 
 ```bash
-cargo run --release -- config --provider
+xbot config --provider
+# cargo run --release -- config --provider
 ```
 
-Or manually edit `~/.rbot/config.json`. Refer to: [Getting Started](./docs/USAGE.md)
+Or manually edit `~/.xbot/config.json`. Refer to: [Getting Started](./docs/USAGE.md)
 
 For the recommended hybrid setup, use a remote main model such as DeepSeek `deepseek-v4-pro` and a local OpenAI-compatible server such as vLLM serving Qwen for subagents. See [Hybrid Remote Main + Local Subagents](./docs/HYBRID_MODELS.md).
 
@@ -65,16 +77,17 @@ Before starting the backend, you should configure your preferred communication c
 Use the interactive configuration tool:
 
 ```bash
-cargo run --release -- config --channel
+xbot config --channel
+# cargo run --release -- config --channel
 ```
 
 List, configure, and log in to channels:
 
 ```bash
-cargo run --release -- channels list          # List all available channels
-cargo run --release -- channels status        # Show enabled/disabled state
-cargo run --release -- channels setup discord # Setup instructions (how to get tokens)
-cargo run --release -- channels login weixin  # Interactive login (QR code scan)
+xbot channels list          # List all available channels
+xbot channels status        # Show enabled/disabled state
+xbot channels setup discord # Setup instructions (how to get tokens)
+xbot channels login weixin  # Interactive login (QR code scan)
 ```
 
 Use `channels setup <name>` to see step-by-step instructions for obtaining the required tokens and keys for any channel. For channels that support interactive login (Weixin QR code, WhatsApp bridge), use `channels login`. For manual configuration or detailed channel options, see [Getting Started](./docs/USAGE.md#5-channel-configuration).
@@ -91,45 +104,55 @@ Use `channels setup <name>` to see step-by-step instructions for obtaining the r
 ### One-shot prompt:
 
 ```bash
-cargo run --release -- chat "summarize the repository structure"
+# this will scan and init the project for following tasks (XBOT.md)
+xbot chat /init
+# this will do one task a time
+xbot chat "find bugs in this project"
+# cargo run --release -- chat /init
 ```
 
-### Interactive shell:
+### Interactive shell (TUI, rich terminal UI):
 
 ```bash
-cargo run --release -- repl
+xbot repl
+# cargo run --release -- repl
 ```
 
 The CLI includes:
 - 📡 Streamed responses
 - 📜 Persistent history
 - 💻 Local shell commands such as `/help` and `/clear`
-- 🤖 Agent commands such as `/new`, `/clear`, `/memorize <text>`, `/status`, and `/stop`
+- 🤖 Agent commands such as `/new`, `/clear`, `/memorize <text>`, `/status`, `/init` and `/stop`
+
+`chat` and `repl` use the current directory as the workspace by default and create `.xbot/` there. Use `xbot repl --global` or `xbot chat --global "..."` for the configured global workspace, or `--workspace <path>` for an explicit workspace.
 
 ### Manage skills:
 
 ```bash
-cargo run --release -- skills list
-cargo run --release -- skills init my-custom-skill
+xbot skills list
+xbot skills init my-custom-skill
 ```
 
 ## ⚡ Backend Bot
 ### Start the backend (Personal AI Assistant):
 
 ```bash
-cargo run --release -- run
+xbot run
+# cargo run --release -- run
 ```
 
-Sending task(s) to `rbot` using configured channels (such as Slack APP).
+`run` uses the configured global workspace by default. Use `xbot run --workspace .` when the backend should run against the current project workspace.
+
+Sending task(s) to `xbot` using configured channels (such as Slack APP).
 
 ### Check runtime configuration and local state:
 
 ```bash
-cargo run --release -- status
-cargo run --release -- sessions
-cargo run --release -- jobs
-cargo run --release -- channels status
-cargo run --release -- skills list
+xbot status
+xbot sessions
+xbot jobs
+xbot channels status
+xbot skills list
 ```
 
 ## 📡 Runtime Surfaces
@@ -155,8 +178,8 @@ cargo run --release -- skills list
 When messaging the bot through Slack, Telegram, or other channels, you can send these signals as standalone messages:
 
 - `stop` or `/stop` - Immediately stop the current agent task and cancel running subagents.
-- `clear`, `new`, `/clear`, or `/new` - Start a new session and restore `.rbot/memory/HISTORY.md` to the default template.
-- `memorize <text>` or `/memorize <text>` - Store durable user-directed memory in `.rbot/memory/MEMORY.md` through the `memory-entry-writer` summarization skill.
+- `clear`, `new`, `/clear`, or `/new` - Start a new session and restore `.xbot/memory/HISTORY.md` to the default template.
+- `memorize <text>` or `/memorize <text>` - Store durable user-directed memory in `.xbot/memory/MEMORY.md` through the `memory-entry-writer` summarization skill.
 - `status` or `/status` - Get the current version and runtime usage stats.
 - `help` or `/help` - Show available commands.
 

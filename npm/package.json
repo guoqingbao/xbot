@@ -1,0 +1,53 @@
+{
+  "name": "@trusted-ai/xbot",
+  "version": "0.1.0",
+  "description": "Rust-native autonomous bot runtime for chat automation, tools, scheduled work, and multi-channel delivery",
+  "license": "MIT",
+  "homepage": "https://github.com/guoqingbao/xbot#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/guoqingbao/xbot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/guoqingbao/xbot/issues"
+  },
+  "bin": {
+    "xbot": "bin/xbot.js"
+  },
+  "scripts": {
+    "prepack": "node scripts/prepare-package.js",
+    "postpack": "node scripts/clean-package.js",
+    "postinstall": "node scripts/install.js"
+  },
+  "files": [
+    "bin/xbot.js",
+    "scripts/install.js",
+    "docs/ARCHITECTURE.md",
+    "docs/HYBRID_MODELS.md",
+    "docs/INSTALLATION.md",
+    "docs/OPERATIONS.md",
+    "docs/xbot.png",
+    "docs/USAGE.md",
+    "skills",
+    "README.md",
+    "LICENSE.txt"
+  ],
+  "keywords": [
+    "agent",
+    "automation",
+    "chatbot",
+    "llm",
+    "tui"
+  ],
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "arm64",
+    "x64"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

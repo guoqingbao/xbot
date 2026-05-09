@@ -1,9 +1,9 @@
 //! Memory consolidation parsing and LLM fallback behavior.
 
-use rbot::engine::memory::{MemoryConsolidator, parse_consolidation_json};
-use rbot::providers::{LlmResponse, LlmUsage, QueuedProvider};
-use rbot::storage::Session;
 use tempfile::tempdir;
+use xbot::engine::memory::{MemoryConsolidator, parse_consolidation_json};
+use xbot::providers::{LlmResponse, LlmUsage, QueuedProvider};
+use xbot::storage::Session;
 
 fn bad_llm_body() -> LlmResponse {
     LlmResponse {

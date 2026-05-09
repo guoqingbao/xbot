@@ -33,7 +33,7 @@ pub struct AgentDefaults {
 impl Default for AgentDefaults {
     fn default() -> Self {
         Self {
-            workspace: "~/.rbot/workspace".to_string(),
+            workspace: "~/.xbot/workspace".to_string(),
             model: "openai/gpt-4.1-mini".to_string(),
             provider: "auto".to_string(),
             max_tokens: 16_384,
@@ -322,7 +322,7 @@ impl Config {
     pub fn default_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".rbot")
+            .join(".xbot")
             .join("config.json")
     }
 

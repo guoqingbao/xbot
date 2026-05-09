@@ -5,18 +5,18 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use rbot::config::ExecToolConfig;
-use rbot::engine::AgentLoop;
-use rbot::providers::{
-    LlmProvider, LlmResponse, LlmUsage, ProviderModelInfo, QueuedProvider, ToolCallRequest,
-};
-use rbot::runtime::AgentRuntime;
-use rbot::storage::{ChatMessage, InboundMessage, MessageBus, OutboundMessage, SessionManager};
-use rbot::tools::MessageSendCallback;
-use rbot::util::workspace_state_dir;
 use serde_json::Value;
 use serde_json::json;
 use tempfile::tempdir;
+use xbot::config::ExecToolConfig;
+use xbot::engine::AgentLoop;
+use xbot::providers::{
+    LlmProvider, LlmResponse, LlmUsage, ProviderModelInfo, QueuedProvider, ToolCallRequest,
+};
+use xbot::runtime::AgentRuntime;
+use xbot::storage::{ChatMessage, InboundMessage, MessageBus, OutboundMessage, SessionManager};
+use xbot::tools::MessageSendCallback;
+use xbot::util::workspace_state_dir;
 
 #[tokio::test]
 async fn agent_loop_executes_tool_then_returns_final_answer() {

@@ -1,5 +1,5 @@
-use rbot::tools::{ExecTool, Tool, ToolOutput, WebFetchTool};
 use serde_json::json;
+use xbot::tools::{ExecTool, Tool, ToolOutput, WebFetchTool};
 
 #[tokio::test]
 async fn exec_blocks_metadata_url() {

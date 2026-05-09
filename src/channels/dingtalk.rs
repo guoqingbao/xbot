@@ -160,7 +160,7 @@ impl DingTalkChannel {
                 { "topic": "*", "type": "EVENT" },
                 { "topic": "/v1.0/im/bot/messages/get", "type": "CALLBACK" }
             ],
-            "ua": "rbot-dingtalk/0.1"
+            "ua": "xbot-dingtalk/0.1"
         });
         let response = self
             .client
@@ -513,7 +513,7 @@ impl Channel for DingTalkChannel {
          1. Go to https://open-dev.dingtalk.com and create a robot application\n\
          2. Under 'Credentials', copy the Client ID (AppKey) and Client Secret (AppSecret)\n\
          3. Under 'Robot', enable the robot and copy the Robot Code\n\
-         4. Configure rbot:\n\
+         4. Configure xbot:\n\
          \n\
             \"dingtalk\": {\n\
               \"enabled\": true,\n\
@@ -523,7 +523,7 @@ impl Channel for DingTalkChannel {
               \"robotCode\": \"<RobotCode>\"\n\
             }\n\
          \n\
-         5. Run: rbot run"
+         5. Run: xbot run"
     }
 
     async fn start(&self) -> Result<()> {

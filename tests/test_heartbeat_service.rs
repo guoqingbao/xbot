@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
 
-use rbot::providers::{LlmResponse, QueuedProvider, SharedProvider, ToolCallRequest};
-use rbot::runtime::HeartbeatService;
 use serde_json::json;
 use tempfile::tempdir;
+use xbot::providers::{LlmResponse, QueuedProvider, SharedProvider, ToolCallRequest};
+use xbot::runtime::HeartbeatService;
 
 #[tokio::test]
 async fn start_is_idempotent() {

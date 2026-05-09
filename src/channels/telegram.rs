@@ -693,7 +693,7 @@ impl Channel for TelegramChannel {
          2. Follow the prompts to name your bot and get a token\n\
          3. (Optional) Send /setprivacy to @BotFather and disable privacy mode\n\
             if you want the bot to see all group messages\n\
-         4. Configure rbot:\n\
+         4. Configure xbot:\n\
          \n\
             \"telegram\": {\n\
               \"enabled\": true,\n\
@@ -701,7 +701,7 @@ impl Channel for TelegramChannel {
               \"token\": \"<your-bot-token>\"\n\
             }\n\
          \n\
-         5. Run: rbot run"
+         5. Run: xbot run"
     }
 
     async fn start(&self) -> Result<()> {

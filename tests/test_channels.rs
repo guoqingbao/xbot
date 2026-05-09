@@ -5,14 +5,14 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use rbot::channels::{
+use serde_json::json;
+use serial_test::serial;
+use xbot::channels::{
     Channel, ChannelBase, ChannelDescriptor, ChannelManager, LocalChannel, clear_plugins,
     discover_all, discover_channel_names, discover_plugins, register_plugin,
 };
-use rbot::config::ChannelsConfig;
-use rbot::storage::{MessageBus, OutboundMessage};
-use serde_json::json;
-use serial_test::serial;
+use xbot::config::ChannelsConfig;
+use xbot::storage::{MessageBus, OutboundMessage};
 
 struct DummyChannel {
     base: ChannelBase,

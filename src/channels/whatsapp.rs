@@ -405,8 +405,8 @@ impl Channel for WhatsAppChannel {
             eprintln!("Configured bridge URL: {}", self.config.bridge_url);
         }
         eprintln!();
-        eprintln!("Once the bridge is running and authenticated, start rbot with the");
-        eprintln!("whatsapp channel enabled. rbot connects to the bridge via WebSocket.");
+        eprintln!("Once the bridge is running and authenticated, start xbot with the");
+        eprintln!("whatsapp channel enabled. xbot connects to the bridge via WebSocket.");
         Ok(true)
     }
 
@@ -417,7 +417,7 @@ impl Channel for WhatsAppChannel {
          2. Clone the bridge: git clone https://github.com/nicepkg/whatsapp-bridge\n\
          3. cd whatsapp-bridge && npm install && npm start\n\
          4. Scan the QR code in the bridge terminal with WhatsApp\n\
-         5. Configure rbot:\n\
+         5. Configure xbot:\n\
          \n\
             \"whatsapp\": {\n\
               \"enabled\": true,\n\
@@ -425,7 +425,7 @@ impl Channel for WhatsAppChannel {
               \"bridgeUrl\": \"ws://localhost:3001\"\n\
             }\n\
          \n\
-         6. Run: rbot run"
+         6. Run: xbot run"
     }
 
     async fn start(&self) -> Result<()> {

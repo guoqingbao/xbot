@@ -1503,7 +1503,7 @@ impl Channel for FeishuChannel {
          4. Add event subscriptions: im.message.receive_v1\n\
          5. Under 'Permissions', add: im:message, im:message:send, im:resource\n\
          6. Publish the app version and have an admin approve it\n\
-         7. Configure rbot:\n\
+         7. Configure xbot:\n\
          \n\
             \"feishu\": {\n\
               \"enabled\": true,\n\
@@ -1512,7 +1512,7 @@ impl Channel for FeishuChannel {
               \"appSecret\": \"<your-app-secret>\"\n\
             }\n\
          \n\
-         8. Run: rbot run"
+         8. Run: xbot run"
     }
 
     async fn start(&self) -> Result<()> {

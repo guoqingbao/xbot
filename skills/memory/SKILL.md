@@ -2,15 +2,15 @@
 name: memory
 description: "Two-layer workspace memory, automatic session consolidation, and how to search the history log."
 always: true
-metadata: {"rbot":{"description":"Long-term MEMORY.md vs append-only HISTORY.md; when to write; consolidation; grep recall.","always":true,"emoji":"🧠","triggers":["memory","history","recall","consolidate","remember"]}}
+metadata: {"xbot":{"description":"Long-term MEMORY.md vs append-only HISTORY.md; when to write; consolidation; grep recall.","always":true,"emoji":"🧠","triggers":["memory","history","recall","consolidate","remember"]}}
 ---
 
 # Memory
 
-rbot keeps project memory under the configured workspace, not at the repository root by itself. Paths are relative to that workspace:
+xbot keeps project memory under the configured workspace, not at the repository root by itself. Paths are relative to that workspace:
 
-- **`.rbot/memory/MEMORY.md`** — Curated long-term context (preferences, architecture, durable decisions). Loaded into the agent context (often via topic slices), size-limited by `agents.defaults.memoryMaxBytes`.
-- **`.rbot/memory/HISTORY.md`** — Append-only log of consolidation and archived conversation chunks. **Not** treated as active context; search it when you need to recover past events or details.
+- **`.xbot/memory/MEMORY.md`** — Curated long-term context (preferences, architecture, durable decisions). Loaded into the agent context (often via topic slices), size-limited by `agents.defaults.memoryMaxBytes`.
+- **`.xbot/memory/HISTORY.md`** — Append-only log of consolidation and archived conversation chunks. **Not** treated as active context; search it when you need to recover past events or details.
 
 ## When to write to MEMORY.md
 
@@ -33,7 +33,7 @@ Use `HISTORY.md` when:
 
 ## Auto-consolidation
 
-When the session grows large relative to the model context window, rbot **automatically** consolidates older turns:
+When the session grows large relative to the model context window, xbot **automatically** consolidates older turns:
 
 1. **Preferred path:** The runtime asks the model to summarize a chunk of conversation. A summary is appended to `HISTORY.md`, and an optional short update can be appended to `MEMORY.md` as a consolidation entry.
 2. **Fallback:** If consolidation fails repeatedly, raw message text is archived into `HISTORY.md` in chunks until usage drops back near a safe threshold (roughly three quarters of the configured context budget).
@@ -51,16 +51,16 @@ Examples (macOS/Linux):
 
 ```bash
 # Case-insensitive, show line numbers
-grep -ni "keyword" .rbot/memory/HISTORY.md
+grep -ni "keyword" .xbot/memory/HISTORY.md
 
 # Last N matching lines
-grep -i "deploy" .rbot/memory/HISTORY.md | tail -n 30
+grep -i "deploy" .xbot/memory/HISTORY.md | tail -n 30
 
 # Ripgrep: fast, respects .gitignore unless you pass --no-ignore
-rg -n "pattern" .rbot/memory/HISTORY.md
+rg -n "pattern" .xbot/memory/HISTORY.md
 ```
 
-Windows (cmd): `findstr /i "keyword" .rbot\memory\HISTORY.md`
+Windows (cmd): `findstr /i "keyword" .xbot\memory\HISTORY.md`
 
 Prefer **narrow patterns** (component names, ticket IDs, error strings) over single common words to avoid noise.
 

@@ -134,58 +134,58 @@ impl RuntimeTelemetry {
         let snapshot = self.snapshot();
         let provider = &snapshot.provider;
         [
-            "# HELP rbot_inbound_messages_total Inbound messages processed",
-            "# TYPE rbot_inbound_messages_total counter",
-            &format!("rbot_inbound_messages_total {}", snapshot.inbound_messages),
-            "# HELP rbot_outbound_messages_total Outbound messages published",
-            "# TYPE rbot_outbound_messages_total counter",
-            &format!("rbot_outbound_messages_total {}", snapshot.outbound_messages),
-            "# HELP rbot_provider_requests_total Provider requests issued",
-            "# TYPE rbot_provider_requests_total counter",
+            "# HELP xbot_inbound_messages_total Inbound messages processed",
+            "# TYPE xbot_inbound_messages_total counter",
+            &format!("xbot_inbound_messages_total {}", snapshot.inbound_messages),
+            "# HELP xbot_outbound_messages_total Outbound messages published",
+            "# TYPE xbot_outbound_messages_total counter",
+            &format!("xbot_outbound_messages_total {}", snapshot.outbound_messages),
+            "# HELP xbot_provider_requests_total Provider requests issued",
+            "# TYPE xbot_provider_requests_total counter",
             &format!(
-                "rbot_provider_requests_total{{provider=\"{}\",model=\"{}\"}} {}",
+                "xbot_provider_requests_total{{provider=\"{}\",model=\"{}\"}} {}",
                 provider.provider_name, provider.model, provider.requests
             ),
-            "# HELP rbot_provider_successes_total Successful provider requests",
-            "# TYPE rbot_provider_successes_total counter",
+            "# HELP xbot_provider_successes_total Successful provider requests",
+            "# TYPE xbot_provider_successes_total counter",
             &format!(
-                "rbot_provider_successes_total{{provider=\"{}\",model=\"{}\"}} {}",
+                "xbot_provider_successes_total{{provider=\"{}\",model=\"{}\"}} {}",
                 provider.provider_name, provider.model, provider.successes
             ),
-            "# HELP rbot_provider_failures_total Failed provider requests",
-            "# TYPE rbot_provider_failures_total counter",
+            "# HELP xbot_provider_failures_total Failed provider requests",
+            "# TYPE xbot_provider_failures_total counter",
             &format!(
-                "rbot_provider_failures_total{{provider=\"{}\",model=\"{}\"}} {}",
+                "xbot_provider_failures_total{{provider=\"{}\",model=\"{}\"}} {}",
                 provider.provider_name, provider.model, provider.failures
             ),
-            "# HELP rbot_prompt_tokens_total Prompt tokens sent to the provider",
-            "# TYPE rbot_prompt_tokens_total counter",
+            "# HELP xbot_prompt_tokens_total Prompt tokens sent to the provider",
+            "# TYPE xbot_prompt_tokens_total counter",
             &format!(
-                "rbot_prompt_tokens_total{{provider=\"{}\",model=\"{}\"}} {}",
+                "xbot_prompt_tokens_total{{provider=\"{}\",model=\"{}\"}} {}",
                 provider.provider_name, provider.model, provider.prompt_tokens
             ),
-            "# HELP rbot_completion_tokens_total Completion tokens returned by the provider",
-            "# TYPE rbot_completion_tokens_total counter",
+            "# HELP xbot_completion_tokens_total Completion tokens returned by the provider",
+            "# TYPE xbot_completion_tokens_total counter",
             &format!(
-                "rbot_completion_tokens_total{{provider=\"{}\",model=\"{}\"}} {}",
+                "xbot_completion_tokens_total{{provider=\"{}\",model=\"{}\"}} {}",
                 provider.provider_name, provider.model, provider.completion_tokens
             ),
-            "# HELP rbot_provider_avg_latency_ms Average provider request latency in ms",
-            "# TYPE rbot_provider_avg_latency_ms gauge",
+            "# HELP xbot_provider_avg_latency_ms Average provider request latency in ms",
+            "# TYPE xbot_provider_avg_latency_ms gauge",
             &format!(
-                "rbot_provider_avg_latency_ms{{provider=\"{}\",model=\"{}\"}} {:.2}",
+                "xbot_provider_avg_latency_ms{{provider=\"{}\",model=\"{}\"}} {:.2}",
                 provider.provider_name, provider.model, provider.avg_latency_ms
             ),
-            "# HELP rbot_provider_avg_prefill_tokens_per_second Average prompt throughput",
-            "# TYPE rbot_provider_avg_prefill_tokens_per_second gauge",
+            "# HELP xbot_provider_avg_prefill_tokens_per_second Average prompt throughput",
+            "# TYPE xbot_provider_avg_prefill_tokens_per_second gauge",
             &format!(
-                "rbot_provider_avg_prefill_tokens_per_second{{provider=\"{}\",model=\"{}\"}} {:.2}",
+                "xbot_provider_avg_prefill_tokens_per_second{{provider=\"{}\",model=\"{}\"}} {:.2}",
                 provider.provider_name, provider.model, provider.avg_prefill_tokens_per_s
             ),
-            "# HELP rbot_provider_avg_generation_tokens_per_second Average completion throughput",
-            "# TYPE rbot_provider_avg_generation_tokens_per_second gauge",
+            "# HELP xbot_provider_avg_generation_tokens_per_second Average completion throughput",
+            "# TYPE xbot_provider_avg_generation_tokens_per_second gauge",
             &format!(
-                "rbot_provider_avg_generation_tokens_per_second{{provider=\"{}\",model=\"{}\"}} {:.2}",
+                "xbot_provider_avg_generation_tokens_per_second{{provider=\"{}\",model=\"{}\"}} {:.2}",
                 provider.provider_name, provider.model, provider.avg_generation_tokens_per_s
             ),
         ]
@@ -387,6 +387,7 @@ pub struct ProviderModelSnapshot {
     pub model_size_bytes: Option<u64>,
     pub context_window_tokens: Option<usize>,
     pub available_models: Vec<String>,
+    pub available_model_context_windows: BTreeMap<String, usize>,
     pub raw_details: BTreeMap<String, String>,
 }
 
@@ -437,6 +438,14 @@ async fn collect_ollama_snapshot(
                     .iter()
                     .filter_map(|item| item.get("name").and_then(Value::as_str))
                     .map(ToOwned::to_owned)
+                    .collect();
+                snapshot.available_model_context_windows = models
+                    .iter()
+                    .filter_map(|item| {
+                        let name = item.get("name").and_then(Value::as_str)?;
+                        let context_window_tokens = extract_context_window_tokens(item)?;
+                        Some((name.to_string(), context_window_tokens))
+                    })
                     .collect();
                 let target = strip_provider_prefix(model);
                 if let Some(found) = models
@@ -516,6 +525,14 @@ async fn collect_openai_compatible_snapshot(
                     .iter()
                     .filter_map(|item| item.get("id").and_then(Value::as_str))
                     .map(ToOwned::to_owned)
+                    .collect();
+                snapshot.available_model_context_windows = models
+                    .iter()
+                    .filter_map(|item| {
+                        let id = item.get("id").and_then(Value::as_str)?;
+                        let context_window_tokens = extract_context_window_tokens(item)?;
+                        Some((id.to_string(), context_window_tokens))
+                    })
                     .collect();
                 if let Some(found) = models.iter().find(|item| {
                     item.get("id").and_then(Value::as_str) == Some(snapshot.model_name.as_str())
@@ -634,8 +651,9 @@ fn json_value_to_string(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::RuntimeTelemetry;
+    use super::{RuntimeTelemetry, extract_context_window_tokens};
     use crate::providers::{LlmResponse, LlmUsage};
+    use serde_json::json;
 
     #[test]
     fn telemetry_tracks_token_rates() {
@@ -667,5 +685,15 @@ mod tests {
         assert_eq!(snapshot.provider.requests, 1);
         assert!(snapshot.provider.avg_prefill_tokens_per_s >= 50.0);
         assert!(snapshot.provider.avg_generation_tokens_per_s >= 15.0);
+    }
+
+    #[test]
+    fn extracts_context_window_from_max_model_len() {
+        let value = json!({
+            "id": "Qwen3.6-27B-FP8",
+            "max_model_len": 262144
+        });
+
+        assert_eq!(extract_context_window_tokens(&value), Some(262_144));
     }
 }

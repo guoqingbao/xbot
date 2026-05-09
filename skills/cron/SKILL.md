@@ -1,12 +1,12 @@
 ---
 name: cron
 description: "Schedule recurring or one-off work with the built-in cron tool (reminders, agent tasks, one-time runs)."
-metadata: {"rbot":{"description":"cron tool: add/list/remove; intervals, cron expressions, one-shot at; timezones.","emoji":"⏰","triggers":["cron","schedule","reminder","timer","periodic"]}}
+metadata: {"xbot":{"description":"cron tool: add/list/remove; intervals, cron expressions, one-shot at; timezones.","emoji":"⏰","triggers":["cron","schedule","reminder","timer","periodic"]}}
 ---
 
 # Cron tool
 
-The **`cron`** tool schedules jobs stored under `.rbot/cron/` (for example `jobs.json`). Each firing runs an **agent turn** with your message in the same channel/chat context that was active when the job was created. Results are delivered to the user when the run completes successfully.
+The **`cron`** tool schedules jobs stored under `.xbot/cron/` (for example `jobs.json`). Each firing runs an **agent turn** with your message in the same channel/chat context that was active when the job was created. Results are delivered to the user when the run completes successfully.
 
 Actions: `add`, `list`, `remove`.
 

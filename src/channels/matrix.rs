@@ -344,7 +344,7 @@ impl Channel for MatrixChannel {
          2. Obtain an access token (e.g. via Element: Settings > Help & About > Access Token)\n\
          3. Note the full user ID (e.g. @bot:example.com)\n\
          4. Invite the bot to the rooms where it should respond\n\
-         5. Configure rbot:\n\
+         5. Configure xbot:\n\
          \n\
             \"matrix\": {\n\
               \"enabled\": true,\n\
@@ -354,7 +354,7 @@ impl Channel for MatrixChannel {
               \"userId\": \"@bot:example.com\"\n\
             }\n\
          \n\
-         6. Run: rbot run"
+         6. Run: xbot run"
     }
 
     async fn start(&self) -> Result<()> {

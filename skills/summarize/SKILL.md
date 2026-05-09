@@ -2,7 +2,7 @@
 name: summarize
 description: Summarize or extract text/transcripts from URLs, podcasts, and local files; strong fallback when the user wants a video or article summarized without manual copy-paste.
 homepage: https://summarize.sh
-metadata: {"rbot":{"emoji":"🧾","requires":{"bins":["summarize"]},"triggers":["summarize","transcript","youtube","url","article","podcast","video"]}}
+metadata: {"xbot":{"emoji":"🧾","requires":{"bins":["summarize"]},"triggers":["summarize","transcript","youtube","url","article","podcast","video"]}}
 ---
 
 # Summarize

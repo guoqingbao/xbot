@@ -106,7 +106,7 @@ impl StdioMcpClient {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {},
                     "clientInfo": {
-                        "name": "rbot",
+                        "name": "xbot",
                         "version": env!("CARGO_PKG_VERSION"),
                     }
                 }),

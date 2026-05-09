@@ -4,12 +4,12 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use rbot::channels::{
-    Channel, FeishuApi, FeishuChannel, FeishuMessageDetails, FeishuResource, extract_post_content,
-};
-use rbot::storage::{MessageBus, OutboundMessage};
 use serde_json::{Value, json};
 use tempfile::tempdir;
+use xbot::channels::{
+    Channel, FeishuApi, FeishuChannel, FeishuMessageDetails, FeishuResource, extract_post_content,
+};
+use xbot::storage::{MessageBus, OutboundMessage};
 
 #[derive(Default)]
 struct FakeFeishuApi {

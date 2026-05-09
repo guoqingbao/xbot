@@ -63,7 +63,7 @@ impl ContextBuilder {
             }
         }
         parts.push(format!(
-            "# Skills\n\n{}\n\nCustom skills live under {}/.rbot/skills/{{skill-name}}/SKILL.md.\nRead those files before using a project-specific skill.",
+            "# Skills\n\n{}\n\nCustom skills live under {}/.xbot/skills/{{skill-name}}/SKILL.md.\nRead those files before using a project-specific skill.",
             self.skills.build_skills_summary(),
             self.workspace.display()
         ));
@@ -79,21 +79,22 @@ impl ContextBuilder {
         chat_id: Option<&str>,
         current_role: &str,
     ) -> Result<Vec<ChatMessage>> {
-        let mut current_content = self.build_user_content(current_message, media)?;
+        let current_content = self.build_user_content(current_message, media)?;
         let suggested_skills = self.skills.suggest_skills(current_message, 3);
 
         let mut messages = Vec::with_capacity(history.len() + 2);
         let mut system_prompt = self.build_system_prompt(current_message)?;
-        if current_role == "user" {
-            let runtime_ctx = self.build_runtime_context(channel, chat_id);
-            current_content = append_text_content(current_content, runtime_ctx);
-        }
         if !suggested_skills.is_empty() {
             let content = self.skills.load_skills_for_context(&suggested_skills);
             if !content.trim().is_empty() {
                 system_prompt.push_str("\n\n---\n\n# Suggested Skills For This Task\n\n");
                 system_prompt.push_str(&content);
             }
+        }
+        if current_role == "user" {
+            let runtime_ctx = self.build_runtime_context(channel, chat_id);
+            system_prompt.push_str("\n\n---\n\n");
+            system_prompt.push_str(&runtime_ctx);
         }
         messages.push(ChatMessage {
             role: "system".to_string(),
@@ -187,9 +188,9 @@ impl ContextBuilder {
         }
 
         format!(
-            r#"# rbot
+            r#"# xbot
 
-You are rbot, an autonomous AI agent runtime for software engineering, research, and automation.
+You are xbot, an autonomous AI agent runtime for software engineering, research, and automation.
 
 ## Environment
 - Workspace: {workspace}
@@ -280,7 +281,11 @@ looping:
 
 When in doubt: synthesize first, search more only if the synthesis reveals a specific gap.
 
-## Sub-Agent Strategy
+## Reuse related context (critical)
+- ALWAYS find if XBOT.md exists in workspace
+- Read XBOT.md if exists (trust it if it's newer compare to AGENTS.md)
+
+## Sub-Agent Strategy (at most 3 subagents in parallel)
 
 Sub-agents run independently with their own context. Use them for:
 - **Parallel investigation**: understanding 3+ independent files or modules simultaneously
@@ -396,17 +401,6 @@ Be concise and direct. State what you're doing, not how you feel about it.
     }
 }
 
-fn append_text_content(content: Value, suffix: String) -> Value {
-    match content {
-        Value::String(text) => Value::String(format!("{text}\n\n{suffix}")),
-        Value::Array(mut blocks) => {
-            blocks.push(json!({"type": "text", "text": suffix}));
-            Value::Array(blocks)
-        }
-        other => Value::Array(vec![other, json!({"type": "text", "text": suffix})]),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::ContextBuilder;
@@ -433,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn build_messages_places_runtime_context_on_current_user_message() {
+    fn build_messages_places_runtime_context_at_end_of_system_prompt() {
         let dir = tempdir().unwrap();
         let builder = ContextBuilder::new(dir.path(), 1024).unwrap();
         let messages = builder
@@ -450,10 +444,11 @@ mod tests {
         let system = messages[0].content_as_text().unwrap();
         let user = messages[1].content_as_text().unwrap();
 
-        assert!(!system.contains(ContextBuilder::RUNTIME_CONTEXT_TAG));
-        assert!(user.starts_with("continue"));
-        assert!(user.contains("Channel: cli"));
-        assert!(user.contains(ContextBuilder::RUNTIME_CONTEXT_TAG));
+        assert!(system.contains(ContextBuilder::RUNTIME_CONTEXT_TAG));
+        assert!(system.contains("Channel: cli"));
+        assert!(system.ends_with("Chat ID: direct"));
+        assert_eq!(user, "continue");
+        assert!(!user.contains(ContextBuilder::RUNTIME_CONTEXT_TAG));
     }
 
     #[test]

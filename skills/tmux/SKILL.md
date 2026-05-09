@@ -1,7 +1,7 @@
 ---
 name: tmux
 description: Remote-control tmux sessions for interactive CLIs by sending keystrokes and scraping pane output.
-metadata: {"rbot":{"emoji":"🧵","os":["darwin","linux"],"requires":{"bins":["tmux"]},"triggers":["tmux","terminal","pane","repl","interactive"]}}
+metadata: {"xbot":{"emoji":"🧵","os":["darwin","linux"],"requires":{"bins":["tmux"]},"triggers":["tmux","terminal","pane","repl","interactive"]}}
 ---
 
 # tmux Skill
@@ -11,10 +11,10 @@ Use tmux only when you need an interactive TTY. Prefer exec background mode for 
 ## Quickstart (isolated socket, exec tool)
 
 ```bash
-SOCKET_DIR="${RBOT_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/rbot-tmux-sockets}"
+SOCKET_DIR="${XBOT_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/xbot-tmux-sockets}"
 mkdir -p "$SOCKET_DIR"
-SOCKET="$SOCKET_DIR/rbot.sock"
-SESSION=rbot-python
+SOCKET="$SOCKET_DIR/xbot.sock"
+SESSION=xbot-python
 
 tmux -S "$SOCKET" new -d -s "$SESSION" -n shell
 tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- 'PYTHON_BASIC_REPL=1 python3 -q' Enter
@@ -31,8 +31,8 @@ To monitor:
 
 ## Socket convention
 
-- Use `RBOT_TMUX_SOCKET_DIR` environment variable.
-- Default socket path: `"$RBOT_TMUX_SOCKET_DIR/rbot.sock"`.
+- Use `XBOT_TMUX_SOCKET_DIR` environment variable.
+- Default socket path: `"$XBOT_TMUX_SOCKET_DIR/xbot.sock"`.
 
 ## Targeting panes and naming
 
@@ -43,7 +43,7 @@ To monitor:
 ## Finding sessions
 
 - If the skill bundle includes helpers under `scripts/`, list sessions on your socket: `./scripts/find-sessions.sh -S "$SOCKET"`.
-- Scan all sockets: `./scripts/find-sessions.sh --all` (uses `RBOT_TMUX_SOCKET_DIR`).
+- Scan all sockets: `./scripts/find-sessions.sh --all` (uses `XBOT_TMUX_SOCKET_DIR`).
 
 ## Sending input safely
 

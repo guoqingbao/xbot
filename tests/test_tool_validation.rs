@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rbot::tools::{
+use serde_json::{Value, json};
+use xbot::tools::{
     ExecTool, Tool, ToolOutput, ToolRegistry, ToolSpec, cast_params, validate_params,
 };
-use serde_json::{Value, json};
 
 struct SampleTool;
 
@@ -223,8 +223,8 @@ fn exec_extract_absolute_paths_captures_posix_absolute_paths() {
 
 #[test]
 fn exec_extract_absolute_paths_captures_home_paths() {
-    let cmd = "cat ~/.rbot/config.json > ~/out.txt";
+    let cmd = "cat ~/.xbot/config.json > ~/out.txt";
     let paths = ExecTool::extract_absolute_paths(cmd);
-    assert!(paths.contains(&"~/.rbot/config.json".to_string()));
+    assert!(paths.contains(&"~/.xbot/config.json".to_string()));
     assert!(paths.contains(&"~/out.txt".to_string()));
 }

@@ -37,8 +37,8 @@ fn default_base_url() -> String {
 
 fn default_state_dir() -> String {
     dirs::home_dir()
-        .map(|h| h.join(".rbot/weixin").to_string_lossy().into_owned())
-        .unwrap_or_else(|| "~/.rbot/weixin".to_string())
+        .map(|h| h.join(".xbot/weixin").to_string_lossy().into_owned())
+        .unwrap_or_else(|| "~/.xbot/weixin".to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,8 +133,8 @@ impl WeixinChannel {
         let t = s.trim();
         if t.is_empty() {
             return dirs::home_dir()
-                .map(|h| h.join(".rbot/weixin"))
-                .unwrap_or_else(|| PathBuf::from(".rbot/weixin"));
+                .map(|h| h.join(".xbot/weixin"))
+                .unwrap_or_else(|| PathBuf::from(".xbot/weixin"));
         }
         if let Some(rest) = t.strip_prefix("~/") {
             if let Some(h) = dirs::home_dir() {
@@ -541,7 +541,7 @@ impl WeixinChannel {
         text: &str,
         context_token: &str,
     ) -> Result<()> {
-        let client_id = format!("rbot-{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
+        let client_id = format!("xbot-{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
         let item_list = if text.is_empty() {
             vec![]
         } else {
@@ -666,12 +666,12 @@ impl Channel for WeixinChannel {
          \n\
             \"weixin\": { \"enabled\": true, \"allowFrom\": [\"*\"] }\n\
          \n\
-         2. Run: rbot channels login weixin\n\
+         2. Run: xbot channels login weixin\n\
          \n\
             A QR code URL will be printed. Open it in WeChat to scan.\n\
             The token is saved automatically for future sessions.\n\
          \n\
-         3. Alternatively, run `rbot run` — the QR login starts automatically\n\
+         3. Alternatively, run `xbot run` — the QR login starts automatically\n\
             if no saved token is found."
     }
 

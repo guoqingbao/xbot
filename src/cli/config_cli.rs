@@ -6,9 +6,16 @@ use inquire::validator::Validation;
 use inquire::{Confirm, Password, Select, Text};
 use serde_json::Value;
 
-use rbot::channels::discover_all;
-use rbot::config::{Config, SubagentConfig};
-use rbot::providers::registry::{PROVIDERS, find_by_name};
+use xbot::channels::discover_all;
+use xbot::config::{Config, SubagentConfig};
+use xbot::providers::registry::{PROVIDERS, find_by_name};
+
+const OPENAI_COMPATIBLE_FALLBACK_MODEL: &str = "gpt-4.1-mini";
+
+struct ModelSelection {
+    model: String,
+    context_window_tokens: Option<usize>,
+}
 
 pub async fn run_config_provider(config_path: Option<&Path>) -> Result<()> {
     let mut config = Config::load(config_path)?;
@@ -67,10 +74,6 @@ pub async fn run_config_provider(config_path: Option<&Path>) -> Result<()> {
             );
         }
 
-        println!(
-            "{}",
-            Style::new().dim().apply_to("Fetching available models...")
-        );
         let api_base = provider_cfg.api_base.clone().or_else(|| {
             if !spec.default_api_base.is_empty() {
                 Some(spec.default_api_base.to_string())
@@ -84,29 +87,17 @@ pub async fn run_config_provider(config_path: Option<&Path>) -> Result<()> {
             Some(provider_cfg.api_key.as_str())
         };
 
-        let snapshot = rbot::observability::collect_provider_model_snapshot(
+        let selection = prompt_model_from_provider(
+            "Select default model:",
+            "Default model:",
             &selected_provider_name,
             &config.agents.defaults.model,
             api_base.as_deref(),
             api_key_opt,
+            &config.agents.defaults.model,
         )
-        .await;
-
-        if !snapshot.available_models.is_empty() {
-            let selected_model =
-                Select::new("Select default model:", snapshot.available_models.clone()).prompt()?;
-            config.agents.defaults.model = selected_model;
-        } else {
-            println!(
-                "{}",
-                Style::new()
-                    .yellow()
-                    .apply_to("Could not fetch models. Please enter model name manually.")
-            );
-            config.agents.defaults.model = Text::new("Default model:")
-                .with_default(&config.agents.defaults.model)
-                .prompt()?;
-        }
+        .await?;
+        apply_default_model_selection(&mut config, selection);
     } else {
         // Custom or Local
         let hint = if selected_provider_name == "ollama" {
@@ -135,9 +126,22 @@ pub async fn run_config_provider(config_path: Option<&Path>) -> Result<()> {
             provider_cfg.api_key = Text::new("Enter API Key:").prompt()?;
         }
 
-        config.agents.defaults.model = Text::new("Default model:")
-            .with_default(&config.agents.defaults.model)
-            .prompt()?;
+        let api_key_opt = if provider_cfg.api_key.trim().is_empty() {
+            None
+        } else {
+            Some(provider_cfg.api_key.as_str())
+        };
+        let selection = prompt_model_from_provider(
+            "Select default model:",
+            "Default model:",
+            &selected_provider_name,
+            &config.agents.defaults.model,
+            provider_cfg.api_base.as_deref(),
+            api_key_opt,
+            fallback_model_for_prompt(&selected_provider_name, &config.agents.defaults.model),
+        )
+        .await?;
+        apply_default_model_selection(&mut config, selection);
     }
 
     config.providers.insert(provider_key.clone(), provider_cfg);
@@ -219,6 +223,80 @@ async fn configure_subagent_provider(config: &mut Config, main_provider_key: &st
     Ok(())
 }
 
+async fn prompt_model_from_provider(
+    select_prompt: &str,
+    text_prompt: &str,
+    provider_name: &str,
+    current_model: &str,
+    api_base: Option<&str>,
+    api_key: Option<&str>,
+    fallback_model: &str,
+) -> Result<ModelSelection> {
+    println!(
+        "{}",
+        Style::new().dim().apply_to("Fetching available models...")
+    );
+    let snapshot = xbot::observability::collect_provider_model_snapshot(
+        provider_name,
+        current_model,
+        api_base,
+        api_key,
+    )
+    .await;
+
+    if !snapshot.available_models.is_empty() {
+        let model = Select::new(select_prompt, snapshot.available_models).prompt()?;
+        let context_window_tokens = snapshot
+            .available_model_context_windows
+            .get(&model)
+            .copied()
+            .or_else(|| {
+                (model == snapshot.model_id || model == snapshot.model_name)
+                    .then_some(snapshot.context_window_tokens)
+                    .flatten()
+            });
+        return Ok(ModelSelection {
+            model,
+            context_window_tokens,
+        });
+    }
+
+    println!(
+        "{}",
+        Style::new()
+            .yellow()
+            .apply_to("Could not fetch models. Please enter model name manually.")
+    );
+    Ok(ModelSelection {
+        model: Text::new(text_prompt)
+            .with_default(fallback_model)
+            .prompt()?,
+        context_window_tokens: None,
+    })
+}
+
+fn apply_default_model_selection(config: &mut Config, selection: ModelSelection) {
+    config.agents.defaults.model = selection.model;
+    if let Some(context_window_tokens) = selection.context_window_tokens.filter(|value| *value > 0)
+    {
+        config.agents.defaults.context_window_tokens = context_window_tokens;
+        println!(
+            "{}",
+            Style::new().dim().apply_to(format!(
+                "Using contextWindowTokens from model metadata: {context_window_tokens}"
+            ))
+        );
+    }
+}
+
+fn fallback_model_for_prompt<'a>(provider_name: &str, current_model: &'a str) -> &'a str {
+    if provider_name == "custom" {
+        OPENAI_COMPATIBLE_FALLBACK_MODEL
+    } else {
+        current_model
+    }
+}
+
 async fn prompt_provider_entry(
     config: &mut Config,
     provider_prompt: &str,
@@ -278,25 +356,17 @@ async fn prompt_provider_entry(
             Some(provider_cfg.api_key.as_str())
         };
 
-        println!(
-            "{}",
-            Style::new().dim().apply_to("Fetching available models...")
-        );
-        let snapshot = rbot::observability::collect_provider_model_snapshot(
+        prompt_model_from_provider(
+            model_prompt,
+            model_prompt,
             &selected_provider_name,
             &config.agents.defaults.model,
             api_base.as_deref(),
             api_key_opt,
+            &config.agents.defaults.model,
         )
-        .await;
-
-        if !snapshot.available_models.is_empty() {
-            Select::new(model_prompt, snapshot.available_models).prompt()?
-        } else {
-            Text::new(model_prompt)
-                .with_default(&config.agents.defaults.model)
-                .prompt()?
-        }
+        .await?
+        .model
     } else {
         let hint = if selected_provider_name == "ollama" {
             "(e.g. http://localhost:11434/v1)"
@@ -324,9 +394,22 @@ async fn prompt_provider_entry(
             provider_cfg.api_key = Text::new("Enter API Key:").prompt()?;
         }
 
-        Text::new(model_prompt)
-            .with_default(&config.agents.defaults.model)
-            .prompt()?
+        let api_key_opt = if provider_cfg.api_key.trim().is_empty() {
+            None
+        } else {
+            Some(provider_cfg.api_key.as_str())
+        };
+        prompt_model_from_provider(
+            model_prompt,
+            model_prompt,
+            &selected_provider_name,
+            &config.agents.defaults.model,
+            provider_cfg.api_base.as_deref(),
+            api_key_opt,
+            fallback_model_for_prompt(&selected_provider_name, &config.agents.defaults.model),
+        )
+        .await?
+        .model
     };
 
     config.providers.insert(provider_key.clone(), provider_cfg);
@@ -736,4 +819,46 @@ pub async fn run_config_channel(config_path: Option<&Path>) -> Result<()> {
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ModelSelection, OPENAI_COMPATIBLE_FALLBACK_MODEL, apply_default_model_selection,
+        fallback_model_for_prompt,
+    };
+    use xbot::config::Config;
+
+    #[test]
+    fn custom_provider_falls_back_to_unprefixed_openai_compatible_model() {
+        assert_eq!(
+            fallback_model_for_prompt("custom", "openai/gpt-4.1-mini"),
+            OPENAI_COMPATIBLE_FALLBACK_MODEL
+        );
+    }
+
+    #[test]
+    fn named_provider_keeps_existing_model_fallback() {
+        assert_eq!(
+            fallback_model_for_prompt("openrouter", "openrouter/anthropic/claude-sonnet-4"),
+            "openrouter/anthropic/claude-sonnet-4"
+        );
+    }
+
+    #[test]
+    fn selected_model_context_window_updates_config_default() {
+        let mut config = Config::default();
+        config.agents.defaults.context_window_tokens = 65_536;
+
+        apply_default_model_selection(
+            &mut config,
+            ModelSelection {
+                model: "Qwen3.6-27B-FP8".to_string(),
+                context_window_tokens: Some(262_144),
+            },
+        );
+
+        assert_eq!(config.agents.defaults.model, "Qwen3.6-27B-FP8");
+        assert_eq!(config.agents.defaults.context_window_tokens, 262_144);
+    }
 }

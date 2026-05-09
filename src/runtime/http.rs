@@ -610,7 +610,7 @@ fn admin_html(metrics_path: &str) -> String {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>rbot Admin</title>
+  <title>xbot Admin</title>
   <style>
     :root {{
       --bg: #0f172a;
@@ -645,7 +645,7 @@ fn admin_html(metrics_path: &str) -> String {
 </head>
 <body>
   <header>
-    <h1>rbot Admin</h1>
+    <h1>xbot Admin</h1>
     <div class="muted">Operations console for runtime status, sessions, channels, and model telemetry.</div>
   </header>
   <main>

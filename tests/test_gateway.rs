@@ -8,17 +8,17 @@ use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use chrono::Utc;
 use hmac::{Hmac, Mac};
-use rbot::channels::{ChannelManager, TelegramApi, TelegramBotIdentity};
-use rbot::config::{ChannelsConfig, Config, ExecToolConfig};
-use rbot::cron::CronService;
-use rbot::engine::AgentLoop;
-use rbot::observability::RuntimeTelemetry;
-use rbot::providers::QueuedProvider;
-use rbot::runtime::{build_gateway_router, build_webhook_router};
-use rbot::storage::MessageBus;
 use serde_json::json;
 use sha2::Sha256;
 use tower::ServiceExt;
+use xbot::channels::{ChannelManager, TelegramApi, TelegramBotIdentity};
+use xbot::config::{ChannelsConfig, Config, ExecToolConfig};
+use xbot::cron::CronService;
+use xbot::engine::AgentLoop;
+use xbot::observability::RuntimeTelemetry;
+use xbot::providers::QueuedProvider;
+use xbot::runtime::{build_gateway_router, build_webhook_router};
+use xbot::storage::MessageBus;
 
 struct DummyTelegramApi;
 
@@ -27,7 +27,7 @@ impl TelegramApi for DummyTelegramApi {
     async fn get_me(&self) -> Result<TelegramBotIdentity> {
         Ok(TelegramBotIdentity {
             id: 999,
-            username: "rbot_test".to_string(),
+            username: "xbot_test".to_string(),
         })
     }
 
@@ -36,7 +36,7 @@ impl TelegramApi for DummyTelegramApi {
         _chat_id: i64,
         _text: &str,
         _message_thread_id: Option<i64>,
-        _reply_parameters: Option<rbot::channels::ReplyParameters>,
+        _reply_parameters: Option<xbot::channels::ReplyParameters>,
     ) -> Result<()> {
         Ok(())
     }
@@ -46,7 +46,7 @@ impl TelegramApi for DummyTelegramApi {
         _chat_id: i64,
         _photo: &str,
         _message_thread_id: Option<i64>,
-        _reply_parameters: Option<rbot::channels::ReplyParameters>,
+        _reply_parameters: Option<xbot::channels::ReplyParameters>,
     ) -> Result<()> {
         Ok(())
     }
@@ -56,7 +56,7 @@ impl TelegramApi for DummyTelegramApi {
         _chat_id: i64,
         _voice: &str,
         _message_thread_id: Option<i64>,
-        _reply_parameters: Option<rbot::channels::ReplyParameters>,
+        _reply_parameters: Option<xbot::channels::ReplyParameters>,
     ) -> Result<()> {
         Ok(())
     }
@@ -66,7 +66,7 @@ impl TelegramApi for DummyTelegramApi {
         _chat_id: i64,
         _audio: &str,
         _message_thread_id: Option<i64>,
-        _reply_parameters: Option<rbot::channels::ReplyParameters>,
+        _reply_parameters: Option<xbot::channels::ReplyParameters>,
     ) -> Result<()> {
         Ok(())
     }
@@ -76,7 +76,7 @@ impl TelegramApi for DummyTelegramApi {
         _chat_id: i64,
         _document: &str,
         _message_thread_id: Option<i64>,
-        _reply_parameters: Option<rbot::channels::ReplyParameters>,
+        _reply_parameters: Option<xbot::channels::ReplyParameters>,
     ) -> Result<()> {
         Ok(())
     }
@@ -101,12 +101,12 @@ async fn slack_gateway_handles_url_verification() {
     let slack_channel = manager.get_channel("slack").unwrap();
     let slack = slack_channel
         .as_any()
-        .downcast_ref::<rbot::channels::SlackChannel>()
+        .downcast_ref::<xbot::channels::SlackChannel>()
         .unwrap();
 
     struct FakeSlackApi;
     #[async_trait]
-    impl rbot::channels::SlackApi for FakeSlackApi {
+    impl xbot::channels::SlackApi for FakeSlackApi {
         async fn auth_test(&self) -> Result<String> {
             Ok("B123".to_string())
         }
@@ -165,7 +165,7 @@ async fn telegram_gateway_validates_secret_and_publishes_inbound() {
     let telegram_channel = manager.get_channel("telegram").unwrap();
     let telegram = telegram_channel
         .as_any()
-        .downcast_ref::<rbot::channels::TelegramChannel>()
+        .downcast_ref::<xbot::channels::TelegramChannel>()
         .unwrap();
     telegram.set_api(Arc::new(DummyTelegramApi)).await;
     let router = build_webhook_router(&manager, &cfg).unwrap().unwrap();
@@ -300,12 +300,12 @@ async fn slack_gateway_rejects_invalid_signature() {
     let slack_channel = manager.get_channel("slack").unwrap();
     let slack = slack_channel
         .as_any()
-        .downcast_ref::<rbot::channels::SlackChannel>()
+        .downcast_ref::<xbot::channels::SlackChannel>()
         .unwrap();
 
     struct FakeSlackApi;
     #[async_trait]
-    impl rbot::channels::SlackApi for FakeSlackApi {
+    impl xbot::channels::SlackApi for FakeSlackApi {
         async fn auth_test(&self) -> Result<String> {
             Ok("B123".to_string())
         }
@@ -443,7 +443,7 @@ async fn admin_gateway_exposes_overview_and_metrics() {
     assert_eq!(metrics.status(), StatusCode::OK);
     let body = to_bytes(metrics.into_body(), 64 * 1024).await.unwrap();
     let text = std::str::from_utf8(&body).unwrap();
-    assert!(text.contains("rbot_provider_requests_total"));
+    assert!(text.contains("xbot_provider_requests_total"));
 }
 
 #[tokio::test]
@@ -457,7 +457,7 @@ async fn gateway_exposes_health_and_status_endpoints() {
     let telegram_channel = manager.get_channel("telegram").unwrap();
     let telegram = telegram_channel
         .as_any()
-        .downcast_ref::<rbot::channels::TelegramChannel>()
+        .downcast_ref::<xbot::channels::TelegramChannel>()
         .unwrap();
     telegram.set_api(Arc::new(DummyTelegramApi)).await;
     manager.start_all().await.unwrap();

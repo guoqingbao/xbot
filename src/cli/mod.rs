@@ -19,8 +19,8 @@ use serde_json::Value;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
-use rbot::providers::TextStreamCallback;
-use rbot::util::{ensure_dir, tool_emoji, workspace_state_dir};
+use xbot::providers::TextStreamCallback;
+use xbot::util::{ensure_dir, tool_emoji, workspace_state_dir};
 
 pub mod channels_cli;
 pub mod config_cli;
@@ -331,7 +331,7 @@ impl CliShell {
         provider: impl Into<String>,
     ) -> Result<Self> {
         let style = Style::detect();
-        let history_path = history_file_path()?;
+        let history_path = history_file_path(workspace)?;
         let mut editor = Editor::<CliHelper, DefaultHistory>::new()?;
         editor.set_helper(Some(CliHelper));
         let _ = editor.load_history(&history_path);
@@ -389,7 +389,7 @@ impl CliShell {
         ];
         println!(
             "{}",
-            render_rounded_panel(&self.style, "rbot interactive", &rows)
+            render_rounded_panel(&self.style, "xbot interactive", &rows)
         );
     }
 
@@ -466,7 +466,10 @@ impl CliShell {
                 "queue".to_string(),
                 "type while busy to queue the next prompt; /stop or Ctrl-C interrupts".to_string(),
             ),
-            ("history".to_string(), "~/.rbot/history.txt".to_string()),
+            (
+                "history".to_string(),
+                self.history_path.display().to_string(),
+            ),
         ];
         println!("{}", render_rounded_panel(&self.style, "CLI Help", &rows));
     }
@@ -780,10 +783,8 @@ fn line_requests_continuation(input: &str) -> bool {
     input.ends_with('\\') && !input.ends_with("\\\\")
 }
 
-fn history_file_path() -> Result<PathBuf> {
-    let root = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".rbot");
+fn history_file_path(workspace: &Path) -> Result<PathBuf> {
+    let root = workspace_state_dir(workspace);
     ensure_dir(&root)?;
     Ok(root.join("history.txt"))
 }
@@ -1017,7 +1018,7 @@ fn render_rounded_block(style: &Style, title: &str, lines: &[String], width: usi
 
 fn render_status_panel(style: &Style, content: &str) -> Option<String> {
     let mut lines = content.lines();
-    let version = lines.next()?.strip_prefix("rbot v")?;
+    let version = lines.next()?.strip_prefix("xbot v")?;
     let model = lines.next()?.strip_prefix("Model: ")?;
     let tokens = lines.next()?.strip_prefix("Tokens: ")?;
     let context = lines.next()?.strip_prefix("Context: ")?;
@@ -1150,7 +1151,7 @@ fn render_edit_file_hint(style: &Style, _hint: &str, tool_args: Option<&Value>) 
         .unwrap_or_default()
         .replace("\r\n", "\n");
     let width = available_panel_width();
-    let computed = rbot::diff::compute_diff(&old_text, &new_text);
+    let computed = xbot::diff::compute_diff(&old_text, &new_text);
     let mut lines = Vec::new();
     lines.push(style.panel_meta(
         format!("path    {}", truncate_middle(path, width.saturating_sub(8))),
@@ -1164,8 +1165,8 @@ fn render_edit_file_hint(style: &Style, _hint: &str, tool_args: Option<&Value>) 
     Some(render_rounded_block(style, "✍ edit_file", &lines, width))
 }
 
-fn render_diff_lines(style: &Style, lines: &[rbot::diff::DiffLine], width: usize) -> Vec<String> {
-    use rbot::diff::DiffKind;
+fn render_diff_lines(style: &Style, lines: &[xbot::diff::DiffLine], width: usize) -> Vec<String> {
+    use xbot::diff::DiffKind;
     lines
         .iter()
         .map(|line| {
@@ -2216,7 +2217,7 @@ mod tests {
     #[test]
     fn renders_status_response_as_closed_panel() {
         let style = super::Style { ansi: false };
-        let content = "rbot v0.1.0\nModel: qwen\nTokens: 10 in / 22 out\nContext: 512/4096 (12%)\nSession: 8 history messages\nUptime: 2m 4s";
+        let content = "xbot v0.1.0\nModel: qwen\nTokens: 10 in / 22 out\nContext: 512/4096 (12%)\nSession: 8 history messages\nUptime: 2m 4s";
         let rendered = render_markdown_response(&style, content);
         assert!(rendered.contains("╭─ status"));
         assert!(rendered.contains("│ version"));
@@ -2228,7 +2229,7 @@ mod tests {
     #[test]
     fn expands_status_panel_to_terminal_width() {
         let style = super::Style { ansi: false };
-        let content = "rbot v0.1.0\nModel: qwen\nTokens: 10 in / 22 out\nContext: 512/4096 (12%)\nSession: 8 history messages\nUptime: 2m 4s";
+        let content = "xbot v0.1.0\nModel: qwen\nTokens: 10 in / 22 out\nContext: 512/4096 (12%)\nSession: 8 history messages\nUptime: 2m 4s";
         let rendered = render_markdown_response(&style, content);
         let expected_width = available_panel_width() + 4;
         for line in rendered.lines() {
@@ -2394,14 +2395,14 @@ mod tests {
     fn renders_edit_file_hint_as_diff_panel() {
         let style = super::Style { ansi: false };
         let args = json!({
-            "path": "/root/rbot/src/cli/mod.rs",
+            "path": "/root/xbot/src/cli/mod.rs",
             "old_text": "a\nb\nc\n",
             "new_text": "a\nbeta\nc\nd\n",
             "replace_all": false
         });
         let rendered = render_tool_hint(
             &style,
-            "edit_file · path=/root/rbot/src/cli/mod.rs · old_text=a... · new_text=beta...",
+            "edit_file · path=/root/xbot/src/cli/mod.rs · old_text=a... · new_text=beta...",
             Some("edit_file"),
             Some(&args),
         );
@@ -2415,14 +2416,14 @@ mod tests {
     fn edit_file_hint_rows_stay_aligned_and_full_width() {
         let style = super::Style { ansi: false };
         let args = json!({
-            "path": "/root/rbot/src/tools.rs",
+            "path": "/root/xbot/src/tools.rs",
             "old_text": "\"number\" => match value {\n    Value::String(text) => text.parse::<f64>().map(Value::from).unwrap_or_else(|_| value.clone()),\n    _ => value.clone(),\n},\n",
             "new_text": "\"number\" => match value {\n    Value::String(text) => match text.parse::<f64>() {\n        Ok(num) => Value::from(num),\n        Err(_) => Value::String(format!(\"[invalid number: {}]\", text)),\n    },\n    _ => value.clone(),\n},\n",
             "replace_all": false
         });
         let rendered = render_tool_hint(
             &style,
-            "edit_file · path=/root/rbot/src/tools.rs",
+            "edit_file · path=/root/xbot/src/tools.rs",
             Some("edit_file"),
             Some(&args),
         );
@@ -2453,10 +2454,10 @@ mod tests {
     #[test]
     fn tool_hint_panel_with_emoji_title_matches_terminal_width() {
         let style = super::Style { ansi: false };
-        let args = json!({"path": "/root/rbot/src/channels/telegram.rs"});
+        let args = json!({"path": "/root/xbot/src/channels/telegram.rs"});
         let rendered = render_tool_hint(
             &style,
-            "read_file · path=/root/rbot/src/channels/telegram.rs",
+            "read_file · path=/root/xbot/src/channels/telegram.rs",
             Some("read_file"),
             Some(&args),
         );

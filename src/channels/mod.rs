@@ -186,7 +186,7 @@ pub trait Channel: Send + Sync {
     }
     /// Human-readable setup instructions for obtaining tokens/keys.
     fn setup_instructions(&self) -> &'static str {
-        "Configure this channel via: rbot config --channel"
+        "Configure this channel via: xbot config --channel"
     }
 }
 

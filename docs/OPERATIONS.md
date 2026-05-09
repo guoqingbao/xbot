@@ -1,8 +1,8 @@
-# rbot Operations Guide
+# xbot Operations Guide
 
 ## Product Modes
 
-`rbot` is designed to cover three persistent use cases from the same runtime:
+`xbot` is designed to cover three persistent use cases from the same runtime:
 
 - AI assistant: interactive support over `email`, `slack`, `telegram`, `feishu`, `dingtalk`, `discord`, `matrix`, `whatsapp`, `qq`, `wecom`, `weixin`, or `mochat`
 - autonomous software engineer: file edits, shell execution, tests, scheduled repo checks, GitHub/CI assistance through skills and MCP tools
@@ -38,7 +38,7 @@ Memory behavior:
 
 ## Built-in Skills
 
-Built-in skills live under `rbot/skills/` and are loaded by the runtime automatically.
+Built-in skills live under `xbot/skills/` and are loaded by the runtime automatically.
 
 Recommended built-ins:
 
@@ -62,8 +62,8 @@ The runtime injects always-on skills automatically and adds task-relevant skills
 ### Skill Management CLI
 
 ```bash
-rbot skills list          # List all skills with availability status
-rbot skills init my-skill # Scaffold a new skill directory
+xbot skills list          # List all skills with availability status
+xbot skills init my-skill # Scaffold a new skill directory
 ```
 
 ## MCP for External Tooling
@@ -78,7 +78,7 @@ Typical use cases:
 - internal APIs
 - specialized data systems
 
-Current support in `rbot`:
+Current support in `xbot`:
 
 - MCP `stdio` transport
 - startup validation for enabled servers
@@ -105,7 +105,7 @@ Example:
 
 ## Admin UI
 
-When `rbot run` is active, the admin UI is available at:
+When `xbot run` is active, the admin UI is available at:
 
 - `http://<host>:<port>/admin`
 
@@ -167,18 +167,18 @@ cargo run -- config --channel  # Interactive channel setup
 
 Recommended production pattern:
 
-1. Use a stable workspace path under `~/.rbot/workspace` or a dedicated project directory.
+1. Use a stable workspace path under `~/.xbot/workspace` or a dedicated project directory.
 2. Use a process supervisor such as `systemd`, `launchd`, Docker, or Kubernetes.
 3. Point webhook-based channels at a stable public URL.
 4. Use a local provider such as Ollama or vLLM for long-running internal workloads when appropriate.
 5. Expose `/metrics` to your monitoring stack.
-6. Review `.rbot/HEARTBEAT.md` and cron jobs regularly so unattended work stays bounded.
+6. Review `.xbot/HEARTBEAT.md` and cron jobs regularly so unattended work stays bounded.
 
 ## Software Engineering Workflows
 
 Recommended pattern:
 
-1. Put repository-specific constraints in `.rbot/AGENTS.md`, `.rbot/TOOLS.md`, and workspace-local skills.
+1. Put repository-specific constraints in `.xbot/XBOT.md`, `.xbot/TOOLS.md`, and workspace-local skills.
 2. Use the built-in `software-engineer` and `github-cli` skills.
 3. Add MCP servers for systems the bot needs but cannot reach with the default tools.
 4. Schedule repository health checks or report generation with cron.

@@ -107,7 +107,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
 
     let mut spans = vec![
         Span::styled(
-            " ■ rbot ",
+            " ■ xbot ",
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ),
         sep.clone(),
@@ -1278,7 +1278,7 @@ fn render_tool_card(
 }
 
 fn render_edit_diff(lines: &mut Vec<Line<'static>>, diff: &EditDiff, w: usize) {
-    use rbot::diff::DiffKind;
+    use xbot::diff::DiffKind;
 
     let max_w = w.saturating_sub(8);
     lines.push(Line::from(vec![
@@ -1565,7 +1565,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
                 ("/agents", "Toggle agents sidebar"),
                 ("/help or ?", "Toggle this help"),
                 ("/clear", "Clear & reset session"),
-                ("/exit or /quit", "Exit rbot"),
+                ("/exit or /quit", "Exit xbot"),
                 ("/stop", "Cancel current turn"),
                 ("/new", "Start new session"),
                 ("/model [name]", "Switch or show model"),
@@ -1612,7 +1612,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
 }
 
 fn render_approval_overlay(f: &mut Frame, area: Rect, app: &super::app::App) {
-    use rbot::diff::DiffKind;
+    use xbot::diff::DiffKind;
 
     let dialog = match &app.approval_dialog {
         Some(d) => d,

@@ -5,13 +5,13 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use rbot::config::ExecToolConfig;
-use rbot::engine::AgentLoop;
-use rbot::providers::{LlmProvider, LlmResponse, LlmUsage, QueuedProvider};
-use rbot::runtime::AgentRuntime;
-use rbot::storage::{InboundMessage, MessageBus};
 use tempfile::tempdir;
 use tokio::sync::Barrier;
+use xbot::config::ExecToolConfig;
+use xbot::engine::AgentLoop;
+use xbot::providers::{LlmProvider, LlmResponse, LlmUsage, QueuedProvider};
+use xbot::runtime::AgentRuntime;
+use xbot::storage::{InboundMessage, MessageBus};
 
 fn terminal_response(text: &str) -> LlmResponse {
     LlmResponse {
@@ -56,7 +56,7 @@ impl LlmProvider for StallFirstChatProvider {
 
     async fn chat(
         &self,
-        _messages: &[rbot::storage::ChatMessage],
+        _messages: &[xbot::storage::ChatMessage],
         _tools: Option<&[serde_json::Value]>,
         _model: Option<&str>,
         _max_tokens: Option<usize>,
@@ -90,7 +90,7 @@ impl LlmProvider for BarrierChatProvider {
 
     async fn chat(
         &self,
-        _messages: &[rbot::storage::ChatMessage],
+        _messages: &[xbot::storage::ChatMessage],
         _tools: Option<&[serde_json::Value]>,
         _model: Option<&str>,
         _max_tokens: Option<usize>,
@@ -106,7 +106,7 @@ async fn new_test_agent(
     provider: Arc<dyn LlmProvider>,
     workspace: &std::path::Path,
 ) -> Arc<AgentLoop> {
-    Arc::new(
+    let agent = Arc::new(
         AgentLoop::new(
             provider,
             workspace,
@@ -128,7 +128,9 @@ async fn new_test_agent(
         )
         .await
         .expect("agent"),
-    )
+    );
+    agent.set_auto_task_summary_enabled(false);
+    agent
 }
 
 #[tokio::test]

@@ -1,7 +1,7 @@
 ---
 name: github
 description: "End-to-end GitHub workflows with gh: PRs, issues, reviews, branches, and releases."
-metadata: {"rbot":{"description":"Broader GitHub practice with gh: workflows, triage, review, branching, releases.","emoji":"🐙","triggers":["github","pull request","issue","release","code review","gh"],"requires":{"bins":["gh"]}}}
+metadata: {"xbot":{"description":"Broader GitHub practice with gh: workflows, triage, review, branching, releases.","emoji":"🐙","triggers":["github","pull request","issue","release","code review","gh"],"requires":{"bins":["gh"]}}}
 ---
 
 # GitHub

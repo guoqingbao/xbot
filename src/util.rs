@@ -66,7 +66,7 @@ pub fn ensure_dir(path: impl AsRef<Path>) -> Result<PathBuf> {
 }
 
 pub fn workspace_state_dir(workspace: &Path) -> PathBuf {
-    workspace.join(".rbot")
+    workspace.join(".xbot")
 }
 
 pub fn detect_image_mime(data: &[u8]) -> Option<&'static str> {
@@ -98,7 +98,7 @@ pub fn build_image_content_blocks(raw: &[u8], mime: &str, path: &str, label: &st
 }
 
 pub fn current_time_str() -> String {
-    Local::now().format("%Y-%m-%d %H:%M (%A) (%Z)").to_string()
+    Local::now().format("%Y-%m-%d (%A)").to_string()
 }
 
 pub fn now_iso() -> String {
@@ -209,7 +209,7 @@ pub fn build_status_content(
          {session_message_count}\nToken usage (last turn): {last_prompt_tokens}{cache_hint} in + \
          {last_completion_tokens} out (total {total_tokens})\n\
          Context window: {context_window_tokens} tokens\n\
-         Context: {context_tokens_estimate}/{context_window_tokens} ({pct}%)\nrbot v{version}"
+         Context: {context_tokens_estimate}/{context_window_tokens} ({pct}%)\nxbot v{version}"
     )
 }
 
@@ -263,7 +263,7 @@ Use this file to describe repository-specific engineering rules and working agre
             state_dir.join("SOUL.md"),
             r#"# Soul
 
-This file defines the workspace-specific personality and behavioral boundaries for `rbot`.
+This file defines the workspace-specific personality and behavioral boundaries for `xbot`.
 
 ## Default Style
 
@@ -357,7 +357,7 @@ Document project-specific commands, wrappers, and operational caveats here.
                 .join("SKILL.md"),
             r#"---
 description: "Always-on memory discipline for preserving durable workspace context."
-metadata: {"rbot":{"always":true,"triggers":["remember","memory","preference","project context","decision"]}}
+metadata: {"xbot":{"always":true,"triggers":["remember","memory","preference","project context","decision"]}}
 ---
 
 # Memory Hygiene
@@ -391,7 +391,7 @@ Use this guidance in every workspace.
                 .join("SKILL.md"),
             r#"---
 description: "Workspace template for project-specific architecture, commands, and conventions."
-metadata: {"rbot":{"triggers":["project context","repo rules","architecture","workspace notes"]}}
+metadata: {"xbot":{"triggers":["project context","repo rules","architecture","workspace notes"]}}
 ---
 
 # Project Context Template
@@ -420,7 +420,7 @@ Fill this skill with repository-specific details that should be easy for the age
                 .join("SKILL.md"),
             r#"---
 description: "Workspace template for review, release, and delivery expectations."
-metadata: {"rbot":{"triggers":["review","release","deploy","handoff","delivery"]}}
+metadata: {"xbot":{"triggers":["review","release","deploy","handoff","delivery"]}}
 ---
 
 # Delivery Rules Template
@@ -449,7 +449,7 @@ Use this file to document how work should be delivered in this project.
                 .join("SKILL.md"),
             r#"---
 description: "Summarize durable memory entries for MEMORY.md after task completion or explicit memorize requests."
-metadata: {"rbot":{"triggers":["memory entry","task summary","memorize","durable memory"]}}
+metadata: {"xbot":{"triggers":["memory entry","task summary","memorize","durable memory"]}}
 ---
 
 # Memory Entry Writer
@@ -478,7 +478,7 @@ Return JSON only:
             state_dir.join("HEARTBEAT.md"),
             r#"# Heartbeat
 
-This file defines periodic tasks that rbot checks on a regular interval (default: every 30 minutes).
+This file defines periodic tasks that xbot checks on a regular interval (default: every 30 minutes).
 
 If there are no active tasks below, the heartbeat check is skipped.
 
@@ -559,8 +559,18 @@ fn maybe_move_legacy_path(source: &Path, target: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{sync_workspace_templates, workspace_state_dir};
+    use super::{current_time_str, sync_workspace_templates, workspace_state_dir};
     use tempfile::tempdir;
+
+    #[test]
+    fn current_time_str_uses_day_granularity_for_prompt_cache() {
+        let current = current_time_str();
+
+        assert!(!current.contains(':'));
+        assert!(!current.contains('+'));
+        assert!(current.contains('('));
+        assert!(current.contains(')'));
+    }
 
     #[test]
     fn sync_workspace_templates_creates_memory_and_starter_skills() {
@@ -584,7 +594,7 @@ mod tests {
         assert!(
             created
                 .iter()
-                .any(|path| path.ends_with(".rbot/skills/memory-hygiene/SKILL.md"))
+                .any(|path| path.ends_with(".xbot/skills/memory-hygiene/SKILL.md"))
         );
     }
 }

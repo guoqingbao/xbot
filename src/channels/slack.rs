@@ -794,7 +794,7 @@ impl Channel for SlackChannel {
             im:history, im:read, files:read, files:write\n\
          4. Install the app to your workspace and copy the Bot Token (xoxb-...)\n\
          5. Under 'Event Subscriptions', subscribe to: message.im, app_mention\n\
-         6. Configure rbot:\n\
+         6. Configure xbot:\n\
          \n\
             \"slack\": {\n\
               \"enabled\": true,\n\
@@ -803,7 +803,7 @@ impl Channel for SlackChannel {
               \"appToken\": \"xapp-...\"\n\
             }\n\
          \n\
-         7. Run: rbot run"
+         7. Run: xbot run"
     }
 
     async fn start(&self) -> Result<()> {

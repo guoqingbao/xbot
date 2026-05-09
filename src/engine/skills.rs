@@ -484,7 +484,7 @@ fn is_valid_skill_name(name: &str) -> bool {
 }
 
 fn skill_meta_map_from_metadata_json(value: &serde_json::Value) -> BTreeMap<String, String> {
-    for key in ["rbot", "nanobot", "openclaw"] {
+    for key in ["xbot", "nanobot", "openclaw"] {
         if let Some(obj) = value.get(key) {
             if let Some(map) = json_object_to_string_map(obj) {
                 if !map.is_empty() {
@@ -531,8 +531,28 @@ fn os_name_matches_current(required: &str) -> bool {
 }
 
 fn default_builtin_skills_dir() -> Option<PathBuf> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills");
-    dir.exists().then_some(dir)
+    first_existing_builtin_skills_dir(default_builtin_skill_dir_candidates())
+}
+
+fn default_builtin_skill_dir_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(dir) = env::var_os("XBOT_BUILTIN_SKILLS_DIR") {
+        if !dir.is_empty() {
+            candidates.push(PathBuf::from(dir));
+        }
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills"));
+    if let Ok(exe) = env::current_exe() {
+        if let Some(bin_dir) = exe.parent() {
+            candidates.push(bin_dir.join("../share/xbot/skills"));
+        }
+    }
+    candidates.push(PathBuf::from("/usr/share/xbot/skills"));
+    candidates
+}
+
+fn first_existing_builtin_skills_dir(candidates: Vec<PathBuf>) -> Option<PathBuf> {
+    candidates.into_iter().find(|dir| dir.exists())
 }
 
 fn read_skill_dirs(dir: &Path) -> Vec<SkillInfo> {
@@ -553,7 +573,7 @@ fn read_skill_dirs(dir: &Path) -> Vec<SkillInfo> {
             name: entry.file_name().to_string_lossy().to_string(),
             path: skill_file,
             source: if dir.ends_with("skills") && dir.parent().is_some() {
-                if dir.ends_with("skills") && dir.to_string_lossy().contains(".rbot") {
+                if dir.ends_with("skills") && dir.to_string_lossy().contains(".xbot") {
                     "workspace".to_string()
                 } else {
                     "builtin".to_string()
@@ -743,21 +763,64 @@ fn escape_xml(value: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{SkillsLoader, validate_skill};
+    use super::{
+        SkillsLoader, default_builtin_skill_dir_candidates, first_existing_builtin_skills_dir,
+        validate_skill,
+    };
+    use serial_test::serial;
     use tempfile::tempdir;
 
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
 
     #[test]
+    fn builtin_skill_dir_uses_first_existing_candidate() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+
+        assert_eq!(
+            first_existing_builtin_skills_dir(vec![missing, first.clone(), second]),
+            Some(first)
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn builtin_skill_dir_candidates_prefer_env_override() {
+        let dir = tempdir().unwrap();
+        let skills = dir.path().join("skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        let previous = std::env::var_os("XBOT_BUILTIN_SKILLS_DIR");
+        unsafe {
+            std::env::set_var("XBOT_BUILTIN_SKILLS_DIR", &skills);
+        }
+
+        let candidates = default_builtin_skill_dir_candidates();
+
+        match previous {
+            Some(value) => unsafe {
+                std::env::set_var("XBOT_BUILTIN_SKILLS_DIR", value);
+            },
+            None => unsafe {
+                std::env::remove_var("XBOT_BUILTIN_SKILLS_DIR");
+            },
+        }
+        assert_eq!(candidates.first(), Some(&skills));
+    }
+
+    #[test]
     fn workspace_skill_overrides_builtin_skill() {
         let dir = tempdir().unwrap();
         let workspace = dir.path().join("workspace");
         let builtin = dir.path().join("builtin");
-        std::fs::create_dir_all(workspace.join(".rbot/skills/echo")).unwrap();
+        std::fs::create_dir_all(workspace.join(".xbot/skills/echo")).unwrap();
         std::fs::create_dir_all(builtin.join("echo")).unwrap();
         std::fs::write(
-            workspace.join(".rbot/skills/echo/SKILL.md"),
+            workspace.join(".xbot/skills/echo/SKILL.md"),
             "---\ndescription: Workspace Echo\n---\nworkspace skill",
         )
         .unwrap();
@@ -780,14 +843,14 @@ mod tests {
     }
 
     #[test]
-    fn summary_reflects_rbot_metadata() {
+    fn summary_reflects_xbot_metadata() {
         let dir = tempdir().unwrap();
         let workspace = dir.path().join("workspace");
         let builtin = dir.path().join("builtin");
         std::fs::create_dir_all(builtin.join("always")).unwrap();
         std::fs::write(
             builtin.join("always/SKILL.md"),
-            "---\ndescription: Always skill\nmetadata: {\"rbot\":{\"always\":true}}\n---\nhello",
+            "---\ndescription: Always skill\nmetadata: {\"xbot\":{\"always\":true}}\n---\nhello",
         )
         .unwrap();
 
@@ -835,14 +898,14 @@ mod tests {
     }
 
     #[test]
-    fn rbot_takes_precedence_over_nanobot() {
+    fn xbot_takes_precedence_over_nanobot() {
         let dir = tempdir().unwrap();
         let workspace = dir.path().join("workspace");
         let builtin = dir.path().join("builtin");
         std::fs::create_dir_all(builtin.join("both")).unwrap();
         std::fs::write(
             builtin.join("both/SKILL.md"),
-            "---\ndescription: Both\nmetadata: {\"rbot\":{\"always\":false},\"nanobot\":{\"always\":true}}\n---\n",
+            "---\ndescription: Both\nmetadata: {\"xbot\":{\"always\":false},\"nanobot\":{\"always\":true}}\n---\n",
         )
         .unwrap();
         let loader = SkillsLoader::new(&workspace, Some(builtin));
@@ -859,7 +922,7 @@ mod tests {
             builtin.join("colon/SKILL.md"),
             r#"---
 description: Colon skill
-metadata: {"rbot":{"always":true,"triggers":["https://example.com:8080/path"]}}
+metadata: {"xbot":{"always":true,"triggers":["https://example.com:8080/path"]}}
 ---
 "#,
         )
@@ -880,7 +943,7 @@ metadata: {"rbot":{"always":true,"triggers":["https://example.com:8080/path"]}}
             builtin.join("linux-only/SKILL.md"),
             r#"---
 description: Linux only
-metadata: {"rbot":{"requires":"{\"os\":[\"__not_a_real_os__\"]}"}}
+metadata: {"xbot":{"requires":"{\"os\":[\"__not_a_real_os__\"]}"}}
 ---
 "#,
         )
@@ -908,7 +971,7 @@ metadata: {"rbot":{"requires":"{\"os\":[\"__not_a_real_os__\"]}"}}
         let md = r#"---
 description: ML
 metadata: {
-  "rbot": {
+  "xbot": {
     "always": true
   }
 }

@@ -1,7 +1,56 @@
 [package]
-name = "rbot"
+name = "xbot"
 version = "0.1.0"
 edition = "2024"
+description = "Rust-native autonomous bot runtime for chat automation, tools, scheduled work, and multi-channel delivery"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/guoqingbao/xbot"
+homepage = "https://github.com/guoqingbao/xbot#readme"
+keywords = ["agent", "automation", "chatbot", "llm", "tui"]
+categories = ["command-line-utilities"]
+include = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "LICENSE.txt",
+    "README.md",
+    "docs/ARCHITECTURE.md",
+    "docs/HYBRID_MODELS.md",
+    "docs/INSTALLATION.md",
+    "docs/OPERATIONS.md",
+    "docs/xbot.png",
+    "docs/USAGE.md",
+    "skills/**",
+    "src/**",
+]
+
+[lib]
+name = "xbot"
+path = "src/lib.rs"
+
+[[bin]]
+name = "xbot"
+path = "src/main.rs"
+
+[package.metadata.deb]
+name = "xbot"
+maintainer = "Guoqing Bao <topon@outlook.com>"
+copyright = "2026 Guoqing Bao"
+license-file = ["LICENSE.txt", "0"]
+section = "utils"
+priority = "optional"
+extended-description = """
+xbot is a Rust-native autonomous bot runtime for persistent chat automation,
+tool execution, scheduled work, and multi-channel message delivery.
+
+This package installs the xbot CLI and bundled built-in skills.
+"""
+assets = [
+    ["target/release/xbot", "usr/bin/xbot", "755"],
+    ["README.md", "usr/share/doc/xbot/README.md", "644"],
+    ["LICENSE.txt", "usr/share/doc/xbot/LICENSE.txt", "644"],
+    ["skills/**/*", "usr/share/xbot/skills/", "644"],
+]
 
 [dependencies]
 anyhow = "1.0"

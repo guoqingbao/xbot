@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
 use serde_json::Value;
 
-use rbot::util::{ensure_dir, tool_emoji, workspace_state_dir};
+use xbot::util::{ensure_dir, tool_emoji, workspace_state_dir};
 
 const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const COMPOSER_HISTORY_LIMIT: usize = 10;
@@ -91,15 +91,15 @@ pub enum EngineEvent {
     ApprovalRequest {
         tool_name: String,
         path: String,
-        diff_lines: Vec<rbot::diff::DiffLine>,
-        responder: tokio::sync::oneshot::Sender<rbot::tools::ApprovalDecision>,
+        diff_lines: Vec<xbot::diff::DiffLine>,
+        responder: tokio::sync::oneshot::Sender<xbot::tools::ApprovalDecision>,
     },
 }
 
 #[derive(Clone)]
 pub struct EditDiff {
     pub path: String,
-    pub lines: Vec<rbot::diff::DiffLine>,
+    pub lines: Vec<xbot::diff::DiffLine>,
 }
 
 #[derive(Clone)]
@@ -494,7 +494,7 @@ pub struct App {
     held_turn: Option<HeldTurn>,
 
     pub approval_dialog: Option<ApprovalDialog>,
-    pub approval_responder: Option<tokio::sync::oneshot::Sender<rbot::tools::ApprovalDecision>>,
+    pub approval_responder: Option<tokio::sync::oneshot::Sender<xbot::tools::ApprovalDecision>>,
     composer_history_path: PathBuf,
 }
 
@@ -502,7 +502,7 @@ pub struct App {
 pub struct ApprovalDialog {
     pub tool_name: String,
     pub path: String,
-    pub diff_lines: Vec<rbot::diff::DiffLine>,
+    pub diff_lines: Vec<xbot::diff::DiffLine>,
     pub selected: usize,
 }
 
@@ -1237,9 +1237,9 @@ impl App {
             None => return,
         };
         let decision = match dialog.selected {
-            0 => rbot::tools::ApprovalDecision::AllowOnce,
-            1 => rbot::tools::ApprovalDecision::AlwaysAllow,
-            _ => rbot::tools::ApprovalDecision::Deny,
+            0 => xbot::tools::ApprovalDecision::AllowOnce,
+            1 => xbot::tools::ApprovalDecision::AlwaysAllow,
+            _ => xbot::tools::ApprovalDecision::Deny,
         };
         let _ = responder.send(decision);
     }
@@ -1696,7 +1696,7 @@ fn strip_runtime_metadata_from_reasoning(text: &str) -> String {
     text.lines()
         .filter(|line| {
             let trimmed = line.trim();
-            !trimmed.starts_with(rbot::engine::ContextBuilder::RUNTIME_CONTEXT_TAG)
+            !trimmed.starts_with(xbot::engine::ContextBuilder::RUNTIME_CONTEXT_TAG)
                 && !trimmed.starts_with("Current Time:")
                 && !trimmed.starts_with("Channel:")
                 && !trimmed.starts_with("Chat ID:")
@@ -1727,7 +1727,7 @@ fn extract_edit_diff(tool_name: &str, args: Option<&Value>) -> Option<EditDiff> 
             if old.is_empty() && new.is_empty() {
                 return None;
             }
-            let computed = rbot::diff::compute_diff(old, new);
+            let computed = xbot::diff::compute_diff(old, new);
             Some(EditDiff {
                 path,
                 lines: computed.lines,
@@ -1738,7 +1738,7 @@ fn extract_edit_diff(tool_name: &str, args: Option<&Value>) -> Option<EditDiff> 
             if content.is_empty() {
                 return None;
             }
-            let computed = rbot::diff::compute_write_diff(content);
+            let computed = xbot::diff::compute_write_diff(content);
             Some(EditDiff {
                 path,
                 lines: computed.lines,
@@ -2116,12 +2116,12 @@ mod tests {
         assert!(
             diff.lines
                 .iter()
-                .any(|l| l.kind == rbot::diff::DiffKind::Removed)
+                .any(|l| l.kind == xbot::diff::DiffKind::Removed)
         );
         assert!(
             diff.lines
                 .iter()
-                .any(|l| l.kind == rbot::diff::DiffKind::Added)
+                .any(|l| l.kind == xbot::diff::DiffKind::Added)
         );
     }
 
@@ -2135,8 +2135,8 @@ mod tests {
     #[test]
     fn strip_runtime_metadata_from_reasoning_hides_tui_noise() {
         let reasoning = format!(
-            "I need context.\n{}\nCurrent Time: now\nChannel: cli\nChat ID: rbot\nNow solve.",
-            rbot::engine::ContextBuilder::RUNTIME_CONTEXT_TAG
+            "I need context.\n{}\nCurrent Time: now\nChannel: cli\nChat ID: xbot\nNow solve.",
+            xbot::engine::ContextBuilder::RUNTIME_CONTEXT_TAG
         );
 
         assert_eq!(

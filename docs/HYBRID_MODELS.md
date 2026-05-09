@@ -1,6 +1,6 @@
 # Hybrid Remote Main + Local Subagents
 
-`rbot` can route the main task and background subagents to different model backends.
+`xbot` can route the main task and background subagents to different model backends.
 
 A common high-value setup is:
 
@@ -18,7 +18,7 @@ Use hybrid routing when:
 - you want lower remote API spend during parallel work
 - you have a local GPU box or LAN inference server available
 
-In the TUI, the header and subagent cards show the active main model and subagent model, matching the screenshot in `docs/rbot.png`.
+In the TUI, the header and subagent cards show the active main model and subagent model, matching the screenshot in `docs/xbot.png`.
 
 ## Prerequisites
 
@@ -70,7 +70,7 @@ Use the prompts to:
 
 ## Configure Manually
 
-Edit `~/.rbot/config.json`.
+Edit `~/.xbot/config.json`.
 
 Minimal example:
 

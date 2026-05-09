@@ -8,13 +8,13 @@ use std::time::Instant;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use rbot::channels::{
-    Channel, ChannelBase, ChannelDescriptor, ChannelManager, clear_plugins, register_plugin,
-};
-use rbot::config::ChannelsConfig;
-use rbot::storage::{MessageBus, OutboundMessage};
 use serde_json::{Value, json};
 use serial_test::serial;
+use xbot::channels::{
+    Channel, ChannelBase, ChannelDescriptor, ChannelManager, clear_plugins, register_plugin,
+};
+use xbot::config::ChannelsConfig;
+use xbot::storage::{MessageBus, OutboundMessage};
 
 struct StreamProbeChannel {
     base: ChannelBase,

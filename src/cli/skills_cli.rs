@@ -4,8 +4,8 @@ use std::path::Path;
 use anyhow::Result;
 use console::Style;
 
-use rbot::config::Config;
-use rbot::engine::SkillsLoader;
+use xbot::config::Config;
+use xbot::engine::SkillsLoader;
 
 pub async fn run_skills_list(config_path: Option<&Path>) -> Result<()> {
     let config = Config::load(config_path)?;
@@ -58,7 +58,7 @@ pub async fn run_skills_list(config_path: Option<&Path>) -> Result<()> {
 pub async fn run_skills_init(name: &str, config_path: Option<&Path>) -> Result<()> {
     let config = Config::load(config_path)?;
     let workspace = config.workspace_path();
-    let state_dir = rbot::util::workspace_state_dir(&workspace);
+    let state_dir = xbot::util::workspace_state_dir(&workspace);
     let skill_dir = state_dir.join("skills").join(name);
 
     if skill_dir.exists() {
@@ -70,7 +70,7 @@ pub async fn run_skills_init(name: &str, config_path: Option<&Path>) -> Result<(
     let skill_md = format!(
         r#"---
 description: {name} skill
-metadata: {{"rbot": {{"description": "{name} skill", "triggers": ["{name}"]}}}}
+metadata: {{"xbot": {{"description": "{name} skill", "triggers": ["{name}"]}}}}
 ---
 
 # {name}

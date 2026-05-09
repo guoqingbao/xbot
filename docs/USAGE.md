@@ -1,25 +1,27 @@
-# rbot Usage Guide
+# xbot Usage Guide
 
 ## 1. Install and Initialize
 
 From the project root:
 
 ```bash
-cd rbot
+cd xbot
 cargo run --release -- onboard
 ```
 
+For packaged installs through npm, `.deb`, or `cargo install`, see [Installation](./INSTALLATION.md).
+
 This creates:
 
-- `~/.rbot/config.json`
-- `~/.rbot/workspace/`
-- a hidden runtime state directory at `<workspace>/.rbot/`
-- workspace bootstrap files such as `.rbot/AGENTS.md`, `.rbot/SOUL.md`, `.rbot/USER.md`, `.rbot/TOOLS.md`, `.rbot/HEARTBEAT.md`, and memory files
-- starter workspace skills under `.rbot/skills/`, including a memory-hygiene skill and editable project templates
+- `~/.xbot/config.json`
+- `~/.xbot/workspace/`
+- a hidden runtime state directory at `<workspace>/.xbot/`
+- workspace bootstrap files such as `.xbot/AGENTS.md`, `.xbot/SOUL.md`, `.xbot/USER.md`, `.xbot/TOOLS.md`, `.xbot/HEARTBEAT.md`, and memory files
+- starter workspace skills under `.xbot/skills/`, including a memory-hygiene skill and editable project templates
 
 ## 2. Interactive Configuration
 
-Instead of manually editing `~/.rbot/config.json`, you can use the interactive CLI:
+Instead of manually editing `~/.xbot/config.json`, you can use the interactive CLI:
 
 ### 2.1 Provider Configuration
 
@@ -48,7 +50,7 @@ You can selectively enable channels, set permissions (`allowFrom`), and provide 
 
 ## 3. Choose a Provider (Manual)
 
-`rbot` talks to providers through an OpenAI-compatible chat interface.
+`xbot` talks to providers through an OpenAI-compatible chat interface.
 
 Supported practical modes:
 
@@ -95,7 +97,7 @@ Supported practical modes:
 
 ### Ollama example
 
-`rbot` supports Ollama as a local provider without requiring an API key.
+`xbot` supports Ollama as a local provider without requiring an API key.
 
 Start Ollama first:
 
@@ -220,36 +222,37 @@ cargo run --release -- repl
 
 The interactive shell is designed for day-to-day agent work:
 
-- persistent command history in `~/.rbot/history.txt`
+- `repl` and `chat` bootstrap the current directory as a project workspace by creating `<cwd>/.xbot/` by default
+- persistent command history in `<workspace>/.xbot/history.txt`
 - streamed model output instead of waiting for the full reply
 - queued prompts while a turn is already running; queued turns start automatically when the current turn ends
 - local shell commands: `/help`, `/clear`, `/exit`
 - agent commands forwarded to the runtime: `/new`, `/status`, `/stop`
 - multiline input by ending a line with `\`
-- the welcome header shows both the current working directory and the configured workspace
-- the header also shows the active hidden state root under `<workspace>/.rbot`
+- the welcome header shows both the current working directory and the active workspace
+- the header also shows the active hidden state root under `<workspace>/.xbot`
 - tool activity is shown with emoji-based pills such as file, shell, web, message, and cron actions
 - fenced code blocks in replies are syntax-highlighted in the CLI by language when ANSI colors are available
 - CLI session history is scoped by current working directory, so different projects do not share the same chat thread
 
-For project-local development, set:
+To force `repl` or `chat` to use the configured global workspace, pass `--global`:
 
-```json
-{
-  "agents": {
-    "defaults": {
-      "workspace": "."
-    }
-  }
-}
+```bash
+xbot repl --global
+```
+
+To use a specific workspace path instead, pass `--workspace`:
+
+```bash
+xbot repl --workspace ~/.xbot/workspace
 ```
 
 ## 3.1 Workspace Memory
 
-`rbot` uses two memory files inside `workspace/.rbot/`:
+`xbot` uses two memory files inside `workspace/.xbot/`:
 
-- `.rbot/memory/MEMORY.md`: permanent memory store, capped at `agents.defaults.memoryMaxBytes` bytes
-- `.rbot/memory/HISTORY.md`: resettable history log for later search and consolidation
+- `.xbot/memory/MEMORY.md`: permanent memory store, capped at `agents.defaults.memoryMaxBytes` bytes
+- `.xbot/memory/HISTORY.md`: resettable history log for later search and consolidation
 
 Operational rule:
 
@@ -275,7 +278,13 @@ Example config:
 ### Long-running backend
 
 ```bash
-cargo run -- run
+cargo run --release -- run
+```
+
+`run` uses the workspace configured in `~/.xbot/config.json` by default. To run the backend against a project-local workspace, pass it explicitly:
+
+```bash
+xbot run --workspace .
 ```
 
 `run` starts:
@@ -291,10 +300,10 @@ cargo run -- run
 
 ### Slack without a public webhook
 
-Slack supports two practical modes in `rbot`:
+Slack supports two practical modes in `xbot`:
 
 - `webhook`: Slack sends Events API requests to your public HTTPS endpoint
-- `socket`: `rbot` opens an outbound WebSocket to Slack and does not require a public webhook URL (Public)
+- `socket`: `xbot` opens an outbound WebSocket to Slack and does not require a public webhook URL (Public)
 
 Example Socket Mode config:
 
@@ -395,7 +404,7 @@ Email is polling-driven and does not require webhooks.
 
 ### Slack
 
-Slack is currently webhook-driven in `rbot`.
+Slack is currently webhook-driven in `xbot`.
 
 ```json
 {
@@ -420,12 +429,12 @@ Operational notes:
 - `signingSecret` is required for startup validation.
 - Point Slack event subscriptions at `http://<host>:<port>/slack/events`.
 - Send software-development tasks as normal messages or mentions, for example: `review this repo, run tests, and fix failures`.
-- `channels.sendToolHints` defaults to `false`; in that mode, `rbot` sends a muted-tool notice on the first tool call and batch summaries every 10 tool calls or before the next non-tool reply.
+- `channels.sendToolHints` defaults to `false`; in that mode, `xbot` sends a muted-tool notice on the first tool call and batch summaries every 10 tool calls or before the next non-tool reply.
 - Set `channels.sendToolHints` to `true` if you want every tool execution hint sent back to Slack while a task is running.
 
 ### Telegram
 
-Telegram is currently webhook-driven in `rbot`.
+Telegram is currently webhook-driven in `xbot`.
 
 ```json
 {
@@ -455,7 +464,7 @@ Usage notes:
 
 - Send development or analysis tasks as plain messages to the bot.
 - In groups, `groupPolicy: "mention"` keeps the bot from reacting to every message.
-- `channels.sendToolHints` defaults to `false`; in that mode, `rbot` sends a muted-tool notice on the first tool call and batch summaries every 10 tool calls or before the next non-tool reply.
+- `channels.sendToolHints` defaults to `false`; in that mode, `xbot` sends a muted-tool notice on the first tool call and batch summaries every 10 tool calls or before the next non-tool reply.
 - Set `channels.sendToolHints` to `true` if you want every tool execution hint sent back to Telegram while a task is running.
 
 ### Feishu
@@ -490,7 +499,7 @@ Usage notes:
 
 - Mention the bot in group chats when using `groupPolicy: "mention"`.
 - Development tasks can be sent as normal text instructions, and Feishu replies can include dedicated tool-hint cards during execution.
-- `channels.sendToolHints` defaults to `false`; in that mode, `rbot` sends a muted-tool notice on the first tool call and batch summaries every 10 tool calls or before the next non-tool reply.
+- `channels.sendToolHints` defaults to `false`; in that mode, `xbot` sends a muted-tool notice on the first tool call and batch summaries every 10 tool calls or before the next non-tool reply.
 - Set `channels.sendToolHints` to `true` if you want every tool execution hint card sent back during execution. Non-tool progress messages are still controlled by `channels.sendProgress`.
 
 ## 6. Combined Example
@@ -499,7 +508,7 @@ Usage notes:
 {
   "agents": {
     "defaults": {
-      "workspace": "~/.rbot/workspace",
+      "workspace": "~/.xbot/workspace",
       "model": "ollama/qwen2.5-coder:7b",
       "provider": "ollama",
       "maxToolIterations": 0,
@@ -538,7 +547,7 @@ Usage notes:
 
 ## 7. MCP Tool Servers
 
-`rbot` supports MCP over `stdio`. Enabled MCP tools are registered as native tools using names like `mcp_<server>_<tool>`.
+`xbot` supports MCP over `stdio`. Enabled MCP tools are registered as native tools using names like `mcp_<server>_<tool>`.
 
 Example:
 
@@ -567,7 +576,7 @@ Current scope:
 
 ## 8. Built-in Skills
 
-Built-in skills ship with the repository under `rbot/skills/`.
+Built-in skills ship with the repository under `xbot/skills/`.
 
 Current built-in set:
 
@@ -592,7 +601,7 @@ Behavior:
 - always-on skills are injected automatically
 - relevant task-specific skills are suggested and loaded based on prompt keywords
 - skills with unmet requirements (missing binaries, env vars, or OS) are marked unavailable
-- workspace-local skills live under `<workspace>/.rbot/skills/<name>/SKILL.md`
+- workspace-local skills live under `<workspace>/.xbot/skills/<name>/SKILL.md`
 - new workspaces also get starter workspace skill templates that you can edit for project-specific context and delivery rules
 
 ### Skill Management
@@ -609,7 +618,7 @@ Scaffold a new skill:
 cargo run -- skills init my-custom-skill
 ```
 
-This creates `<workspace>/.rbot/skills/my-custom-skill/SKILL.md` with a starter template.
+This creates `<workspace>/.xbot/skills/my-custom-skill/SKILL.md` with a starter template.
 
 ## 9. Useful Commands
 
@@ -622,13 +631,13 @@ cargo run -- print-config
 Run a different model without changing config:
 
 ```bash
-cargo run -- run --model ollama/qwen2.5-coder:7b
+cargo run --release -- run --model ollama/qwen2.5-coder:7b
 ```
 
 Start a one-shot request against a specific model:
 
 ```bash
-cargo run -- chat --model ollama/qwen2.5-coder:7b "list the next implementation tasks"
+cargo run --release -- chat --model ollama/qwen2.5-coder:7b "list the next implementation tasks"
 ```
 
 Inspect runtime state without starting the daemon:
@@ -665,13 +674,13 @@ cargo run -- skills init NAME    # Scaffold a new skill directory
 - `run` also validates enabled MCP server configuration before startup.
 - Local providers are accepted without API keys when the provider is recognized as local.
 - Outbound runtime/system errors are surfaced through the runtime logs instead of being silently dropped.
-- Feishu media downloads are stored under `~/.rbot/media/feishu`.
+- Feishu media downloads are stored under `~/.xbot/media/feishu`.
 - The admin UI polls the runtime every few seconds and exposes channel controls plus heartbeat triggering.
 - The metrics endpoint exposes Prometheus-compatible counters and gauges for message counts, provider requests, token totals, latency, and throughput.
 
 ## 11. Additional Channel Configuration
 
-Each channel section below includes how to obtain the required credentials and the config format. You can also run `rbot channels setup <name>` to see setup instructions in the terminal.
+Each channel section below includes how to obtain the required credentials and the config format. You can also run `xbot channels setup <name>` to see setup instructions in the terminal.
 
 ### DingTalk
 
@@ -763,7 +772,7 @@ WhatsApp connects to a Node.js Baileys bridge via WebSocket.
 4. Scan the QR code displayed in the bridge terminal with WhatsApp
 5. The bridge saves auth state — subsequent starts reconnect automatically
 
-Run `rbot channels login whatsapp` for step-by-step guidance.
+Run `xbot channels login whatsapp` for step-by-step guidance.
 
 ```json
 {
@@ -779,7 +788,7 @@ Run `rbot channels login whatsapp` for step-by-step guidance.
 }
 ```
 
-The bridge must be running before `rbot run`. Set `bridgeToken` if your bridge instance requires authentication.
+The bridge must be running before `xbot run`. Set `bridgeToken` if your bridge instance requires authentication.
 
 ### QQ
 
@@ -837,11 +846,11 @@ Weixin (personal WeChat) uses HTTP long-poll with QR code login via the ilinkai 
 **Login flow:**
 
 1. Enable the channel in config (no token needed initially)
-2. Run `rbot channels login weixin` — a QR code URL will be printed
+2. Run `xbot channels login weixin` — a QR code URL will be printed
 3. Open the URL in WeChat and scan to authorize
 4. The token is saved to `<stateDir>/account.json` for future sessions
 
-Alternatively, run `rbot run` and the QR login starts automatically if no saved token is found.
+Alternatively, run `xbot run` and the QR login starts automatically if no saved token is found.
 
 ```json
 {

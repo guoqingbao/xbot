@@ -18,25 +18,25 @@ use cli::{
 use colored::*;
 use local_ip_address::local_ip;
 
-use rbot::channels::ChannelManager;
-use rbot::config::Config;
-use rbot::cron::CronService;
-use rbot::engine::AgentLoop;
-use rbot::observability::{InstrumentedProvider, RuntimeTelemetry};
-use rbot::providers::registry::normalize_provider_name;
-use rbot::providers::{ProviderModelInfo, SharedProvider};
-use rbot::runtime::{
+use xbot::channels::ChannelManager;
+use xbot::config::{Config, expand_tilde};
+use xbot::cron::CronService;
+use xbot::engine::AgentLoop;
+use xbot::observability::{InstrumentedProvider, RuntimeTelemetry};
+use xbot::providers::registry::normalize_provider_name;
+use xbot::providers::{ProviderModelInfo, SharedProvider};
+use xbot::runtime::{
     AgentRuntime, HeartbeatService, build_gateway_router, build_provider_client,
     validate_run_config,
 };
-use rbot::storage::{InboundMessage, MessageBus, OutboundMessage, SessionManager};
-use rbot::tools::MessageSendCallback;
-use rbot::util::{
+use xbot::storage::{InboundMessage, MessageBus, OutboundMessage, SessionManager};
+use xbot::tools::MessageSendCallback;
+use xbot::util::{
     sync_workspace_templates, sync_workspace_templates_without_memory, workspace_state_dir,
 };
 
 #[derive(Parser)]
-#[command(name = "rbot", about = "Rust-native autonomous bot runtime")]
+#[command(name = "xbot", about = "Rust-native autonomous bot runtime")]
 struct Cli {
     #[arg(long)]
     config: Option<PathBuf>,
@@ -53,15 +53,25 @@ enum Command {
     Chat {
         #[arg(long)]
         model: Option<String>,
+        #[arg(long, conflicts_with = "workspace")]
+        global: bool,
+        #[arg(long)]
+        workspace: Option<PathBuf>,
         prompt: Vec<String>,
     },
     Repl {
         #[arg(long)]
         model: Option<String>,
+        #[arg(long, conflicts_with = "workspace")]
+        global: bool,
+        #[arg(long)]
+        workspace: Option<PathBuf>,
     },
     Run {
         #[arg(long)]
         model: Option<String>,
+        #[arg(long)]
+        workspace: Option<PathBuf>,
     },
     Status {
         #[arg(long)]
@@ -109,9 +119,29 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Onboard { workspace } => onboard(cli.config.as_deref(), workspace.as_deref()),
-        Command::Chat { model, prompt } => chat(cli.config.as_deref(), model, prompt).await,
-        Command::Repl { model } => repl(cli.config.as_deref(), model).await,
-        Command::Run { model } => run(cli.config.as_deref(), model).await,
+        Command::Chat {
+            model,
+            global,
+            workspace,
+            prompt,
+        } => {
+            chat(
+                cli.config.as_deref(),
+                model,
+                workspace.as_deref(),
+                global,
+                prompt,
+            )
+            .await
+        }
+        Command::Repl {
+            model,
+            global,
+            workspace,
+        } => repl(cli.config.as_deref(), model, workspace.as_deref(), global).await,
+        Command::Run { model, workspace } => {
+            run(cli.config.as_deref(), model, workspace.as_deref()).await
+        }
         Command::Status { model } => status(cli.config.as_deref(), model).await,
         Command::Sessions => sessions(cli.config.as_deref()),
         Command::Jobs => jobs(cli.config.as_deref()),
@@ -168,12 +198,69 @@ fn onboard(config_path: Option<&Path>, workspace_override: Option<&Path>) -> Res
             println!("Created {}", path.display());
         }
     }
+    print_onboard_next_steps(config_path);
     Ok(())
+}
+
+fn print_onboard_next_steps(config_path: Option<&Path>) {
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("xbot"));
+    let prefix = onboard_command_prefix(&exe);
+    println!();
+    println!("{}", "Next steps: configure provider and channels".bold());
+    println!(
+        "  {}",
+        onboard_config_command(&prefix, config_path, "--provider")
+            .cyan()
+            .bold()
+    );
+    println!(
+        "  {}",
+        onboard_config_command(&prefix, config_path, "--channel")
+            .cyan()
+            .bold()
+    );
+}
+
+fn onboard_command_prefix(exe: &Path) -> String {
+    let parts = exe
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>();
+    if parts
+        .windows(2)
+        .any(|window| window == ["target", "release"])
+    {
+        "cargo run --release --".to_string()
+    } else if parts.windows(2).any(|window| window == ["target", "debug"]) {
+        "cargo run --".to_string()
+    } else {
+        "xbot".to_string()
+    }
+}
+
+fn onboard_config_command(prefix: &str, config_path: Option<&Path>, flag: &str) -> String {
+    match config_path {
+        Some(path) => format!("{prefix} --config {} config {flag}", shell_arg(path)),
+        None => format!("{prefix} config {flag}"),
+    }
+}
+
+fn shell_arg(path: &Path) -> String {
+    let text = path.display().to_string();
+    if text
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | '~'))
+    {
+        return text;
+    }
+    format!("'{}'", text.replace('\'', "'\\''"))
 }
 
 async fn chat(
     config_path: Option<&Path>,
     model: Option<String>,
+    workspace_override: Option<&Path>,
+    use_global_workspace: bool,
     prompt: Vec<String>,
 ) -> Result<()> {
     let prompt = if prompt.is_empty() {
@@ -181,7 +268,7 @@ async fn chat(
     } else {
         prompt.join(" ")
     };
-    let built = build_agent(config_path, model).await?;
+    let built = build_agent(config_path, model, workspace_override, use_global_workspace).await?;
     if let Some(notice) = &built.startup_notice {
         eprintln!("{notice}");
     }
@@ -221,8 +308,13 @@ async fn chat(
     Ok(())
 }
 
-async fn repl(config_path: Option<&Path>, model: Option<String>) -> Result<()> {
-    let built = build_agent(config_path, model).await?;
+async fn repl(
+    config_path: Option<&Path>,
+    model: Option<String>,
+    workspace_override: Option<&Path>,
+    use_global_workspace: bool,
+) -> Result<()> {
+    let built = build_agent(config_path, model, workspace_override, use_global_workspace).await?;
     let BuiltAgent {
         agent,
         model,
@@ -261,12 +353,16 @@ async fn repl(config_path: Option<&Path>, model: Option<String>) -> Result<()> {
     .await
 }
 
-async fn run(config_path: Option<&Path>, model_override: Option<String>) -> Result<()> {
+async fn run(
+    config_path: Option<&Path>,
+    model_override: Option<String>,
+    workspace_override: Option<&Path>,
+) -> Result<()> {
     let config = Config::load(config_path)?;
     let resolved_config_path = config_path
         .map(Path::to_path_buf)
         .unwrap_or_else(Config::default_path);
-    let workspace = config.workspace_path();
+    let workspace = resolve_run_workspace(&config, workspace_override);
     sync_workspace_templates(&workspace)?;
     let model = model_override.unwrap_or_else(|| config.agents.defaults.model.clone());
     validate_run_config(&config, &model)?;
@@ -335,11 +431,13 @@ async fn run(config_path: Option<&Path>, model_override: Option<String>) -> Resu
     );
 
     let agent = Arc::new(
-        build_agent_from_config(
+        build_agent_for_workspace(
             &config,
+            &workspace,
             provider,
             Some(startup_model.active_model.clone()),
             Some(cron_service.clone()),
+            true,
         )
         .await?,
     );
@@ -441,15 +539,15 @@ async fn status(config_path: Option<&Path>, model_override: Option<String>) -> R
         .provider_for_model(Some(&model))
         .map(|(_, cfg)| cfg.api_key)
         .filter(|k| !k.trim().is_empty());
-    let system = rbot::observability::collect_system_snapshot().await;
-    let provider = rbot::observability::collect_provider_model_snapshot(
+    let system = xbot::observability::collect_system_snapshot().await;
+    let provider = xbot::observability::collect_provider_model_snapshot(
         &provider_name,
         &model,
         api_base.as_deref(),
         api_key.as_deref(),
     )
     .await;
-    let session_manager = rbot::storage::SessionManager::new(&workspace)?;
+    let session_manager = xbot::storage::SessionManager::new(&workspace)?;
     let sessions = session_manager.list_session_summaries()?;
     let cron = CronService::new(
         workspace_state_dir(&workspace)
@@ -511,7 +609,7 @@ async fn status(config_path: Option<&Path>, model_override: Option<String>) -> R
 
 fn sessions(config_path: Option<&Path>) -> Result<()> {
     let config = Config::load(config_path)?;
-    let manager = rbot::storage::SessionManager::new(&config.workspace_path())?;
+    let manager = xbot::storage::SessionManager::new(&config.workspace_path())?;
     for session in manager.list_session_summaries()? {
         println!(
             "{} | updated={} | messages={} | consolidated={}",
@@ -552,6 +650,8 @@ struct BuiltAgent {
 async fn build_agent(
     config_path: Option<&Path>,
     model_override: Option<String>,
+    workspace_override: Option<&Path>,
+    use_global_workspace: bool,
 ) -> Result<BuiltAgent> {
     let config = Config::load(config_path)?;
     let cwd = std::env::current_dir()?
@@ -572,7 +672,7 @@ async fn build_agent(
     let startup_model = resolve_startup_model(&provider, &model).await;
     let subagent_model = config.agents.subagents.model.trim();
     let subagent_model = (!subagent_model.is_empty()).then(|| subagent_model.to_string());
-    let workspace = resolve_cli_workspace(&config, &cwd);
+    let workspace = resolve_cli_workspace(&config, &cwd, workspace_override, use_global_workspace);
     sync_workspace_templates_without_memory(&workspace)?;
     let agent = build_agent_for_workspace(
         &config,
@@ -683,23 +783,6 @@ fn resolve_startup_model_selection<'a>(
         })
 }
 
-async fn build_agent_from_config(
-    config: &Config,
-    provider: SharedProvider,
-    model: Option<String>,
-    cron_service: Option<CronService>,
-) -> Result<AgentLoop> {
-    build_agent_for_workspace(
-        config,
-        &config.workspace_path(),
-        provider,
-        model,
-        cron_service,
-        true,
-    )
-    .await
-}
-
 async fn build_agent_for_workspace(
     config: &Config,
     workspace: &Path,
@@ -801,17 +884,29 @@ fn turn_summary(agent: &AgentLoop, elapsed: std::time::Duration) -> Result<TurnS
     })
 }
 
-fn resolve_cli_workspace(config: &Config, cwd: &Path) -> PathBuf {
-    let configured = config.workspace_path();
-    let default_workspace = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".rbot")
-        .join("workspace");
-    if configured == default_workspace {
-        cwd.to_path_buf()
-    } else {
-        configured
+fn resolve_cli_workspace(
+    config: &Config,
+    cwd: &Path,
+    workspace_override: Option<&Path>,
+    use_global_workspace: bool,
+) -> PathBuf {
+    if let Some(workspace) = workspace_override {
+        return expand_workspace_path(workspace);
     }
+    if use_global_workspace {
+        return config.workspace_path();
+    }
+    cwd.to_path_buf()
+}
+
+fn resolve_run_workspace(config: &Config, workspace_override: Option<&Path>) -> PathBuf {
+    workspace_override
+        .map(expand_workspace_path)
+        .unwrap_or_else(|| config.workspace_path())
+}
+
+fn expand_workspace_path(path: &Path) -> PathBuf {
+    expand_tilde(&path.as_os_str().to_string_lossy())
 }
 
 fn gateway_url(host: &str, port: u16, path: &str) -> String {
@@ -845,7 +940,7 @@ fn format_run_welcome(
     let rows = vec![
         ("mode", "run".to_string()),
         ("config", config_path.display().to_string()),
-        ("workspace", workspace.display().to_string()),
+        ("running workspace", workspace.display().to_string()),
         ("model", model.to_string()),
         (
             "provider",
@@ -900,7 +995,7 @@ fn format_run_welcome(
         ),
         ("stop", "Press Ctrl-C to stop.".to_string()),
     ];
-    format_left_rounded_kv_panel("rbot runtime", &rows)
+    format_left_rounded_kv_panel("xbot runtime", &rows)
 }
 
 fn summarize_run_channels(config: &Config, enabled_channels: &[String]) -> String {
@@ -997,19 +1092,23 @@ fn detected_local_ip() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_run_welcome, repl_session_context_status, resolve_gateway_display_host};
+    use super::{
+        format_run_welcome, onboard_command_prefix, onboard_config_command,
+        repl_session_context_status, resolve_cli_workspace, resolve_gateway_display_host,
+        resolve_run_workspace,
+    };
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
-    use rbot::config::Config;
-    use rbot::engine::AgentLoop;
-    use rbot::providers::{LlmProvider, LlmResponse, ProviderModelInfo};
-    use rbot::storage::{ChatMessage, SessionManager};
     use serde_json::Value;
     use serde_json::json;
     use std::collections::BTreeMap;
     use std::path::Path;
     use std::sync::Arc;
     use tempfile::tempdir;
+    use xbot::config::Config;
+    use xbot::engine::AgentLoop;
+    use xbot::providers::{LlmProvider, LlmResponse, ProviderModelInfo};
+    use xbot::storage::{ChatMessage, SessionManager};
 
     struct CatalogProvider {
         model: String,
@@ -1087,7 +1186,7 @@ mod tests {
         config.tools.restrict_to_workspace = true;
         config.tools.mcp_servers.insert(
             "github".to_string(),
-            rbot::config::McpServerConfig {
+            xbot::config::McpServerConfig {
                 enabled: true,
                 ..Default::default()
             },
@@ -1096,8 +1195,8 @@ mod tests {
         config.gateway.heartbeat.interval_s = 1800;
 
         let rendered = format_run_welcome(
-            Path::new("/root/.rbot/config.json"),
-            Path::new("/root/rbot"),
+            Path::new("/root/.xbot/config.json"),
+            Path::new("/root/xbot"),
             &config,
             "openai/gpt-4.1-mini",
             "openai",
@@ -1109,25 +1208,116 @@ mod tests {
             "http://127.0.0.1:18790/metrics",
         );
 
-        assert!(rendered.starts_with("╭─ rbot runtime"));
-        assert!(rendered.contains("mode      : run"));
-        assert!(rendered.contains("config    : /root/.rbot/config.json"));
-        assert!(rendered.contains("workspace : /root/rbot"));
-        assert!(rendered.contains("model     : openai/gpt-4.1-mini"));
-        assert!(rendered.contains("provider  : openai (default api base)"));
-        assert!(rendered.contains("agents    : maxTokens=16384  context=32768"));
+        assert!(rendered.starts_with("╭─ xbot runtime"));
+        assert!(rendered.contains("mode              : run"));
+        assert!(rendered.contains("config            : /root/.xbot/config.json"));
+        assert!(rendered.contains("running workspace : /root/xbot"));
+        assert!(rendered.contains("model             : openai/gpt-4.1-mini"));
+        assert!(rendered.contains("provider          : openai (default api base)"));
+        assert!(rendered.contains("agents            : maxTokens=16384  context=32768"));
         assert!(rendered.contains("            maxToolIterations=12  memory=65536B"));
-        assert!(rendered.contains("context   : 524288 max"));
-        assert!(rendered.contains("channels  : slack, telegram (progress on, tool hints muted)"));
-        assert!(rendered.contains("tools     : exec on/90s  web search duckduckgo"));
+        assert!(rendered.contains("context           : 524288 max"));
+        assert!(
+            rendered
+                .contains("channels          : slack, telegram (progress on, tool hints muted)")
+        );
+        assert!(rendered.contains("tools             : exec on/90s  web search duckduckgo"));
         assert!(rendered.contains("mcp github  workspace-only"));
-        assert!(rendered.contains("gateway   : bind=http://0.0.0.0:18790"));
+        assert!(rendered.contains("gateway           : bind=http://0.0.0.0:18790"));
         assert!(rendered.contains("public=http://127.0.0.1:18790/"));
         assert!(rendered.contains("admin     : http://127.0.0.1:18790/admin"));
         assert!(rendered.contains("metrics   : http://127.0.0.1:18790/metrics"));
         assert!(rendered.contains("heartbeat : enabled (1800s)"));
         assert!(rendered.contains("stop      : Press Ctrl-C to stop."));
         assert!(rendered.ends_with("╰─"));
+    }
+
+    #[test]
+    fn cli_workspace_defaults_to_current_dir_without_existing_state() {
+        let dir = tempdir().unwrap();
+        let cwd = dir.path().join("project");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let mut config = Config::default();
+        config.agents.defaults.workspace = "/configured/workspace".to_string();
+
+        assert_eq!(resolve_cli_workspace(&config, &cwd, None, false), cwd);
+    }
+
+    #[test]
+    fn cli_workspace_uses_global_workspace_when_requested() {
+        let dir = tempdir().unwrap();
+        let cwd = dir.path().join("project");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let configured = dir.path().join("configured");
+        let mut config = Config::default();
+        config.agents.defaults.workspace = configured.display().to_string();
+
+        assert_eq!(resolve_cli_workspace(&config, &cwd, None, true), configured);
+    }
+
+    #[test]
+    fn cli_workspace_uses_explicit_workspace_override() {
+        let dir = tempdir().unwrap();
+        let cwd = dir.path().join("project");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let selected = dir.path().join("selected");
+        let mut config = Config::default();
+        config.agents.defaults.workspace = "/configured/workspace".to_string();
+
+        assert_eq!(
+            resolve_cli_workspace(&config, &cwd, Some(&selected), false),
+            selected
+        );
+    }
+
+    #[test]
+    fn run_workspace_defaults_to_configured_workspace() {
+        let dir = tempdir().unwrap();
+        let configured = dir.path().join("configured");
+        let mut config = Config::default();
+        config.agents.defaults.workspace = configured.display().to_string();
+
+        assert_eq!(resolve_run_workspace(&config, None), configured);
+    }
+
+    #[test]
+    fn run_workspace_uses_explicit_workspace_override() {
+        let dir = tempdir().unwrap();
+        let configured = dir.path().join("configured");
+        let selected = dir.path().join("selected");
+        let mut config = Config::default();
+        config.agents.defaults.workspace = configured.display().to_string();
+
+        assert_eq!(resolve_run_workspace(&config, Some(&selected)), selected);
+    }
+
+    #[test]
+    fn onboard_commands_match_cargo_release_invocation() {
+        let prefix = onboard_command_prefix(Path::new("/repo/target/release/xbot"));
+
+        assert_eq!(
+            onboard_config_command(&prefix, None, "--provider"),
+            "cargo run --release -- config --provider"
+        );
+        assert_eq!(
+            onboard_config_command(&prefix, None, "--channel"),
+            "cargo run --release -- config --channel"
+        );
+    }
+
+    #[test]
+    fn onboard_commands_match_installed_invocation_and_quote_config() {
+        let prefix = onboard_command_prefix(Path::new("/usr/local/bin/xbot"));
+
+        assert_eq!(prefix, "xbot");
+        assert_eq!(
+            onboard_config_command(
+                &prefix,
+                Some(Path::new("/tmp/my config.json")),
+                "--provider"
+            ),
+            "xbot --config '/tmp/my config.json' config --provider"
+        );
     }
 
     #[tokio::test]
@@ -1157,7 +1347,7 @@ mod tests {
             32 * 1024,
             Default::default(),
             None,
-            rbot::config::ExecToolConfig {
+            xbot::config::ExecToolConfig {
                 enable: false,
                 timeout: 60,
                 path_append: String::new(),
@@ -1176,10 +1366,10 @@ mod tests {
     }
 }
 
-fn cli_approval_callback(_stream: cli::StreamRenderer) -> rbot::tools::ApprovalCallback {
-    use rbot::diff::DiffKind;
-    use rbot::tools::{ApprovalDecision, ApprovalRequest};
+fn cli_approval_callback(_stream: cli::StreamRenderer) -> xbot::tools::ApprovalCallback {
     use std::io::{IsTerminal, Write};
+    use xbot::diff::DiffKind;
+    use xbot::tools::{ApprovalDecision, ApprovalRequest};
 
     Arc::new(move |request: ApprovalRequest| {
         Box::pin(async move {

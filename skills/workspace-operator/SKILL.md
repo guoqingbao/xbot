@@ -1,7 +1,7 @@
 ---
 name: workspace-operator
 description: "Always-on operating guidance for workspace-safe execution, edits, and reporting."
-metadata: {"rbot":{"always":true,"triggers":["workspace","files","directory","organize"]}}
+metadata: {"xbot":{"always":true,"triggers":["workspace","files","directory","organize"]}}
 ---
 
 # Workspace Operator

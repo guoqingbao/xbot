@@ -1,7 +1,7 @@
 ---
 name: scheduled-ops
 description: "Recurring automation, cron-backed tasks, and unattended long-running bot operations."
-metadata: {"rbot":{"triggers":["schedule","cron","timer","periodic"]}}
+metadata: {"xbot":{"triggers":["schedule","cron","timer","periodic"]}}
 ---
 
 # Scheduled Operations

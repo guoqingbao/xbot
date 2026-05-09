@@ -5,12 +5,12 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use chrono::NaiveDate;
 use mailparse::parse_mail;
-use rbot::channels::{
+use serde_json::json;
+use xbot::channels::{
     Channel, EmailBackend, EmailBackendError, EmailChannel, EmailConfig, EmailSearchCriteria,
     OutgoingEmail, RawEmail,
 };
-use rbot::storage::{MessageBus, OutboundMessage};
-use serde_json::json;
+use xbot::storage::{MessageBus, OutboundMessage};
 
 fn make_config() -> serde_json::Value {
     json!({

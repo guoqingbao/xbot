@@ -1,22 +1,22 @@
 ---
 name: project-init
-description: "Analyze a project workspace and generate a comprehensive RBOT.md context file for all agent instances."
-metadata: {"rbot":{"triggers":["init","initialize","project init","setup project"]}}
+description: "Analyze a project workspace and generate a comprehensive XBOT.md context file for all agent instances."
+metadata: {"xbot":{"triggers":["init","initialize","project init","setup project"]}}
 ---
 
 # Project Init
 
-Generate or refresh the `RBOT.md` file at the workspace root. This file is the shared project-scope context that every agent instance loads automatically.
+Generate or refresh the `XBOT.md` file at the workspace root. This file is the shared project-scope context that every agent instance loads automatically.
 
 ## When This Skill Is Used
 
-This skill is invoked when the user sends `/init` or `init` (or the keyword `[init]`). The agent must analyze the full project and produce a concise, high-signal `RBOT.md`.
+This skill is invoked when the user sends `/init` or `init` (or the keyword `[init]`). The agent must analyze the full project and produce a concise, high-signal `XBOT.md`.
 
 ## Output Target
 
-Write the result to `{workspace}/RBOT.md`. If the file already exists, overwrite it with a fresh analysis.
+Write the result to `{workspace}/XBOT.md`. If the file already exists, overwrite it with a fresh analysis.
 
-## RBOT.md Structure
+## XBOT.md Structure
 
 The file MUST follow this structure and stay within **300 lines**:
 
@@ -79,6 +79,6 @@ The file MUST follow this structure and stay within **300 lines**:
 5. Read build/test/run configuration files.
 6. Scan for CI/CD config (`.github/workflows/`, `Makefile`, `Dockerfile`, etc.).
 7. Check for existing documentation (`README.md`, `docs/`, `ARCHITECTURE.md`).
-8. Synthesize findings into the RBOT.md structure above.
+8. Synthesize findings into the XBOT.md structure above.
 9. Count lines — if over 300, compress the least critical sections.
-10. Write the final `RBOT.md` to the workspace root.
+10. Write the final `XBOT.md` to the workspace root.

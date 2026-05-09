@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, anyhow};
 use console::Style;
 
-use rbot::channels::discover_all;
-use rbot::config::Config;
-use rbot::storage::MessageBus;
+use xbot::channels::discover_all;
+use xbot::config::Config;
+use xbot::storage::MessageBus;
 
 pub async fn run_channels_list() -> Result<()> {
     println!(

@@ -2,7 +2,7 @@
 name: weather
 description: Get current weather and forecasts with no API key (wttr.in and Open-Meteo).
 homepage: https://wttr.in/:help
-metadata: {"rbot":{"emoji":"🌤️","requires":{"bins":["curl"]},"triggers":["weather","forecast","temperature","wttr","rain"]}}
+metadata: {"xbot":{"emoji":"🌤️","requires":{"bins":["curl"]},"triggers":["weather","forecast","temperature","wttr","rain"]}}
 ---
 
 # Weather

@@ -1,8 +1,8 @@
 //! Provider registry entries for GitHub Copilot and Cursor.
 
-use rbot::config::ProviderConfig;
-use rbot::providers::registry::find_by_name;
-use rbot::runtime::build_provider_client;
+use xbot::config::ProviderConfig;
+use xbot::providers::registry::find_by_name;
+use xbot::runtime::build_provider_client;
 
 #[test]
 fn github_copilot_is_registered_by_name() {

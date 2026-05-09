@@ -20,11 +20,11 @@ use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
 
 use app::{AgentState as AS, App};
-use rbot::engine::AgentLoop;
-use rbot::engine::subtasks::SubagentNotification;
-use rbot::providers::TextStreamCallback;
-use rbot::storage::OutboundMessage;
-use rbot::tools::MessageSendCallback;
+use xbot::engine::AgentLoop;
+use xbot::engine::subtasks::SubagentNotification;
+use xbot::providers::TextStreamCallback;
+use xbot::storage::OutboundMessage;
+use xbot::tools::MessageSendCallback;
 
 const ACTIVE_POLL_MS: u64 = 16;
 const IDLE_POLL_MS: u64 = 40;
@@ -349,8 +349,8 @@ fn make_stream_callback(tx: mpsc::UnboundedSender<EngineEvent>) -> TextStreamCal
     })))
 }
 
-fn make_approval_callback(tx: mpsc::UnboundedSender<EngineEvent>) -> rbot::tools::ApprovalCallback {
-    use rbot::tools::{ApprovalDecision, ApprovalRequest};
+fn make_approval_callback(tx: mpsc::UnboundedSender<EngineEvent>) -> xbot::tools::ApprovalCallback {
+    use xbot::tools::{ApprovalDecision, ApprovalRequest};
     Arc::new(move |request: ApprovalRequest| {
         let tx = tx.clone();
         Box::pin(async move {

@@ -1,8 +1,8 @@
-# rbot Architecture
+# xbot Architecture
 
 ## Runtime Model
 
-`rbot` is organized as a message-driven runtime:
+`xbot` is organized as a message-driven runtime:
 
 1. A channel receives inbound user activity.
 2. The channel publishes an `InboundMessage` onto the bus.
@@ -32,8 +32,8 @@ This keeps transport, orchestration, and model execution separate. The global se
 | `src/providers/` | Provider clients, Anthropic native support, and registry metadata |
 | `src/runtime/bootstrap.rs` | Backend startup validation, OAuth handling, and provider construction |
 | `src/integrations/mcp.rs` | MCP stdio client and tool registration |
-| `src/cli/channels_cli.rs` | `rbot channels list/status/login` CLI subcommands |
-| `src/cli/skills_cli.rs` | `rbot skills list/init` CLI subcommands |
+| `src/cli/channels_cli.rs` | `xbot channels list/status/login` CLI subcommands |
+| `src/cli/skills_cli.rs` | `xbot skills list/init` CLI subcommands |
 
 ## Design Choices
 
@@ -76,11 +76,11 @@ The `AgentHook` trait provides lifecycle callbacks (`before_iteration`, `on_stre
 
 ### OpenAI-compatible provider contract
 
-`rbot` uses an OpenAI-compatible chat-completions contract as the common provider interface. That keeps remote APIs and local runtimes behind the same operational path.
+`xbot` uses an OpenAI-compatible chat-completions contract as the common provider interface. That keeps remote APIs and local runtimes behind the same operational path.
 
 ## Backend Operation
 
-`rbot run` starts:
+`xbot run` starts:
 
 - provider client
 - agent runtime
@@ -153,7 +153,7 @@ The startup path validates MCP configuration before the runtime begins serving t
 
 ## Testing Strategy
 
-`rbot` uses both module-local unit tests and integration tests:
+`xbot` uses both module-local unit tests and integration tests:
 
 - unit tests live next to the code for parsing, config validation, and loader behavior
 - integration tests under `tests/` exercise runtime flow, channel behavior, and backend wiring

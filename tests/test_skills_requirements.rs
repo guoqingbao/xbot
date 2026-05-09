@@ -1,9 +1,9 @@
 //! SkillsLoader requirement filtering, always-on skills, and trigger-based suggestions.
 
-use rbot::engine::SkillsLoader;
-use rbot::util::workspace_state_dir;
 use std::fs;
 use tempfile::tempdir;
+use xbot::engine::SkillsLoader;
+use xbot::util::workspace_state_dir;
 
 fn write_skill(workspace: &std::path::Path, name: &str, body: &str) {
     let dir = workspace_state_dir(workspace).join("skills").join(name);
@@ -23,7 +23,7 @@ fn filters_skills_with_missing_binary_requirement() {
         r#"---
 name: needs-missing-bin
 description: requires a binary that does not exist
-metadata: {"rbot":{"requires":"{\"bins\":[\"__no_such_binary_rbot_test__\"]}"}}
+metadata: {"xbot":{"requires":"{\"bins\":[\"__no_such_binary_xbot_test__\"]}"}}
 ---
 
 Body
@@ -56,7 +56,7 @@ fn filters_skills_with_missing_env_requirement() {
         r#"---
 name: needs-env
 description: needs env var
-metadata: {"rbot":{"requires":"{\"env\":[\"__RBOT_NO_SUCH_ENV_VAR__\"]}"}}
+metadata: {"xbot":{"requires":"{\"env\":[\"__XBOT_NO_SUCH_ENV_VAR__\"]}"}}
 ---
 
 Body
@@ -79,7 +79,7 @@ fn filters_skills_on_wrong_os_requirement() {
         r#"---
 name: linux-only
 description: linux only
-metadata: {"rbot":{"os":"[\"linux\"]"}}
+metadata: {"xbot":{"os":"[\"linux\"]"}}
 ---
 
 Body
@@ -110,7 +110,7 @@ fn available_skill_passes_checks() {
         r#"---
 name: ok-skill
 description: uses /bin/sh which exists on unix
-metadata: {"rbot":{"requires":"{\"bins\":[\"sh\"]}"}}
+metadata: {"xbot":{"requires":"{\"bins\":[\"sh\"]}"}}
 ---
 
 Body
@@ -141,7 +141,7 @@ fn always_on_skills_are_listed() {
         r#"---
 name: always-skill
 description: always inject
-metadata: {"rbot":{"always":"true","requires":"{\"bins\":[\"sh\"]}"}}
+metadata: {"xbot":{"always":"true","requires":"{\"bins\":[\"sh\"]}"}}
 ---
 
 Body
@@ -168,7 +168,7 @@ fn suggest_skills_matches_trigger_words() {
         r#"---
 name: triggered
 description: triggered by phrase
-metadata: {"rbot":{"triggers":"[\"uniquepineappletoken\"]","requires":"{\"bins\":[\"sh\"]}"}}
+metadata: {"xbot":{"triggers":"[\"uniquepineappletoken\"]","requires":"{\"bins\":[\"sh\"]}"}}
 ---
 
 Body
