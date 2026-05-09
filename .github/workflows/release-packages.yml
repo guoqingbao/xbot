@@ -72,7 +72,28 @@ jobs:
       - name: Install ARM64 Debian packaging dependencies
         if: matrix.rust_target == 'aarch64-unknown-linux-gnu'
         run: |
+          set -eux
           sudo dpkg --add-architecture arm64
+          . /etc/os-release
+          # GitHub's Ubuntu 24.04 runners use Deb822 sources.
+          # After adding arm64 as a foreign architecture, apt otherwise tries to
+          # fetch arm64 packages from archive.ubuntu.com/security.ubuntu.com,
+          # which causes 404s. Restrict the default Ubuntu sources to amd64.
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i '/^Architectures:/d' /etc/apt/sources.list.d/ubuntu.sources
+            sudo sed -i 's/^Components:/Architectures: amd64\nComponents:/' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+
+          # Add proper Ubuntu ports sources for arm64 packages.
+          cat <<EOF | sudo tee /etc/apt/sources.list.d/ubuntu-arm64.sources
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports/
+          Suites: ${VERSION_CODENAME} ${VERSION_CODENAME}-updates ${VERSION_CODENAME}-backports ${VERSION_CODENAME}-security
+          Components: main restricted universe multiverse
+          Architectures: arm64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+
           sudo apt-get update
           sudo apt-get install -y \
             gcc-aarch64-linux-gnu \
