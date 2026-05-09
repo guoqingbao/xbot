@@ -1,6 +1,6 @@
 {
   "name": "@trusted-ai/xbot",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Rust-native autonomous bot runtime for chat automation, tools, scheduled work, and multi-channel delivery",
   "license": "MIT",
   "homepage": "https://github.com/guoqingbao/xbot#readme",
