@@ -781,27 +781,50 @@ impl StreamRenderer {
         }
         let icon = if success { "✓" } else { "✗" };
         let emoji = xbot::util::tool_emoji(tool_name);
-        let short: String = summary_text
-            .lines()
-            .next()
-            .unwrap_or("")
-            .chars()
-            .take(80)
-            .collect();
-        let line = if success {
-            self.target
-                .style
-                .subtle(format!("  {icon} {emoji} {tool_name} · {short}"))
+        let result_title = format!("{icon} {emoji} {tool_name}");
+        let panel_w = available_panel_width();
+
+        let all_lines: Vec<&str> = summary_text.lines().collect();
+        let max_preview = 6;
+        let preview_lines: Vec<String> = if all_lines.len() <= max_preview {
+            all_lines.iter().map(|l| l.to_string()).collect()
         } else {
-            self.target
-                .style
-                .error(format!("  {icon} {emoji} {tool_name} · {short}"))
+            let head = 3;
+            let tail = 2;
+            let mut lines: Vec<String> = all_lines[..head].iter().map(|l| l.to_string()).collect();
+            lines.push(format!("  … {} lines …", all_lines.len() - head - tail));
+            lines.extend(
+                all_lines[all_lines.len() - tail..]
+                    .iter()
+                    .map(|l| l.to_string()),
+            );
+            lines
         };
+
+        let mut rows: Vec<(String, String)> = Vec::new();
+        for (i, line) in preview_lines.iter().enumerate() {
+            let truncated: String = line.chars().take(panel_w.saturating_sub(10)).collect();
+            let styled = if success {
+                self.target.style.subtle(&truncated)
+            } else {
+                self.target.style.error(&truncated)
+            };
+            if i == 0 {
+                rows.push(("→".to_string(), styled));
+            } else {
+                rows.push((String::new(), styled));
+            }
+        }
+        if rows.is_empty() {
+            rows.push(("→".to_string(), self.target.style.subtle("(empty)")));
+        }
+
+        let rendered = render_rounded_panel(&self.target.style, &result_title, &rows);
         let mut prefix = String::new();
         if state.trailing_newlines == 0 {
             prefix.push('\n');
         }
-        self.target.write_raw(format!("{prefix}{line}\n"));
+        self.target.write_raw(format!("{prefix}{rendered}\n"));
         state.trailing_newlines = 1;
     }
 
