@@ -1,6 +1,6 @@
 [package]
 name = "xbot"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 description = "Rust-native autonomous bot runtime for chat automation, tools, scheduled work, and multi-channel delivery"
 license = "MIT"

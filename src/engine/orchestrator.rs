@@ -2387,6 +2387,11 @@ impl AgentLoop {
         sessions.list_session_summaries()
     }
 
+    pub fn delete_session(&self, key: &str) -> Result<bool> {
+        let mut sessions = self.sessions.lock().expect("session manager lock poisoned");
+        sessions.delete(key)
+    }
+
     pub fn tool_output_to_string(output: ToolOutput) -> Result<String> {
         match output {
             ToolOutput::Text(text) => Ok(text),

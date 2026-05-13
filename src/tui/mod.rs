@@ -265,6 +265,10 @@ pub async fn run_tui_repl(
                     app.refresh_available_sessions(summaries);
                 }
             }
+
+            for key in app.session_delete_queue.drain(..) {
+                let _ = agent.delete_session(&key);
+            }
         }
 
         app.tick_animation();
