@@ -288,9 +288,27 @@ async fn chat(
     built
         .agent
         .set_approval_callback(Some(cli_approval_callback(stream.clone())));
+    let subagent_stream = stream.clone();
+    built
+        .agent
+        .set_subagent_notification_callback(Some(Arc::new(move |notif| {
+            use xbot::engine::subtasks::SubagentNotification;
+            match notif {
+                SubagentNotification::Started { label, .. } => {
+                    subagent_stream.subagent_event(&label, "started");
+                }
+                SubagentNotification::Completed { label, .. } => {
+                    subagent_stream.subagent_event(&label, "completed");
+                }
+                SubagentNotification::Failed { label, .. } => {
+                    subagent_stream.subagent_event(&label, "failed");
+                }
+                _ => {}
+            }
+        })));
     let started = Instant::now();
     stream.start_waiting();
-    if let Some(response) = built
+    let result = built
         .agent
         .process_direct_stream(
             &prompt,
@@ -300,14 +318,25 @@ async fn chat(
             Some(stream.callback()),
             Some(stream.reasoning_callback()),
         )
-        .await?
-    {
-        let summary = turn_summary(&built.agent, started.elapsed())?;
-        stream.finish(
-            &response.content,
-            response.reasoning_content.as_deref(),
-            &summary,
-        );
+        .await;
+    stream.stop_spinner();
+    match result {
+        Ok(Some(response)) => {
+            let summary = turn_summary(&built.agent, started.elapsed())?;
+            stream.finish(
+                &response.content,
+                response.reasoning_content.as_deref(),
+                &summary,
+            );
+        }
+        Ok(None) => {
+            let summary = turn_summary(&built.agent, started.elapsed())?;
+            stream.finish_empty("no direct reply", &summary);
+        }
+        Err(e) => {
+            stream.finish_error(&format!("{e:#}"));
+            return Err(e);
+        }
     }
     Ok(())
 }
@@ -1494,21 +1523,32 @@ fn cli_approval_callback(_stream: cli::StreamRenderer) -> xbot::tools::ApprovalC
             let use_color = std::io::stdout().is_terminal();
             let mut output = String::new();
 
+            let tool_icon = xbot::util::tool_emoji(&request.tool_name);
             if use_color {
                 output.push_str(&format!(
-                    "\n\x1b[1;33m── Approve {} ──\x1b[0m",
+                    "\n\x1b[1;33m╭─ {tool_icon} Approve {} ─╮\x1b[0m",
                     request.tool_name
                 ));
                 if let Some(source) = &request.source {
-                    output.push_str(&format!("\n  \x1b[36mFrom:\x1b[0m {source}"));
+                    output.push_str(&format!(
+                        "\n\x1b[33m│\x1b[0m  \x1b[36mFrom:\x1b[0m {source}"
+                    ));
                 }
-                output.push_str(&format!("\n  \x1b[36mFile:\x1b[0m {}\n", request.path));
+                output.push_str(&format!(
+                    "\n\x1b[33m│\x1b[0m  \x1b[36mFile:\x1b[0m {}",
+                    request.path
+                ));
+                output.push_str(&format!("\n\x1b[33m├{}┤\x1b[0m", "─".repeat(40)));
             } else {
-                output.push_str(&format!("\n── Approve {} ──", request.tool_name));
+                output.push_str(&format!(
+                    "\n╭─ {tool_icon} Approve {} ─╮",
+                    request.tool_name
+                ));
                 if let Some(source) = &request.source {
-                    output.push_str(&format!("\n  From: {source}"));
+                    output.push_str(&format!("\n│  From: {source}"));
                 }
-                output.push_str(&format!("\n  File: {}\n", request.path));
+                output.push_str(&format!("\n│  File: {}", request.path));
+                output.push_str(&format!("\n├{}┤", "─".repeat(40)));
             }
 
             for dl in request.diff_lines.iter().take(30) {
@@ -1522,25 +1562,41 @@ fn cli_approval_callback(_stream: cli::StreamRenderer) -> xbot::tools::ApprovalC
                     .unwrap_or_else(|| "    ".to_string());
                 let text = format!(" {} {} {} {}", old_no, new_no, dl.marker, dl.text);
                 if use_color {
+                    let bar = "\x1b[33m│\x1b[0m";
                     let colored = match dl.kind {
-                        DiffKind::Added => format!("\x1b[32m{text}\x1b[0m"),
-                        DiffKind::Removed => format!("\x1b[31m{text}\x1b[0m"),
-                        DiffKind::Omitted => format!("\x1b[2m{text}\x1b[0m"),
-                        DiffKind::Context => text,
+                        DiffKind::Added => format!("{bar}\x1b[32m{text}\x1b[0m"),
+                        DiffKind::Removed => format!("{bar}\x1b[31m{text}\x1b[0m"),
+                        DiffKind::Omitted => format!("{bar}\x1b[2m{text}\x1b[0m"),
+                        DiffKind::Context => format!("{bar}{text}"),
                     };
                     output.push_str(&format!("\n{colored}"));
                 } else {
-                    output.push_str(&format!("\n{text}"));
+                    output.push_str(&format!("\n│{text}"));
                 }
             }
             if request.diff_lines.len() > 30 {
+                let prefix = if use_color {
+                    "\x1b[33m│\x1b[0m"
+                } else {
+                    "│"
+                };
                 output.push_str(&format!(
-                    "\n  … {} more lines",
+                    "\n{prefix}  … {} more lines",
                     request.diff_lines.len() - 30
                 ));
             }
 
-            output.push_str("\n\n  [1] Allow Once  [2] Always Allow  [3] Deny\n  > ");
+            if use_color {
+                output.push_str(&format!("\n\x1b[33m╰{}╯\x1b[0m", "─".repeat(40)));
+                output.push_str("\n");
+                output.push_str("  \x1b[42;30m 1 Allow Once \x1b[0m");
+                output.push_str("  \x1b[44;37m 2 Always Allow \x1b[0m");
+                output.push_str("  \x1b[41;37m 3 Deny \x1b[0m");
+                output.push_str("\n  \x1b[1;33m›\x1b[0m ");
+            } else {
+                output.push_str(&format!("\n╰{}╯", "─".repeat(40)));
+                output.push_str("\n  [1] Allow Once  [2] Always Allow  [3] Deny\n  › ");
+            }
             print!("{output}");
             let _ = std::io::stdout().flush();
 
@@ -1580,6 +1636,44 @@ fn cli_progress_callback(stream: cli::StreamRenderer) -> MessageSendCallback {
                         .and_then(serde_json::Value::as_str),
                     msg.metadata.get("_tool_args"),
                 );
+                return Ok(());
+            }
+            if msg
+                .metadata
+                .get("_tool_result")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
+                let tool_name = msg
+                    .metadata
+                    .get("_tool_name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("tool");
+                let success = msg
+                    .metadata
+                    .get("_tool_success")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(true);
+                let summary_text = msg
+                    .metadata
+                    .get("_tool_result_summary")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                stream.tool_result(tool_name, success, summary_text);
+                return Ok(());
+            }
+            if let Some(event) = msg
+                .metadata
+                .get("_subagent_event")
+                .and_then(serde_json::Value::as_str)
+            {
+                let label = msg
+                    .metadata
+                    .get("_subagent_label")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("subagent");
+                stream.subagent_event(label, event);
+                return Ok(());
             }
             Ok(())
         })

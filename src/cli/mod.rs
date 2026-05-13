@@ -577,7 +577,6 @@ pub struct StreamRenderer {
     state: Arc<Mutex<StreamState>>,
 }
 
-#[derive(Default)]
 struct StreamState {
     started: bool,
     pending: String,
@@ -586,6 +585,66 @@ struct StreamState {
     trailing_newlines: usize,
     in_reasoning: bool,
     reasoning_streamed: bool,
+    spinner_handle: Option<SpinnerHandle>,
+}
+
+impl Default for StreamState {
+    fn default() -> Self {
+        Self {
+            started: false,
+            pending: String::new(),
+            code_language: None,
+            pending_table: None,
+            trailing_newlines: 0,
+            in_reasoning: false,
+            reasoning_streamed: false,
+            spinner_handle: None,
+        }
+    }
+}
+
+struct SpinnerHandle {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl SpinnerHandle {
+    fn start(target: &OutputTarget) -> Self {
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_clone = stop.clone();
+        let style = target.style.clone();
+        let thread = std::thread::spawn(move || {
+            let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let mut i = 0;
+            while !stop_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                let frame = frames[i % frames.len()];
+                let text = style.subtle(format!("  {frame} thinking…"));
+                print!("\r{text}\x1b[K");
+                let _ = io::stdout().flush();
+                i += 1;
+                std::thread::sleep(std::time::Duration::from_millis(80));
+            }
+            print!("\r\x1b[K");
+            let _ = io::stdout().flush();
+        });
+        Self {
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    fn stop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+impl Drop for SpinnerHandle {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 #[derive(Default)]
@@ -608,7 +667,20 @@ impl StreamRenderer {
     }
 
     pub fn start_waiting(&self) {
-        // No-op: waiting indicator removed
+        if !io::stdout().is_terminal() {
+            return;
+        }
+        let mut state = self.state.lock().expect("cli stream state lock poisoned");
+        if state.spinner_handle.is_none() {
+            state.spinner_handle = Some(SpinnerHandle::start(&self.target));
+        }
+    }
+
+    pub fn stop_spinner(&self) {
+        let mut state = self.state.lock().expect("cli stream state lock poisoned");
+        if let Some(mut handle) = state.spinner_handle.take() {
+            handle.stop();
+        }
     }
 
     pub fn callback(&self) -> TextStreamCallback {
@@ -616,6 +688,9 @@ impl StreamRenderer {
         let state = self.state.clone();
         Arc::new(Mutex::new(Box::new(move |delta: String| {
             let mut state = state.lock().expect("cli stream state lock poisoned");
+            if let Some(mut handle) = state.spinner_handle.take() {
+                handle.stop();
+            }
             if !state.started {
                 target.write_raw("\n".to_string());
                 state.started = true;
@@ -646,6 +721,9 @@ impl StreamRenderer {
         let state = self.state.clone();
         Arc::new(Mutex::new(Box::new(move |delta: String| {
             let mut state = state.lock().expect("cli stream state lock poisoned");
+            if let Some(mut handle) = state.spinner_handle.take() {
+                handle.stop();
+            }
             if !state.started {
                 target.write_raw("\n".to_string());
                 state.started = true;
@@ -654,6 +732,7 @@ impl StreamRenderer {
             if !state.in_reasoning {
                 state.in_reasoning = true;
                 state.reasoning_streamed = true;
+                target.write_raw(target.style.subtle("  · · · reasoning · · ·\n"));
             }
             let styled = target.style.subtle(&delta);
             target.write_raw(&styled);
@@ -662,6 +741,9 @@ impl StreamRenderer {
 
     pub fn tool_hint(&self, hint: &str, tool_name: Option<&str>, tool_args: Option<&Value>) {
         let mut state = self.state.lock().expect("cli stream state lock poisoned");
+        if let Some(mut handle) = state.spinner_handle.take() {
+            handle.stop();
+        }
         if !state.started {
             self.target.write_raw("\n");
             state.started = true;
@@ -687,8 +769,76 @@ impl StreamRenderer {
         drop(state);
     }
 
+    pub fn tool_result(&self, tool_name: &str, success: bool, summary_text: &str) {
+        let mut state = self.state.lock().expect("cli stream state lock poisoned");
+        if let Some(mut handle) = state.spinner_handle.take() {
+            handle.stop();
+        }
+        if !state.started {
+            self.target.write_raw("\n");
+            state.started = true;
+            note_output(&mut state, "\n");
+        }
+        let icon = if success { "✓" } else { "✗" };
+        let emoji = xbot::util::tool_emoji(tool_name);
+        let short: String = summary_text
+            .lines()
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take(80)
+            .collect();
+        let line = if success {
+            self.target
+                .style
+                .subtle(format!("  {icon} {emoji} {tool_name} · {short}"))
+        } else {
+            self.target
+                .style
+                .error(format!("  {icon} {emoji} {tool_name} · {short}"))
+        };
+        let mut prefix = String::new();
+        if state.trailing_newlines == 0 {
+            prefix.push('\n');
+        }
+        self.target.write_raw(format!("{prefix}{line}\n"));
+        state.trailing_newlines = 1;
+    }
+
+    pub fn subagent_event(&self, label: &str, event_type: &str) {
+        let mut state = self.state.lock().expect("cli stream state lock poisoned");
+        if !state.started {
+            self.target.write_raw("\n");
+            state.started = true;
+            note_output(&mut state, "\n");
+        }
+        let line = match event_type {
+            "started" => self
+                .target
+                .style
+                .subtle(format!("  ◐ agent: {label} (started)")),
+            "completed" => self
+                .target
+                .style
+                .accent(format!("  ◐ agent: {label} (completed)")),
+            "failed" => self
+                .target
+                .style
+                .error(format!("  ◐ agent: {label} (failed)")),
+            _ => self
+                .target
+                .style
+                .subtle(format!("  ◐ agent: {label} ({event_type})")),
+        };
+        self.target.write_raw(format!("{line}\n"));
+        state.trailing_newlines = 1;
+    }
+
     pub fn finish(&self, content: &str, reasoning_content: Option<&str>, summary: &TurnSummary) {
         let mut state = self.state.lock().expect("cli stream state lock poisoned");
+        if let Some(mut handle) = state.spinner_handle.take() {
+            handle.stop();
+        }
         if state.in_reasoning {
             state.in_reasoning = false;
             self.target.write_raw("\n");
@@ -756,6 +906,9 @@ impl StreamRenderer {
 
     pub fn finish_empty(&self, note: &str, summary: &TurnSummary) {
         let mut state = self.state.lock().expect("cli stream state lock poisoned");
+        if let Some(mut handle) = state.spinner_handle.take() {
+            handle.stop();
+        }
         let tail = render_stream_delta(
             &self.target.style,
             &mut state,
@@ -779,6 +932,9 @@ impl StreamRenderer {
 
     pub fn finish_error(&self, err: &str) {
         let mut state = self.state.lock().expect("cli stream state lock poisoned");
+        if let Some(mut handle) = state.spinner_handle.take() {
+            handle.stop();
+        }
         let tail = render_stream_delta(
             &self.target.style,
             &mut state,
