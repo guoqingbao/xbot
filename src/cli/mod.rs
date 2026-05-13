@@ -1129,13 +1129,13 @@ fn render_rounded_panel(style: &Style, title: &str, rows: &[(String, String)]) -
             }
         })
         .collect::<Vec<_>>();
-    let content_width = rendered_rows
+    let natural_width = rendered_rows
         .iter()
         .map(|row| char_width(row))
         .max()
         .unwrap_or(0)
-        .max(char_width(title) + 1)
-        .max(available_panel_width());
+        .max(char_width(title) + 1);
+    let content_width = natural_width.clamp(30, available_panel_width());
     let top_fill = content_width.saturating_sub(char_width(title) + 1);
 
     let mut out = vec![format!(
@@ -2423,9 +2423,15 @@ mod tests {
         let style = super::Style { ansi: false };
         let content = "xbot v0.1.2\nModel: qwen\nTokens: 10 in / 22 out\nContext: 512/4096 (12%)\nSession: 8 history messages\nUptime: 2m 4s";
         let rendered = render_markdown_response(&style, content);
-        let expected_width = available_panel_width() + 4;
+        let widths: Vec<usize> = rendered.lines().map(char_width).collect();
+        let panel_width = *widths.iter().max().unwrap_or(&0);
+        assert!(panel_width >= 30, "panel should be at least 30 wide");
+        assert!(
+            panel_width <= available_panel_width() + 4,
+            "panel should not exceed terminal width"
+        );
         for line in rendered.lines() {
-            assert_eq!(char_width(line), expected_width, "{line}");
+            assert_eq!(char_width(line), panel_width, "{line}");
         }
     }
 
@@ -2653,9 +2659,15 @@ mod tests {
             Some("read_file"),
             Some(&args),
         );
-        let expected_width = available_panel_width() + 4;
+        let widths: Vec<usize> = rendered.lines().map(char_width).collect();
+        let panel_width = *widths.iter().max().unwrap_or(&0);
+        assert!(panel_width >= 30, "panel should be at least 30 wide");
+        assert!(
+            panel_width <= available_panel_width() + 4,
+            "panel should not exceed terminal width"
+        );
         for line in rendered.lines() {
-            assert_eq!(char_width(line), expected_width, "{line}");
+            assert_eq!(char_width(line), panel_width, "{line}");
         }
     }
 }
