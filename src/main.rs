@@ -344,10 +344,10 @@ async fn chat(
 fn chat_select_session(workspace: &Path, default_key: &str, chat_id: &str) -> Result<String> {
     use std::io::{IsTerminal, Write};
 
-    let manager = SessionManager::new(workspace)?;
+    let mut manager = SessionManager::new(workspace)?;
     let summaries = manager.list_session_summaries()?;
-    let cli_sessions: Vec<_> = summaries
-        .iter()
+    let mut cli_sessions: Vec<_> = summaries
+        .into_iter()
         .filter(|s| s.key.starts_with("cli:") && s.message_count > 0)
         .collect();
 
@@ -373,40 +373,80 @@ fn chat_select_session(workspace: &Path, default_key: &str, chat_id: &str) -> Re
         return Ok(default_key.to_string());
     }
 
-    eprintln!("\n{}", "Available sessions:".bold());
-    eprintln!("  {} {} (new session)", "0.".bold(), chat_id.cyan().bold());
-    for (i, s) in cli_sessions.iter().enumerate() {
-        let current = if s.key == default_key { " ←" } else { "" };
+    loop {
+        eprintln!("\n{}", "Available sessions:".bold());
+        eprintln!("  {} {} (new session)", "0.".bold(), chat_id.cyan().bold());
+        for (i, s) in cli_sessions.iter().enumerate() {
+            let current = if s.key == default_key { " ←" } else { "" };
+            eprintln!(
+                "  {} {} - {} msgs, {}, updated {}{}",
+                format!("{}.", i + 1).bold(),
+                truncate_display(&s.title, 50).cyan(),
+                s.message_count,
+                format_session_context_tokens(s.context_tokens),
+                format_relative_time(&s.updated_at),
+                current.yellow().bold(),
+            );
+        }
         eprintln!(
-            "  {} {} - {} msgs, {}, updated {}{}",
-            format!("{}.", i + 1).bold(),
-            truncate_display(&s.title, 50).cyan(),
-            s.message_count,
-            format_session_context_tokens(s.context_tokens),
-            format_relative_time(&s.updated_at),
-            current.yellow().bold(),
+            "\n  {}",
+            "Enter number to select, d<number> to delete (e.g. d2)".dimmed()
         );
-    }
-    eprint!("\n  Select session [default: continue current]: ");
-    let _ = std::io::stderr().flush();
+        eprint!("  Select session [default: continue current]: ");
+        let _ = std::io::stderr().flush();
 
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    let choice = input.trim();
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        let choice = input.trim();
 
-    if choice.is_empty() {
+        if choice.is_empty() {
+            return Ok(default_key.to_string());
+        }
+        if choice == "0" {
+            let new_key = format!("cli:{}:{:016x}", chat_id, rand_u64());
+            return Ok(new_key);
+        }
+
+        if let Some(rest) = choice
+            .strip_prefix('d')
+            .or_else(|| choice.strip_prefix('D'))
+        {
+            if let Ok(idx) = rest.trim().parse::<usize>() {
+                if idx >= 1 && idx <= cli_sessions.len() {
+                    let target = &cli_sessions[idx - 1];
+                    eprint!(
+                        "  Delete \"{}\"? (y/N): ",
+                        truncate_display(&target.title, 40)
+                    );
+                    let _ = std::io::stderr().flush();
+                    let mut confirm = String::new();
+                    std::io::stdin().read_line(&mut confirm)?;
+                    if confirm.trim().eq_ignore_ascii_case("y") {
+                        let del_key = target.key.clone();
+                        let was_default = del_key == default_key;
+                        let _ = manager.delete(&del_key);
+                        cli_sessions.remove(idx - 1);
+                        eprintln!("  {}", "Session deleted.".dimmed());
+                        if cli_sessions.is_empty() {
+                            let new_key = format!("cli:{}:{:016x}", chat_id, rand_u64());
+                            return Ok(new_key);
+                        }
+                        if was_default {
+                            continue;
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
+
+        if let Ok(idx) = choice.parse::<usize>() {
+            if idx >= 1 && idx <= cli_sessions.len() {
+                return Ok(cli_sessions[idx - 1].key.clone());
+            }
+        }
         return Ok(default_key.to_string());
     }
-    if choice == "0" {
-        let new_key = format!("cli:{}:{:016x}", chat_id, rand_u64());
-        return Ok(new_key);
-    }
-    if let Ok(idx) = choice.parse::<usize>() {
-        if idx >= 1 && idx <= cli_sessions.len() {
-            return Ok(cli_sessions[idx - 1].key.clone());
-        }
-    }
-    Ok(default_key.to_string())
 }
 
 fn rand_u64() -> u64 {

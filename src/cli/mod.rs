@@ -821,7 +821,8 @@ impl StreamRenderer {
             rows.push(("→".to_string(), self.target.style.subtle("(empty)")));
         }
 
-        let rendered = render_rounded_panel(&self.target.style, &result_title, &rows);
+        let border_code = if success { "38;5;245" } else { "38;5;210" };
+        let rendered = render_styled_panel(&self.target.style, &result_title, &rows, border_code);
         let mut prefix = String::new();
         if state.trailing_newlines == 0 {
             prefix.push('\n');
@@ -1148,6 +1149,15 @@ fn available_panel_width() -> usize {
 }
 
 fn render_rounded_panel(style: &Style, title: &str, rows: &[(String, String)]) -> String {
+    render_styled_panel(style, title, rows, "2")
+}
+
+fn render_styled_panel(
+    style: &Style,
+    title: &str,
+    rows: &[(String, String)],
+    border_code: &str,
+) -> String {
     let label_width = rows
         .iter()
         .map(|(label, _)| label.chars().count())
@@ -1168,32 +1178,23 @@ fn render_rounded_panel(style: &Style, title: &str, rows: &[(String, String)]) -
             }
         })
         .collect::<Vec<_>>();
-    let natural_width = rendered_rows
-        .iter()
-        .map(|row| char_width(row))
-        .max()
-        .unwrap_or(0)
-        .max(char_width(title) + 1);
-    let avail = available_panel_width();
-    let content_width = if natural_width > avail / 2 {
-        avail
-    } else {
-        natural_width.max(30)
-    };
+    let content_width = available_panel_width();
     let top_fill = content_width.saturating_sub(char_width(title) + 1);
+
+    let border = |s: &str| style.paint(border_code, s);
 
     let mut out = vec![format!(
         "{}{}{}",
-        style.dim("╭─ "),
+        border("╭─ "),
         style.accent(title),
-        style.dim(format!(" {}╮", "─".repeat(top_fill)))
+        border(&format!(" {}╮", "─".repeat(top_fill)))
     )];
     if rendered_rows.is_empty() {
         out.push(format!(
             "{}{}{}",
-            style.dim("╰"),
-            style.dim("─".repeat(content_width + 2)),
-            style.dim("╯")
+            border("╰"),
+            border(&"─".repeat(content_width + 2)),
+            border("╯")
         ));
         return out.join("\n");
     }
@@ -1201,36 +1202,48 @@ fn render_rounded_panel(style: &Style, title: &str, rows: &[(String, String)]) -
     for row in rendered_rows {
         out.push(format!(
             "{} {} {}",
-            style.dim("│"),
+            border("│"),
             pad_to_width(&row, content_width),
-            style.dim("│")
+            border("│")
         ));
     }
     out.push(format!(
         "{}{}{}",
-        style.dim("╰"),
-        style.dim("─".repeat(content_width + 2)),
-        style.dim("╯")
+        border("╰"),
+        border(&"─".repeat(content_width + 2)),
+        border("╯")
     ));
     out.join("\n")
 }
 
 fn render_rounded_block(style: &Style, title: &str, lines: &[String], width: usize) -> String {
+    render_styled_block(style, title, lines, width, "2")
+}
+
+fn render_styled_block(
+    style: &Style,
+    title: &str,
+    lines: &[String],
+    width: usize,
+    border_code: &str,
+) -> String {
     let content_width = width.max(char_width(title) + 1);
     let top_fill = content_width.saturating_sub(char_width(title) + 1);
 
+    let border = |s: &str| style.paint(border_code, s);
+
     let mut out = vec![format!(
         "{}{}{}",
-        style.dim("╭─ "),
+        border("╭─ "),
         style.accent(title),
-        style.dim(format!(" {}╮", "─".repeat(top_fill)))
+        border(&format!(" {}╮", "─".repeat(top_fill)))
     )];
     if lines.is_empty() {
         out.push(format!(
             "{}{}{}",
-            style.dim("╰"),
-            style.dim("─".repeat(content_width + 2)),
-            style.dim("╯")
+            border("╰"),
+            border(&"─".repeat(content_width + 2)),
+            border("╯")
         ));
         return out.join("\n");
     }
@@ -1238,16 +1251,16 @@ fn render_rounded_block(style: &Style, title: &str, lines: &[String], width: usi
     for line in lines {
         out.push(format!(
             "{} {} {}",
-            style.dim("│"),
+            border("│"),
             pad_to_width(line, content_width),
-            style.dim("│")
+            border("│")
         ));
     }
     out.push(format!(
         "{}{}{}",
-        style.dim("╰"),
-        style.dim("─".repeat(content_width + 2)),
-        style.dim("╯")
+        border("╰"),
+        border(&"─".repeat(content_width + 2)),
+        border("╯")
     ));
     out.join("\n")
 }
@@ -1370,7 +1383,7 @@ fn render_tool_hint(
     if rows.is_empty() {
         rows.push(("state".to_string(), style.subtle("running")));
     }
-    render_rounded_panel(style, &title, &rows)
+    render_styled_panel(style, &title, &rows, "38;5;73")
 }
 
 fn render_edit_file_hint(style: &Style, _hint: &str, tool_args: Option<&Value>) -> Option<String> {
@@ -1398,7 +1411,13 @@ fn render_edit_file_hint(style: &Style, _hint: &str, tool_args: Option<&Value>) 
         width,
     ));
     lines.extend(render_diff_lines(style, &computed.lines, width));
-    Some(render_rounded_block(style, "✍ edit_file", &lines, width))
+    Some(render_styled_block(
+        style,
+        "✍ edit_file",
+        &lines,
+        width,
+        "38;5;75",
+    ))
 }
 
 fn render_diff_lines(style: &Style, lines: &[xbot::diff::DiffLine], width: usize) -> Vec<String> {
