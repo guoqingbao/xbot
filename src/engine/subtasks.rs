@@ -44,6 +44,9 @@ pub enum SubagentNotification {
         label: String,
         result_preview: String,
         full_result: String,
+        prompt_tokens: usize,
+        completion_tokens: usize,
+        cached_tokens: usize,
     },
     Failed {
         task_id: String,
@@ -79,6 +82,7 @@ pub struct SubagentManager {
     exec_config: ExecToolConfig,
     restrict_to_workspace: bool,
     memory_enabled: bool,
+    context_window_tokens: usize,
     running_tasks: Arc<Mutex<BTreeMap<String, tokio::task::JoinHandle<()>>>>,
     session_tasks: Arc<Mutex<BTreeMap<String, HashSet<String>>>>,
     completed_results: Arc<Mutex<BTreeMap<String, Vec<CompletedSubagentResult>>>>,
@@ -104,6 +108,7 @@ impl SubagentManager {
         exec_config: ExecToolConfig,
         restrict_to_workspace: bool,
         memory_enabled: bool,
+        context_window_tokens: usize,
         approval_callback: Arc<Mutex<Option<ApprovalCallback>>>,
         always_allow: Arc<Mutex<bool>>,
         cancellations: Arc<Mutex<HashSet<String>>>,
@@ -118,6 +123,7 @@ impl SubagentManager {
             exec_config,
             restrict_to_workspace,
             memory_enabled,
+            context_window_tokens,
             running_tasks: Arc::new(Mutex::new(BTreeMap::new())),
             session_tasks: Arc::new(Mutex::new(BTreeMap::new())),
             completed_results: Arc::new(Mutex::new(BTreeMap::new())),
@@ -412,12 +418,24 @@ impl SubagentManager {
 
         let mut final_result = None;
         let mut step: u32 = 0;
+        let mut total_prompt_tokens: usize = 0;
+        let mut total_completion_tokens: usize = 0;
+        let mut total_cached_tokens: usize = 0;
+        let mut compression_pending = false;
+        let ctx_window = self.context_window_tokens;
+
         for _ in 0..SUBAGENT_MAX_ITERATIONS {
             if self.globally_denied.load(Ordering::SeqCst) {
                 final_result =
                     Some("Subagent stopped: file modifications denied by user.".to_string());
                 break;
             }
+
+            if compression_pending && messages.len() > 3 {
+                messages = compress_subagent_context(messages);
+                compression_pending = false;
+            }
+
             let response = self
                 .provider
                 .chat_with_retry(
@@ -436,6 +454,16 @@ impl SubagentManager {
                     });
                     e
                 })?;
+
+            total_prompt_tokens += response.usage.prompt_tokens;
+            total_completion_tokens += response.usage.completion_tokens;
+            total_cached_tokens += response.usage.cached_prompt_tokens;
+
+            let needs_compression = ctx_window > 0
+                && response.usage.prompt_tokens > 0
+                && response.usage.prompt_tokens.saturating_mul(100)
+                    >= ctx_window.saturating_mul(90);
+
             if let Some(ref rc) = response.reasoning_content {
                 if !rc.trim().is_empty() && !response.has_tool_calls() {
                     self.notify(SubagentNotification::Reasoning {
@@ -519,6 +547,9 @@ impl SubagentManager {
                     ));
                     break;
                 }
+                if needs_compression {
+                    compression_pending = true;
+                }
             } else {
                 final_result = response
                     .content
@@ -544,6 +575,9 @@ impl SubagentManager {
                 .chat_with_retry(&messages, None, Some(&self.model), None, None)
                 .await
             {
+                total_prompt_tokens += response.usage.prompt_tokens;
+                total_completion_tokens += response.usage.completion_tokens;
+                total_cached_tokens += response.usage.cached_prompt_tokens;
                 final_result = response
                     .content
                     .map(|text| think_re.replace_all(&text, "").trim().to_string())
@@ -563,6 +597,9 @@ impl SubagentManager {
             label: label.clone(),
             result_preview: preview,
             full_result: result.clone(),
+            prompt_tokens: total_prompt_tokens,
+            completion_tokens: total_completion_tokens,
+            cached_tokens: total_cached_tokens,
         });
         self.record_completed_result(
             origin_session_key.as_deref(),
@@ -901,6 +938,63 @@ fn extract_fallback_result(messages: &[ChatMessage]) -> Option<String> {
             .collect::<Vec<_>>()
             .join("\n")
     ))
+}
+
+fn compress_subagent_context(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    let system = messages.first().cloned();
+    let user_task = messages.get(1).cloned();
+    let mut summary_parts: Vec<String> = Vec::new();
+    for msg in messages.iter().skip(2) {
+        match msg.role.as_str() {
+            "assistant" => {
+                if let Some(text) = msg.content_as_text() {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        let preview: String = trimmed.chars().take(300).collect();
+                        summary_parts.push(format!("Assistant: {preview}"));
+                    }
+                }
+                if let Some(ref tool_calls) = msg.tool_calls {
+                    let names: Vec<_> = tool_calls
+                        .iter()
+                        .filter_map(|tc| {
+                            tc.get("function")
+                                .and_then(|f| f.get("name"))
+                                .and_then(|n| n.as_str())
+                        })
+                        .collect();
+                    if !names.is_empty() {
+                        summary_parts.push(format!("Called tools: {}", names.join(", ")));
+                    }
+                }
+            }
+            "tool" => {
+                let name = msg.name.as_deref().unwrap_or("tool");
+                if let Some(text) = msg.content_as_text() {
+                    let preview: String = text.chars().take(200).collect();
+                    summary_parts.push(format!("{name} result: {preview}"));
+                }
+            }
+            _ => {}
+        }
+    }
+    let summary_text = if summary_parts.is_empty() {
+        "Previous conversation compressed. Continue from where you left off.".to_string()
+    } else {
+        format!(
+            "[Context compressed — summary of prior work]\n{}",
+            summary_parts.join("\n")
+        )
+    };
+    let mut result = Vec::new();
+    if let Some(sys) = system {
+        result.push(sys);
+    }
+    if let Some(user) = user_task {
+        result.push(user);
+    }
+    result.push(ChatMessage::text("user", summary_text));
+    result
 }
 
 fn summarize_tool_args_for_notify(args: &serde_json::Value) -> String {

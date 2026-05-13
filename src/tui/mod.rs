@@ -163,11 +163,17 @@ pub async fn run_tui_repl(
                 label,
                 result_preview,
                 full_result,
+                prompt_tokens,
+                completion_tokens,
+                cached_tokens,
             } => EngineEvent::SubagentCompleted {
                 task_id,
                 label,
                 result_preview,
                 full_result,
+                prompt_tokens,
+                completion_tokens,
+                cached_tokens,
             },
             SubagentNotification::Failed {
                 task_id,
@@ -229,6 +235,8 @@ pub async fn run_tui_repl(
             }
             agent.persist_session_safe(&sk);
             agent.cancel_session(&sk);
+            agent.clear_steer_channel();
+            app.steer_tx = None;
             app.agent_state = AS::Ready;
             app.pending.clear();
             app.flush_active_as_cancelled();
@@ -236,8 +244,12 @@ pub async fn run_tui_repl(
         }
 
         if !app.is_busy() {
+            app.steer_tx = None;
+            agent.clear_steer_channel();
             if let Some(prompt) = app.pop_next_prompt() {
                 let sk = app.session_key().to_string();
+                let steer_tx = agent.setup_steer_channel();
+                app.steer_tx = Some(steer_tx);
                 active_turn = Some(spawn_turn(
                     agent.clone(),
                     prompt,
@@ -325,12 +337,14 @@ fn spawn_turn(
                     completion_tokens: snap.last_completion_tokens,
                     cached_tokens: snap.last_cached_tokens,
                     elapsed,
+                    subagent_summaries: Vec::new(),
                 })
                 .unwrap_or(TurnSummary {
                     prompt_tokens: 0,
                     completion_tokens: 0,
                     cached_tokens: 0,
                     elapsed,
+                    subagent_summaries: Vec::new(),
                 })
         };
 
@@ -473,6 +487,16 @@ fn make_progress_callback(
                     success,
                     summary,
                 });
+                return Ok(());
+            }
+
+            if msg
+                .metadata
+                .get("_steer_injected")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
+                let _ = tx.send(EngineEvent::SteerInjected);
                 return Ok(());
             }
 

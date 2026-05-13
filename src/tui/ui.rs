@@ -11,6 +11,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::app::{
     ActiveStreaming, AgentState, App, EditDiff, HistoryEntry, StreamSegment, SubagentStatus,
+    SubagentTokenUsage,
 };
 use super::markdown;
 
@@ -350,6 +351,17 @@ fn render_sidebar(f: &mut Frame, area: Rect, app: &App) {
                         Style::default().fg(TEXT_DIM),
                     )));
                 }
+            } else if let Some(finished_at) = info.finished_at {
+                let duration = finished_at.saturating_duration_since(info.started_at);
+                let elapsed_str = super::app::format_elapsed(duration);
+                let mut hint_parts = vec![elapsed_str];
+                if let Some(usage) = &info.token_usage {
+                    hint_parts.push(format_subagent_token_hint(usage));
+                }
+                lines.push(Line::from(Span::styled(
+                    format!("   {}", hint_parts.join(" · ")),
+                    Style::default().fg(TEXT_DIM),
+                )));
             }
             lines.push(Line::from(""));
         }
@@ -633,20 +645,24 @@ fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             }
             HistoryEntry::Error(msg) => {
                 push_blank(&mut lines);
+                let wrap_width = w.saturating_sub(6).max(20);
                 for (ei, err_line) in msg.lines().enumerate() {
-                    if ei == 0 {
-                        lines.push(Line::from(vec![
-                            Span::styled(
-                                "  ✗ ",
-                                Style::default().fg(ERROR_FG).add_modifier(Modifier::BOLD),
-                            ),
-                            Span::styled(err_line.to_string(), Style::default().fg(ERROR_FG)),
-                        ]));
-                    } else {
-                        lines.push(Line::from(Span::styled(
-                            format!("    {err_line}"),
-                            Style::default().fg(ERROR_FG),
-                        )));
+                    let wrapped = wrap_words(err_line, wrap_width);
+                    for (wi, wl) in wrapped.into_iter().enumerate() {
+                        if ei == 0 && wi == 0 {
+                            lines.push(Line::from(vec![
+                                Span::styled(
+                                    "  ✗ ",
+                                    Style::default().fg(ERROR_FG).add_modifier(Modifier::BOLD),
+                                ),
+                                Span::styled(wl, Style::default().fg(ERROR_FG)),
+                            ]));
+                        } else {
+                            lines.push(Line::from(Span::styled(
+                                format!("    {wl}"),
+                                Style::default().fg(ERROR_FG),
+                            )));
+                        }
                     }
                 }
             }
@@ -1373,6 +1389,23 @@ fn render_turn_separator(
         Span::styled(status, Style::default().fg(ACCENT)),
         Span::styled(format!(" {sep_right}"), Style::default().fg(SEPARATOR_FG)),
     ]));
+    for sa in &summary.subagent_summaries {
+        let cache_hint = if sa.cached_tokens > 0 && sa.prompt_tokens > 0 {
+            let pct = (sa.cached_tokens * 100) / sa.prompt_tokens;
+            format!("({}% cached) ", pct)
+        } else {
+            String::new()
+        };
+        let label: String = sa.label.chars().take(20).collect();
+        let sa_line = format!(
+            "    ◐ {label}: ↑{} {}↓{}",
+            sa.prompt_tokens, cache_hint, sa.completion_tokens
+        );
+        lines.push(Line::from(Span::styled(
+            sa_line,
+            Style::default().fg(TEXT_DIM),
+        )));
+    }
 }
 
 fn render_composer(f: &mut Frame, area: Rect, app: &App) {
@@ -1384,11 +1417,17 @@ fn render_composer(f: &mut Frame, area: Rect, app: &App) {
             AgentState::WaitingSubagents => "waiting agents…",
             _ => "working…",
         };
-        if app.pending.is_empty() {
+        let has_pending = !app.pending.is_empty();
+        let steer_hint = if app.steer_tx.is_some() && has_pending {
+            " · Alt+S:steer"
+        } else {
+            ""
+        };
+        if !has_pending {
             format!(" {} {state_label} ", app.spinner_char())
         } else {
             format!(
-                " {} {state_label} ({} queued) ",
+                " {} {state_label} ({} queued){steer_hint} ",
                 app.spinner_char(),
                 app.pending.len()
             )
@@ -1499,9 +1538,9 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let status = app.status_line();
     let busy = app.is_busy();
     let shortcuts = if busy {
-        "Ctrl+C:cancel  ↑↓:scroll  Shift+↑↓:history  Ctrl+4:agents  ?:help"
+        "Ctrl+C:cancel  ↑↓:scroll  Shift+↑↓:history  Ctrl/Alt+4:agents  ?:help"
     } else {
-        "Enter:send  Ctrl+C:quit  ↑↓:scroll  Shift+↑↓:history  Ctrl+4:agents  ?:help"
+        "Enter:send  Ctrl+C:quit  ↑↓:scroll  Shift+↑↓:history  Ctrl/Alt+4:agents  ?:help"
     };
 
     let available = area.width as usize;
@@ -1547,7 +1586,11 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         (
             "Editing",
             vec![
-                ("Enter", "Send message"),
+                ("Enter", "Send message / queue while busy"),
+                (
+                    "Alt+S",
+                    "Steer: inject queued message into running task",
+                ),
                 ("Ctrl+J / Alt+Enter", "Insert newline"),
                 ("Ctrl+C", "Cancel turn or quit"),
                 ("Ctrl+D", "Quit (empty input)"),
@@ -1570,7 +1613,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         (
             "Agents & Commands",
             vec![
-                ("Ctrl+4", "Cycle: sidebar / agent overlay / hide"),
+                ("Ctrl+4 / Alt+4", "Cycle: sidebar / agent overlay / hide"),
                 ("/agents", "Toggle agents sidebar"),
                 ("/help or ?", "Toggle this help"),
                 ("/clear", "Clear & reset session"),
@@ -1775,6 +1818,19 @@ fn format_summary(s: &super::app::TurnSummary) -> String {
     }
     parts.push(super::app::format_elapsed(s.elapsed));
     parts.join(" · ")
+}
+
+fn format_subagent_token_hint(usage: &SubagentTokenUsage) -> String {
+    let cache_hint = if usage.cached_tokens > 0 && usage.prompt_tokens > 0 {
+        let pct = (usage.cached_tokens * 100) / usage.prompt_tokens;
+        format!("({}% cached) ", pct)
+    } else {
+        String::new()
+    };
+    format!(
+        "↑{} {}↓{}",
+        usage.prompt_tokens, cache_hint, usage.completion_tokens
+    )
 }
 
 fn overlay_push_wrapped(
