@@ -86,6 +86,8 @@ pub struct AgentLoop {
     memory_enabled: AtomicBool,
     approval_callback: Arc<Mutex<Option<crate::tools::ApprovalCallback>>>,
     always_allow: Arc<Mutex<bool>>,
+    steer_rx: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<String>>>>,
+    steer_tx: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>>>,
 }
 
 impl AgentLoop {
@@ -171,6 +173,7 @@ impl AgentLoop {
             exec.clone(),
             restrict_to_workspace,
             memory_enabled,
+            resolved_context_window_tokens,
             approval_callback.clone(),
             always_allow.clone(),
             cancellations.clone(),
@@ -258,6 +261,8 @@ impl AgentLoop {
             memory_enabled: AtomicBool::new(memory_enabled),
             approval_callback,
             always_allow,
+            steer_rx: Arc::new(Mutex::new(None)),
+            steer_tx: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -284,6 +289,25 @@ impl AgentLoop {
         callback: Option<crate::engine::subtasks::SubagentNotificationCallback>,
     ) {
         self.subagents.set_notification_callback(callback);
+    }
+
+    pub fn setup_steer_channel(&self) -> tokio::sync::mpsc::UnboundedSender<String> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        *self.steer_rx.lock().expect("steer_rx lock poisoned") = Some(rx);
+        *self.steer_tx.lock().expect("steer_tx lock poisoned") = Some(tx.clone());
+        tx
+    }
+
+    pub fn steer_sender(&self) -> Option<tokio::sync::mpsc::UnboundedSender<String>> {
+        self.steer_tx
+            .lock()
+            .expect("steer_tx lock poisoned")
+            .clone()
+    }
+
+    pub fn clear_steer_channel(&self) {
+        *self.steer_rx.lock().expect("steer_rx lock poisoned") = None;
+        *self.steer_tx.lock().expect("steer_tx lock poisoned") = None;
     }
 
     pub async fn cancel_subagents(&self, session_key: &str) {
@@ -1082,6 +1106,25 @@ impl AgentLoop {
                 context_compressed = true;
                 compression_pending = false;
             }
+
+            {
+                let steer_messages: Vec<String> = {
+                    let mut rx_guard = self.steer_rx.lock().expect("steer_rx lock poisoned");
+                    let mut collected = Vec::new();
+                    if let Some(ref mut rx) = *rx_guard {
+                        while let Ok(msg) = rx.try_recv() {
+                            collected.push(msg);
+                        }
+                    }
+                    collected
+                };
+                for steer_msg in steer_messages {
+                    self.send_steer_hint(progress_target.as_ref(), &steer_msg)
+                        .await;
+                    messages.push(ChatMessage::text("user", steer_msg));
+                }
+            }
+
             iteration += 1;
             let defs = self.tools.definitions();
             let response = self
@@ -1354,6 +1397,26 @@ impl AgentLoop {
                         .await?;
                     context_compressed = true;
                 }
+
+                let steer_messages: Vec<String> = {
+                    let mut rx_guard = self.steer_rx.lock().expect("steer_rx lock poisoned");
+                    let mut collected = Vec::new();
+                    if let Some(ref mut rx) = *rx_guard {
+                        while let Ok(msg) = rx.try_recv() {
+                            collected.push(msg);
+                        }
+                    }
+                    collected
+                };
+                if !steer_messages.is_empty() {
+                    for steer_msg in steer_messages {
+                        self.send_steer_hint(progress_target.as_ref(), &steer_msg)
+                            .await;
+                        messages.push(ChatMessage::text("user", steer_msg));
+                    }
+                    continue;
+                }
+
                 final_content = content;
                 final_reasoning_content = response.reasoning_content.clone();
                 completed_normally = true;
@@ -1756,6 +1819,32 @@ impl AgentLoop {
             arguments,
         };
         self.send_tool_hint(target, &tool_call).await;
+    }
+
+    async fn send_steer_hint(&self, target: Option<&ProgressTarget>, content: &str) {
+        let Some(target) = target else {
+            return;
+        };
+        let callback = self
+            .progress_sender
+            .lock()
+            .expect("progress callback lock poisoned")
+            .clone();
+        let Some(callback) = callback else {
+            return;
+        };
+        let mut outbound = target.outbound(String::new());
+        outbound
+            .metadata
+            .insert("_progress".to_string(), Value::Bool(true));
+        outbound
+            .metadata
+            .insert("_steer_injected".to_string(), Value::Bool(true));
+        outbound.metadata.insert(
+            "_steer_content".to_string(),
+            Value::String(content.to_string()),
+        );
+        let _ = callback(outbound).await;
     }
 
     async fn send_context_update(

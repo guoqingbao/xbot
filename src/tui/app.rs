@@ -21,11 +21,20 @@ pub enum AgentState {
 }
 
 #[derive(Clone)]
+pub struct SubagentSummary {
+    pub label: String,
+    pub prompt_tokens: usize,
+    pub completion_tokens: usize,
+    pub cached_tokens: usize,
+}
+
+#[derive(Clone)]
 pub struct TurnSummary {
     pub prompt_tokens: usize,
     pub completion_tokens: usize,
     pub cached_tokens: usize,
     pub elapsed: Duration,
+    pub subagent_summaries: Vec<SubagentSummary>,
 }
 
 pub enum EngineEvent {
@@ -78,6 +87,9 @@ pub enum EngineEvent {
         label: String,
         result_preview: String,
         full_result: String,
+        prompt_tokens: usize,
+        completion_tokens: usize,
+        cached_tokens: usize,
     },
     SubagentFailed {
         task_id: String,
@@ -88,6 +100,7 @@ pub enum EngineEvent {
     SubagentCancelled {
         task_id: String,
     },
+    SteerInjected,
     CollapseThinking,
     ApprovalRequest {
         tool_name: String,
@@ -197,8 +210,11 @@ impl ActiveStreaming {
     pub fn push_text(&mut self, text: &str) {
         if let Some(StreamSegment::Text(s)) = self.segments.last_mut() {
             s.push_str(text);
+            post_strip_tool_markers(s);
         } else {
-            self.segments.push(StreamSegment::Text(text.to_string()));
+            let mut t = text.to_string();
+            post_strip_tool_markers(&mut t);
+            self.segments.push(StreamSegment::Text(t));
         }
     }
 
@@ -242,6 +258,13 @@ impl ActiveStreaming {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct SubagentTokenUsage {
+    pub prompt_tokens: usize,
+    pub completion_tokens: usize,
+    pub cached_tokens: usize,
+}
+
 #[derive(Clone)]
 #[allow(dead_code)]
 pub struct SubagentInfo {
@@ -258,6 +281,7 @@ pub struct SubagentInfo {
     pub text_chunks: Vec<String>,
     pub started_at: Instant,
     pub finished_at: Option<Instant>,
+    pub token_usage: Option<SubagentTokenUsage>,
 }
 
 pub struct LineBuffer {
@@ -508,6 +532,7 @@ pub struct App {
     pub session_overlay_index: usize,
     pub session_overlay_scroll: usize,
     pub available_sessions: Vec<xbot::storage::SessionSummary>,
+    pub steer_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
 }
 
 #[derive(Clone)]
@@ -591,6 +616,7 @@ impl App {
             session_overlay_index: 0,
             session_overlay_scroll: 0,
             available_sessions,
+            steer_tx: None,
         }
     }
 
@@ -665,6 +691,7 @@ impl App {
                 let streaming = self.active.get_or_insert_with(ActiveStreaming::default);
                 streaming.push_thinking(&clean);
             }
+            EngineEvent::SteerInjected => {}
             EngineEvent::CollapseThinking => {}
             EngineEvent::ToolHint {
                 tool_name,
@@ -673,7 +700,7 @@ impl App {
                 let name = tool_name.as_deref().unwrap_or("tool");
                 let detail = tool_args
                     .as_ref()
-                    .map(summarize_tool_args)
+                    .map(|args| summarize_tool_args_for_name(name, args))
                     .unwrap_or_default();
                 let diff = if matches!(name, "edit_file" | "write_file") {
                     extract_edit_diff(name, tool_args.as_ref())
@@ -833,6 +860,7 @@ impl App {
                     text_chunks: Vec::new(),
                     started_at: Instant::now(),
                     finished_at: None,
+                    token_usage: None,
                 };
                 self.subagents.insert(task_id.clone(), info);
                 if self.active.is_some() {
@@ -890,12 +918,22 @@ impl App {
                 label,
                 result_preview,
                 full_result,
+                prompt_tokens,
+                completion_tokens,
+                cached_tokens,
             } => {
                 if let Some(info) = self.subagents.get_mut(&task_id) {
                     info.status = SubagentStatus::Completed;
                     info.result_preview = Some(result_preview.clone());
                     info.full_result = Some(full_result.clone());
                     info.finished_at.get_or_insert_with(Instant::now);
+                    if prompt_tokens > 0 || completion_tokens > 0 {
+                        info.token_usage = Some(SubagentTokenUsage {
+                            prompt_tokens,
+                            completion_tokens,
+                            cached_tokens,
+                        });
+                    }
                 }
                 self.update_subagent_card(&task_id, |card| {
                     if let HistoryEntry::SubagentCard {
@@ -1485,11 +1523,25 @@ impl App {
                     self.show_sidebar = true;
                 }
             }
+            KeyCode::Char('s')
+                if key.modifiers.contains(KeyModifiers::ALT)
+                    && self.is_busy()
+                    && (!self.pending.is_empty() || !self.composer.input.trim().is_empty()) =>
+            {
+                self.send_steer();
+            }
             KeyCode::Enter => {
                 if key.modifiers.contains(KeyModifiers::ALT)
                     || key.modifiers.contains(KeyModifiers::SHIFT)
                 {
                     self.composer.insert_newline();
+                    return;
+                }
+                if self.is_busy()
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                    && (!self.pending.is_empty() || !self.composer.input.trim().is_empty())
+                {
+                    self.send_steer();
                     return;
                 }
                 let text = self.composer.input.trim().to_string();
@@ -1644,19 +1696,9 @@ impl App {
     }
 
     pub fn status_line(&self) -> String {
-        let state = match self.agent_state {
-            AgentState::Ready => "ready",
-            AgentState::Working => "working",
-            AgentState::WaitingSubagents => "waiting agents",
-            AgentState::Summarizing => "summarizing",
-        };
-        let mut parts = vec![state.to_string()];
-        let running = self.running_subagent_count();
-        if running > 0 {
-            parts.push(format!(
-                "{running} agent{}",
-                if running == 1 { "" } else { "s" }
-            ));
+        let mut parts: Vec<String> = Vec::new();
+        if self.agent_state == AgentState::Ready {
+            parts.push("ready".to_string());
         }
         if let Some(started_at) = self.active_turn_started_at {
             parts.push(format_elapsed(started_at.elapsed()));
@@ -1684,6 +1726,28 @@ impl App {
         text
     }
 
+    fn send_steer(&mut self) {
+        let steer_tx = self.steer_tx.clone();
+        let Some(tx) = steer_tx else { return };
+        self.flush_line_buffer();
+        self.flush_active_to_history();
+        let mut all_steer: Vec<String> = self
+            .pending
+            .drain(..)
+            .filter(|q| q.show_in_history)
+            .map(|q| q.prompt)
+            .collect();
+        let composer_text = self.take_composer_input();
+        if !composer_text.is_empty() {
+            all_steer.push(composer_text);
+        }
+        for msg in all_steer {
+            self.history.push(HistoryEntry::User(msg.clone()));
+            let _ = tx.send(msg);
+        }
+        self.auto_scroll = true;
+    }
+
     fn finish_turn_summary(&mut self, summary: Option<TurnSummary>) -> Option<TurnSummary> {
         let elapsed = self
             .active_turn_started_at
@@ -1693,6 +1757,19 @@ impl App {
             if let Some(elapsed) = elapsed {
                 summary.elapsed = elapsed;
             }
+            summary.subagent_summaries = self
+                .subagents
+                .values()
+                .filter_map(|info| {
+                    let usage = info.token_usage.as_ref()?;
+                    Some(SubagentSummary {
+                        label: info.label.clone(),
+                        prompt_tokens: usage.prompt_tokens,
+                        completion_tokens: usage.completion_tokens,
+                        cached_tokens: usage.cached_tokens,
+                    })
+                })
+                .collect();
             summary
         })
     }
@@ -1700,7 +1777,9 @@ impl App {
 
 fn is_agents_overlay_shortcut(key: &KeyEvent) -> bool {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
     matches!(key.code, KeyCode::Char('4') if ctrl)
+        || matches!(key.code, KeyCode::Char('4') if alt)
         || matches!(key.code, KeyCode::Char('\\') if ctrl)
         || matches!(key.code, KeyCode::Char('\u{1c}'))
 }
@@ -1822,6 +1901,37 @@ pub fn strip_ansi(text: &str) -> String {
     out
 }
 
+fn post_strip_tool_markers(text: &mut String) {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(
+            r"(?x)
+            </?tool_call> |
+            </?tool_response> |
+            </?tool_use> |
+            </?function_call> |
+            </?invoke[^>]*> |
+            </?parameter[^>]*> |
+            <\|/?tool_call\|?> |
+            <\|/?endoftoolcall\|?> |
+            <\|/?tool_response\|?>
+            ",
+        )
+        .unwrap()
+    });
+    let mut tail_start = text.len().saturating_sub(60);
+    while tail_start > 0 && !text.is_char_boundary(tail_start) {
+        tail_start -= 1;
+    }
+    let tail = &text[tail_start..];
+    if re.is_match(tail) {
+        let cleaned = re.replace_all(text.as_str(), "");
+        if cleaned.len() != text.len() {
+            *text = cleaned.into_owned();
+        }
+    }
+}
+
 fn strip_tool_markers(text: &str) -> String {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
@@ -1902,6 +2012,31 @@ fn extract_edit_diff(tool_name: &str, args: Option<&Value>) -> Option<EditDiff> 
         }
         _ => None,
     }
+}
+
+fn summarize_tool_args_for_name(tool_name: &str, args: &Value) -> String {
+    if tool_name == "grep_files" {
+        if let Value::Object(map) = args {
+            let mut parts = Vec::new();
+            if let Some(pattern) = map.get("pattern").and_then(|v| v.as_str()) {
+                parts.push(format!("/{}/", truncate_mid(pattern.trim(), 32)));
+            }
+            if let Some(path) = map.get("path").and_then(|v| v.as_str()) {
+                let filename = std::path::Path::new(path)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_else(|| truncate_mid(path, 40));
+                parts.push(filename);
+            }
+            if let Some(include) = map.get("include").and_then(|v| v.as_str()) {
+                parts.push(format!("include={}", truncate_mid(include.trim(), 24)));
+            }
+            if !parts.is_empty() {
+                return parts.join(" · ");
+            }
+        }
+    }
+    summarize_tool_args(args)
 }
 
 fn summarize_tool_args(args: &Value) -> String {
@@ -2436,6 +2571,7 @@ mod tests {
                 completion_tokens: 0,
                 cached_tokens: 0,
                 elapsed: Duration::from_millis(1),
+                subagent_summaries: Vec::new(),
             },
         });
 
@@ -2468,7 +2604,7 @@ mod tests {
         app.agent_state = AgentState::Working;
         app.active_turn_started_at = Some(Instant::now() - Duration::from_secs(65));
 
-        assert_eq!(app.status_line(), "working · 1m 5s");
+        assert_eq!(app.status_line(), "1m 5s");
     }
 
     #[test]
@@ -2490,6 +2626,9 @@ mod tests {
             label: "test task".into(),
             result_preview: "done".into(),
             full_result: "done fully".into(),
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            cached_tokens: 30,
         });
         assert_eq!(app.running_subagent_count(), 0);
         assert_eq!(
