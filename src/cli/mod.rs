@@ -732,9 +732,9 @@ impl StreamRenderer {
             if !state.in_reasoning {
                 state.in_reasoning = true;
                 state.reasoning_streamed = true;
-                target.write_raw(target.style.subtle("  · · · reasoning · · ·\n"));
+                target.write_raw(target.style.dim("  Thinking Process:\n"));
             }
-            let styled = target.style.subtle(&delta);
+            let styled = target.style.italic(&target.style.dim(&delta));
             target.write_raw(&styled);
         })))
     }
@@ -897,9 +897,14 @@ impl StreamRenderer {
             return String::new();
         }
         let mut out = String::new();
-        out.push_str(&self.target.style.subtle("\n· · · reasoning · · ·\n"));
+        out.push_str(&self.target.style.dim("\n  Thinking Process:\n"));
         for line in lines {
-            out.push_str(&self.target.style.subtle(format!("  {line}\n")));
+            out.push_str(
+                &self
+                    .target
+                    .style
+                    .italic(&self.target.style.dim(format!("  {line}\n"))),
+            );
         }
         out
     }
