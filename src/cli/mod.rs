@@ -1174,7 +1174,12 @@ fn render_rounded_panel(style: &Style, title: &str, rows: &[(String, String)]) -
         .max()
         .unwrap_or(0)
         .max(char_width(title) + 1);
-    let content_width = natural_width.clamp(30, available_panel_width());
+    let avail = available_panel_width();
+    let content_width = if natural_width > avail / 2 {
+        avail
+    } else {
+        natural_width.max(30)
+    };
     let top_fill = content_width.saturating_sub(char_width(title) + 1);
 
     let mut out = vec![format!(
