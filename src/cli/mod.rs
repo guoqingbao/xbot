@@ -732,7 +732,7 @@ impl StreamRenderer {
             if !state.in_reasoning {
                 state.in_reasoning = true;
                 state.reasoning_streamed = true;
-                target.write_raw(target.style.dim("  Thinking Process:\n"));
+                target.write_raw(target.style.dim("  Thinking Process: "));
             }
             let styled = target.style.italic(&target.style.dim(&delta));
             target.write_raw(&styled);
@@ -801,19 +801,21 @@ impl StreamRenderer {
             lines
         };
 
+        let max_line_w = panel_w.saturating_sub(8);
         let mut rows: Vec<(String, String)> = Vec::new();
         for (i, line) in preview_lines.iter().enumerate() {
-            let truncated: String = line.chars().take(panel_w.saturating_sub(10)).collect();
+            let plain: String = line.chars().take(max_line_w).collect();
             let styled = if success {
-                self.target.style.subtle(&truncated)
+                self.target.style.subtle(&plain)
             } else {
-                self.target.style.error(&truncated)
+                self.target.style.error(&plain)
             };
-            if i == 0 {
-                rows.push(("→".to_string(), styled));
+            let label = if i == 0 {
+                "→".to_string()
             } else {
-                rows.push((String::new(), styled));
-            }
+                String::new()
+            };
+            rows.push((label, styled));
         }
         if rows.is_empty() {
             rows.push(("→".to_string(), self.target.style.subtle("(empty)")));
@@ -920,14 +922,23 @@ impl StreamRenderer {
             return String::new();
         }
         let mut out = String::new();
-        out.push_str(&self.target.style.dim("\n  Thinking Process:\n"));
-        for line in lines {
-            out.push_str(
-                &self
-                    .target
-                    .style
-                    .italic(&self.target.style.dim(format!("  {line}\n"))),
-            );
+        out.push_str(&self.target.style.dim("\n  Thinking Process: "));
+        for (i, line) in lines.iter().enumerate() {
+            if i == 0 {
+                out.push_str(
+                    &self
+                        .target
+                        .style
+                        .italic(&self.target.style.dim(format!("{line}\n"))),
+                );
+            } else {
+                out.push_str(
+                    &self
+                        .target
+                        .style
+                        .italic(&self.target.style.dim(format!("  {line}\n"))),
+                );
+            }
         }
         out
     }
