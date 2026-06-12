@@ -485,6 +485,18 @@ impl SessionManager {
         self.cache.remove(key);
     }
 
+    pub fn delete(&mut self, key: &str) -> Result<bool> {
+        let path = self.session_path(key);
+        self.cache.remove(key);
+        if path.exists() {
+            fs::remove_file(&path)
+                .with_context(|| format!("failed to delete session file {}", path.display()))?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     pub fn list_sessions(&self) -> Result<Vec<String>> {
         let mut names = Vec::new();
         for entry in fs::read_dir(&self.sessions_dir)? {

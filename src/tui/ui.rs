@@ -1587,10 +1587,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
             "Editing",
             vec![
                 ("Enter", "Send message / queue while busy"),
-                (
-                    "Alt+S",
-                    "Steer: inject queued message into running task",
-                ),
+                ("Alt+S", "Steer: inject queued message into running task"),
                 ("Ctrl+J / Alt+Enter", "Insert newline"),
                 ("Ctrl+C", "Cancel turn or quit"),
                 ("Ctrl+D", "Quit (empty input)"),
@@ -1620,7 +1617,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
                 ("/exit or /quit", "Exit xbot"),
                 ("/stop", "Cancel current turn"),
                 ("/new", "Start new session"),
-                ("/session", "Switch between sessions"),
+                ("/session", "Switch / delete sessions"),
                 ("/model [name]", "Switch or show model"),
                 ("/memorize <text>", "Save to memory"),
                 ("/status", "Show session status"),
@@ -2104,9 +2101,12 @@ fn render_session_overlay(f: &mut Frame, area: Rect, app: &mut super::app::App) 
     let idx = app.session_overlay_index.min(count.saturating_sub(1));
     app.session_overlay_index = idx;
 
+    let pending_delete = app.session_delete_confirm;
+
     for (i, s) in app.available_sessions.iter().enumerate() {
         let is_selected = i == idx;
         let is_current = s.key == app.session_key;
+        let is_delete_target = pending_delete == Some(i);
         let marker = if is_current { "● " } else { "  " };
         let prefix = if is_selected { "▸ " } else { "  " };
 
@@ -2115,7 +2115,11 @@ fn render_session_overlay(f: &mut Frame, area: Rect, app: &mut super::app::App) 
         let tokens = format_session_context_tokens(s.context_tokens);
         let detail = format!("{} msgs · {} · {}", s.message_count, tokens, ago);
 
-        let title_style = if is_selected {
+        let title_style = if is_delete_target {
+            Style::default()
+                .fg(Color::Rgb(255, 100, 100))
+                .add_modifier(Modifier::BOLD)
+        } else if is_selected {
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
         } else if is_current {
             Style::default().fg(Color::Rgb(160, 200, 240))
@@ -2123,22 +2127,30 @@ fn render_session_overlay(f: &mut Frame, area: Rect, app: &mut super::app::App) 
             Style::default().fg(TEXT_MUTED)
         };
 
-        let detail_style = if is_selected {
+        let detail_style = if is_delete_target {
+            Style::default().fg(Color::Rgb(200, 80, 80))
+        } else if is_selected {
             Style::default().fg(Color::Rgb(140, 160, 180))
         } else {
             Style::default().fg(TEXT_DIM)
         };
 
+        let marker_style = if is_delete_target {
+            Style::default().fg(Color::Rgb(255, 100, 100))
+        } else if is_current {
+            Style::default().fg(ACCENT)
+        } else {
+            Style::default().fg(TEXT_DIM)
+        };
+
         lines.push(Line::from(vec![
-            Span::styled(
-                format!("{marker}{prefix}"),
-                if is_current {
-                    Style::default().fg(ACCENT)
-                } else {
-                    Style::default().fg(TEXT_DIM)
-                },
-            ),
+            Span::styled(format!("{marker}{prefix}"), marker_style),
             Span::styled(title, title_style),
+            if is_delete_target {
+                Span::styled(" ✗ delete?", Style::default().fg(Color::Rgb(255, 120, 120)))
+            } else {
+                Span::raw("")
+            },
         ]));
         lines.push(Line::from(vec![
             Span::raw("      "),
@@ -2175,15 +2187,58 @@ fn render_session_overlay(f: &mut Frame, area: Rect, app: &mut super::app::App) 
 
     f.render_widget(para, popup);
 
-    let footer_str = " ↑/↓:select  Enter:switch  Esc:close ";
-    let footer_line = Line::from(Span::styled(footer_str, Style::default().fg(TEXT_DIM)));
-    let footer_x = popup.x + (popup.width.saturating_sub(footer_str.len() as u16)) / 2;
+    let footer_spans = if app.session_delete_confirm.is_some() {
+        vec![
+            Span::styled(
+                " Delete this session? ",
+                Style::default().fg(Color::Rgb(255, 120, 120)),
+            ),
+            Span::styled(
+                "y",
+                Style::default()
+                    .fg(Color::Rgb(255, 100, 100))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("es / ", Style::default().fg(TEXT_DIM)),
+            Span::styled(
+                "n",
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("o ", Style::default().fg(TEXT_DIM)),
+        ]
+    } else {
+        let is_current = app
+            .available_sessions
+            .get(app.session_overlay_index)
+            .is_some_and(|s| s.key == app.session_key);
+        let mut spans = vec![
+            Span::styled(" ↑↓", Style::default().fg(TEXT_MUTED)),
+            Span::styled(":select  ", Style::default().fg(TEXT_DIM)),
+            Span::styled("Enter", Style::default().fg(TEXT_MUTED)),
+            Span::styled(":switch  ", Style::default().fg(TEXT_DIM)),
+            Span::styled("d", Style::default().fg(Color::Rgb(255, 140, 140))),
+            Span::styled(":delete  ", Style::default().fg(TEXT_DIM)),
+        ];
+        if is_current {
+            spans.push(Span::styled(
+                "c",
+                Style::default().fg(Color::Rgb(255, 200, 100)),
+            ));
+            spans.push(Span::styled(":clear  ", Style::default().fg(TEXT_DIM)));
+        }
+        spans.push(Span::styled("Esc", Style::default().fg(TEXT_MUTED)));
+        spans.push(Span::styled(":close ", Style::default().fg(TEXT_DIM)));
+        spans
+    };
+    let footer_line = Line::from(footer_spans.clone());
+    let footer_width: usize = footer_spans.iter().map(|s| s.content.len()).sum();
+    let footer_x = popup.x + (popup.width.saturating_sub(footer_width as u16)) / 2;
     let footer_y = popup.y + popup.height - 1;
     if footer_y < area.height && footer_x < area.width {
         let footer_area = Rect::new(
             footer_x,
             footer_y,
-            (footer_str.len() as u16).min(area.width - footer_x),
+            (footer_width as u16).min(area.width - footer_x),
             1,
         );
         f.render_widget(Paragraph::new(footer_line), footer_area);

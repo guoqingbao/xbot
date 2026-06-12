@@ -531,6 +531,8 @@ pub struct App {
     pub show_session_overlay: bool,
     pub session_overlay_index: usize,
     pub session_overlay_scroll: usize,
+    pub session_delete_confirm: Option<usize>,
+    pub session_delete_queue: Vec<String>,
     pub available_sessions: Vec<xbot::storage::SessionSummary>,
     pub steer_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
 }
@@ -573,7 +575,8 @@ impl App {
                 session_title, session_msg_count, context_status
             )));
             history.push(HistoryEntry::SessionHint(
-                "Use /session to switch sessions, /new to start fresh.".to_string(),
+                "Use /session to switch, delete, or clear sessions, /new to start fresh."
+                    .to_string(),
             ));
         }
         Self {
@@ -615,6 +618,8 @@ impl App {
             show_session_overlay: false,
             session_overlay_index: 0,
             session_overlay_scroll: 0,
+            session_delete_confirm: None,
+            session_delete_queue: Vec::new(),
             available_sessions,
             steer_tx: None,
         }
@@ -1422,6 +1427,42 @@ impl App {
         }
 
         if self.show_session_overlay {
+            if let Some(confirm_idx) = self.session_delete_confirm {
+                match key.code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                        if let Some(s) = self.available_sessions.get(confirm_idx) {
+                            let del_key = s.key.clone();
+                            let is_current = del_key == self.session_key;
+                            self.session_delete_queue.push(del_key);
+                            self.available_sessions.remove(confirm_idx);
+                            if self.session_overlay_index >= self.available_sessions.len()
+                                && self.session_overlay_index > 0
+                            {
+                                self.session_overlay_index -= 1;
+                            }
+                            if is_current && !self.available_sessions.is_empty() {
+                                let fallback = &self.available_sessions[0];
+                                let new_key = fallback.key.clone();
+                                let new_title = fallback.title.clone();
+                                let new_msg_count = fallback.message_count;
+                                self.session_delete_confirm = None;
+                                self.show_session_overlay = false;
+                                self.switch_to_session(new_key, new_title, new_msg_count);
+                                return;
+                            }
+                        }
+                        self.session_delete_confirm = None;
+                        if self.available_sessions.is_empty() {
+                            self.show_session_overlay = false;
+                        }
+                    }
+                    _ => {
+                        self.session_delete_confirm = None;
+                    }
+                }
+                return;
+            }
+
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => {
                     self.show_session_overlay = false;
@@ -1446,6 +1487,23 @@ impl App {
                         self.show_session_overlay = false;
                         if new_key != self.session_key {
                             self.switch_to_session(new_key, new_title, new_msg_count);
+                        }
+                    }
+                }
+                KeyCode::Char('d') | KeyCode::Delete => {
+                    if !self.available_sessions.is_empty() {
+                        self.session_delete_confirm = Some(self.session_overlay_index);
+                    }
+                }
+                KeyCode::Char('c') => {
+                    if let Some(selected) = self.available_sessions.get(self.session_overlay_index)
+                    {
+                        if selected.key == self.session_key {
+                            self.show_session_overlay = false;
+                            self.reset_session_view();
+                            self.pending.clear();
+                            self.pending
+                                .push_back(QueuedPrompt::internal("/new".to_string()));
                         }
                     }
                 }
@@ -2368,7 +2426,7 @@ mod tests {
         assert!(matches!(
             &app.history[1],
             HistoryEntry::SessionHint(text)
-                if text == "Use /session to switch sessions, /new to start fresh."
+                if text == "Use /session to switch, delete, or clear sessions, /new to start fresh."
         ));
     }
 
