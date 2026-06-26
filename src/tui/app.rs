@@ -84,7 +84,6 @@ pub enum EngineEvent {
     },
     SubagentCompleted {
         task_id: String,
-        label: String,
         result_preview: String,
         full_result: String,
         prompt_tokens: usize,
@@ -519,7 +518,6 @@ pub struct App {
     pub animation_frame: u16,
 
     pub subagents: BTreeMap<String, SubagentInfo>,
-    pub pending_subagent_results: Vec<(String, String, String)>,
     held_turn: Option<HeldTurn>,
 
     pub approval_dialog: Option<ApprovalDialog>,
@@ -608,7 +606,6 @@ impl App {
             active_turn_started_at: None,
             animation_frame: 0,
             subagents: BTreeMap::new(),
-            pending_subagent_results: Vec::new(),
             held_turn: None,
             approval_dialog: None,
             approval_responder: None,
@@ -780,17 +777,6 @@ impl App {
                     });
                     self.agent_state = AgentState::WaitingSubagents;
                     self.auto_scroll = true;
-                } else if !self.pending_subagent_results.is_empty() {
-                    let had_streamed_text =
-                        self.active.as_ref().is_some_and(|a| a.has_text_content());
-                    self.flush_active_to_history();
-                    if !had_streamed_text && !clean_content.trim().is_empty() {
-                        self.history.push(HistoryEntry::Assistant {
-                            content: clean_content,
-                            reasoning: effective_reasoning,
-                        });
-                    }
-                    self.build_and_push_continuation();
                 } else {
                     self.finalize_turn(
                         Some(clean_content),
@@ -812,9 +798,6 @@ impl App {
                     });
                     self.agent_state = AgentState::WaitingSubagents;
                     self.auto_scroll = true;
-                } else if !self.pending_subagent_results.is_empty() {
-                    self.flush_active_to_history();
-                    self.build_and_push_continuation();
                 } else {
                     self.finalize_turn(None, None, Some(summary), Some(note));
                 }
@@ -826,8 +809,6 @@ impl App {
                 if self.running_subagent_count() > 0 {
                     self.agent_state = AgentState::WaitingSubagents;
                     self.auto_scroll = true;
-                } else if !self.pending_subagent_results.is_empty() {
-                    self.build_and_push_continuation();
                 } else {
                     self.agent_state = AgentState::Ready;
                     self.auto_scroll = true;
@@ -920,7 +901,6 @@ impl App {
             }
             EngineEvent::SubagentCompleted {
                 task_id,
-                label,
                 result_preview,
                 full_result,
                 prompt_tokens,
@@ -951,8 +931,6 @@ impl App {
                         *rp = Some(result_preview.clone());
                     }
                 });
-                self.pending_subagent_results
-                    .push((task_id, label, full_result));
                 self.check_all_subagents_done();
             }
             EngineEvent::SubagentFailed { task_id, error, .. } => {
@@ -1013,50 +991,15 @@ impl App {
         if self.agent_state != AgentState::WaitingSubagents {
             return;
         }
-        if self.pending_subagent_results.is_empty() {
-            if let Some(held) = self.held_turn.take() {
-                self.finalize_turn(held.content, held.reasoning, held.summary, held.note);
-            } else {
-                self.agent_state = AgentState::Ready;
-                self.active_turn_started_at = None;
-                self.auto_scroll = true;
-                self.needs_redraw = true;
-                self.maybe_dequeue();
-            }
-            return;
-        }
-        self.held_turn = None;
-        self.build_and_push_continuation();
-    }
-
-    fn build_and_push_continuation(&mut self) {
-        let results = std::mem::take(&mut self.pending_subagent_results);
-        if results.is_empty() {
+        if let Some(held) = self.held_turn.take() {
+            self.finalize_turn(held.content, held.reasoning, held.summary, held.note);
+        } else {
             self.agent_state = AgentState::Ready;
+            self.active_turn_started_at = None;
             self.auto_scroll = true;
             self.needs_redraw = true;
-            return;
+            self.maybe_dequeue();
         }
-        let mut continuation = String::new();
-        for (task_id, label, result) in &results {
-            if !continuation.is_empty() {
-                continuation.push_str("\n\n---\n\n");
-            }
-            let task = self
-                .subagents
-                .get(task_id)
-                .map(|info| info.task.as_str())
-                .unwrap_or("unknown task");
-            continuation.push_str(&format!(
-                "[Subagent '{label}' completed]\n\nTask: {task}\n\nResult:\n{result}\n\n\
-                 Continue the task using these results. \
-                 Summarize for the user what was accomplished."
-            ));
-        }
-        self.agent_state = AgentState::Ready;
-        self.auto_scroll = true;
-        self.needs_redraw = true;
-        self.pending.push_back(QueuedPrompt::internal(continuation));
     }
 
     fn update_subagent_card(&mut self, task_id: &str, f: impl Fn(&mut HistoryEntry)) {
@@ -1280,7 +1223,6 @@ impl App {
         self.active_turn_started_at = None;
         self.session_msg_count = 0;
         self.subagents.clear();
-        self.pending_subagent_results.clear();
         self.held_turn = None;
         self.show_sidebar = false;
         self.show_subagent_overlay = false;
@@ -2233,6 +2175,16 @@ mod tests {
         )
     }
 
+    fn test_summary() -> TurnSummary {
+        TurnSummary {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            cached_tokens: 0,
+            elapsed: Duration::from_millis(1),
+            subagent_summaries: Vec::new(),
+        }
+    }
+
     #[test]
     fn enter_while_busy_queues_without_history_entry() {
         let mut app = test_app();
@@ -2624,13 +2576,7 @@ mod tests {
         app.handle_engine_event(EngineEvent::TurnComplete {
             content: "first\nsecond\n- item".to_string(),
             reasoning: None,
-            summary: TurnSummary {
-                prompt_tokens: 0,
-                completion_tokens: 0,
-                cached_tokens: 0,
-                elapsed: Duration::from_millis(1),
-                subagent_summaries: Vec::new(),
-            },
+            summary: test_summary(),
         });
 
         let assistant = app.history.iter().find_map(|entry| match entry {
@@ -2681,7 +2627,6 @@ mod tests {
 
         app.handle_engine_event(EngineEvent::SubagentCompleted {
             task_id: "abc".into(),
-            label: "test task".into(),
             result_preview: "done".into(),
             full_result: "done fully".into(),
             prompt_tokens: 100,
@@ -2694,6 +2639,77 @@ mod tests {
             SubagentStatus::Completed
         );
         assert!(app.subagents.get("abc").unwrap().finished_at.is_some());
+    }
+
+    #[test]
+    fn completed_subagent_does_not_queue_duplicate_continuation_after_turn_complete() {
+        let mut app = test_app();
+        app.agent_state = AgentState::Working;
+        app.handle_engine_event(EngineEvent::SubagentStarted {
+            task_id: "abc".into(),
+            label: "delegate".into(),
+            task: "do something".into(),
+            model: "sub-model".into(),
+        });
+        app.handle_engine_event(EngineEvent::SubagentCompleted {
+            task_id: "abc".into(),
+            result_preview: "done".into(),
+            full_result: "done fully".into(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            cached_tokens: 0,
+        });
+
+        app.handle_engine_event(EngineEvent::TurnComplete {
+            content: "final answer".into(),
+            reasoning: None,
+            summary: test_summary(),
+        });
+
+        assert!(app.pending.is_empty());
+        assert_eq!(app.agent_state, AgentState::Ready);
+        assert!(
+            app.history
+                .iter()
+                .any(|entry| matches!(entry, HistoryEntry::Assistant { content, .. } if content == "final answer"))
+        );
+    }
+
+    #[test]
+    fn held_turn_finalizes_when_running_subagent_finishes() {
+        let mut app = test_app();
+        app.agent_state = AgentState::Working;
+        app.handle_engine_event(EngineEvent::SubagentStarted {
+            task_id: "abc".into(),
+            label: "delegate".into(),
+            task: "do something".into(),
+            model: "sub-model".into(),
+        });
+        app.handle_engine_event(EngineEvent::TurnComplete {
+            content: "final after wait".into(),
+            reasoning: None,
+            summary: test_summary(),
+        });
+
+        assert_eq!(app.agent_state, AgentState::WaitingSubagents);
+        assert!(app.pending.is_empty());
+
+        app.handle_engine_event(EngineEvent::SubagentCompleted {
+            task_id: "abc".into(),
+            result_preview: "done".into(),
+            full_result: "done fully".into(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            cached_tokens: 0,
+        });
+
+        assert!(app.pending.is_empty());
+        assert_eq!(app.agent_state, AgentState::Ready);
+        assert!(
+            app.history.iter().any(
+                |entry| matches!(entry, HistoryEntry::Assistant { content, .. } if content == "final after wait")
+            )
+        );
     }
 
     #[test]
@@ -2749,8 +2765,6 @@ mod tests {
         app.session_msg_count = 3;
         app.pending
             .push_back(QueuedPrompt::user("stale queued".into()));
-        app.pending_subagent_results
-            .push(("abc".into(), "delegate".into(), "done fully".into()));
         app.held_turn = Some(HeldTurn {
             content: Some("held".into()),
             reasoning: None,
@@ -2771,7 +2785,6 @@ mod tests {
 
         assert!(app.history.is_empty());
         assert!(app.subagents.is_empty());
-        assert!(app.pending_subagent_results.is_empty());
         assert!(app.held_turn.is_none());
         assert!(!app.show_sidebar);
         assert_eq!(app.session_msg_count, 0);

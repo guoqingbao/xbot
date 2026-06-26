@@ -160,7 +160,7 @@ pub async fn run_tui_repl(
             }
             SubagentNotification::Completed {
                 task_id,
-                label,
+                label: _,
                 result_preview,
                 full_result,
                 prompt_tokens,
@@ -168,7 +168,6 @@ pub async fn run_tui_repl(
                 cached_tokens,
             } => EngineEvent::SubagentCompleted {
                 task_id,
-                label,
                 result_preview,
                 full_result,
                 prompt_tokens,

@@ -1006,6 +1006,22 @@ pub mod tests {
     }
 
     #[test]
+    fn footer_shortcuts_truncate_on_char_boundaries() {
+        let shortcuts = [
+            "Ctrl+C:cancel  ↑↓:scroll  Shift+↑↓:history  Ctrl/Alt+4:agents  ?:help",
+            "Enter:send  Ctrl+C:quit  ↑↓:scroll  Shift+↑↓:history  Ctrl/Alt+4:agents  ?:help",
+        ];
+
+        for shortcut in shortcuts {
+            for width in 0..=UnicodeWidthStr::width(shortcut) {
+                let truncated = truncate_display_width(shortcut, width);
+                assert!(shortcut.is_char_boundary(truncated.len()));
+                assert!(UnicodeWidthStr::width(truncated.as_str()) <= width);
+            }
+        }
+    }
+
+    #[test]
     fn distinct_subagent_models_keeps_same_provider_different_model_visible() {
         let mut app = test_app_with_model("Qwen3.6-27B-FP8", None);
 
@@ -1544,17 +1560,19 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let available = area.width as usize;
-    let right_len = status.chars().count();
+    let status_width = UnicodeWidthStr::width(status.as_str());
     let sep = " │ ";
-    let left_space = available.saturating_sub(right_len + sep.len() + 2);
+    let sep_width = UnicodeWidthStr::width(sep);
+    let left_space = available.saturating_sub(status_width + sep_width + 2);
 
-    let left_text = if shortcuts.len() > left_space {
-        &shortcuts[..left_space.min(shortcuts.len())]
+    let left_text = if UnicodeWidthStr::width(shortcuts) > left_space {
+        truncate_display_width(shortcuts, left_space)
     } else {
-        shortcuts
+        shortcuts.to_string()
     };
 
-    let padding = available.saturating_sub(left_text.len() + sep.len() + right_len + 2);
+    let left_width = UnicodeWidthStr::width(left_text.as_str());
+    let padding = available.saturating_sub(left_width + sep_width + status_width + 2);
 
     let status_color = match app.agent_state {
         AgentState::Working => WORKING_FG,
@@ -2069,6 +2087,20 @@ fn truncate_end(text: &str, max: usize) -> String {
         out.push('…');
         out
     }
+}
+
+fn truncate_display_width(text: &str, max_width: usize) -> String {
+    let mut out = String::new();
+    let mut width = 0usize;
+    for ch in text.chars() {
+        let ch_width = char_display_width(ch);
+        if width + ch_width > max_width {
+            break;
+        }
+        out.push(ch);
+        width += ch_width;
+    }
+    out
 }
 
 fn format_session_context_tokens(tokens: Option<usize>) -> String {
