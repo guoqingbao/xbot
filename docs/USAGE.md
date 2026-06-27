@@ -1089,6 +1089,42 @@ Cursor requires an explicit `apiBase`:
 }
 ```
 
+### Embedded SearXNG (Native Rust)
+
+The `searxng-embedded` provider enables native, in-process web search using the `searxng-rs` Rust library. This runs without a separate HTTP server and supports advanced query syntax (e.g., `!code`, `!github`, `:lang`).
+
+**Enable in config:**
+
+```json
+{
+  "tools": {
+    "web": {
+      "search": {
+        "provider": "searxng-embedded",
+        "maxResults": 10
+      }
+    }
+  }
+}
+```
+
+**Build with the feature:**
+
+```bash
+cargo build --features searxng-embedded
+```
+
+**Optional Configuration:**
+
+- `SEARXNG_SETTINGS_PATH`: Path to a custom `settings.yml` (defaults to standard paths if omitted).
+- `ALL_PROXY`: Set to `socks5h://127.0.0.1:9050` to enable Tor/Ahmia engine support.
+
+**Usage:**
+
+The agent can now use advanced query syntax like `!code rust` or `!github searxng-rs` directly through the embedded engine. Results include titles, URLs, and snippets formatted consistently with other providers.
+
+**Note:** This feature requires the `searxng-embedded` Cargo feature to be enabled at compile time. If configured but not compiled, the tool will return a helpful error message directing you to rebuild with the feature flag.
+
 ## 13. Concurrency Configuration
 
 Control how many inbound messages are processed concurrently:

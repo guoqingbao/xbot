@@ -132,6 +132,16 @@ The `ChannelManager` dispatch loop handles:
 - configurable retry with exponential backoff (`send_max_retries`, default 3)
 - muted tool hint batching and summary generation
 
+## Web Search Providers
+
+`xbot` supports multiple web search backends through the `web_search` tool:
+
+- **duckduckgo**: Default provider using HTML scraping. No API key required.
+- **searxng**: Remote SearXNG instance via JSON API. Requires `base_url` configuration.
+- **searxng-embedded**: Native Rust library integration (requires `--features searxng-embedded`). Supports advanced query syntax (`!code`, `!github`, `:lang`) and Tor/Ahmia engines via proxy configuration.
+
+The embedded provider runs without a separate HTTP server and uses default engine configurations unless a custom `settings.yml` is provided via `SEARXNG_SETTINGS_PATH`.
+
 ## Local Provider Support
 
 Local providers are treated as normal backends when they expose an OpenAI-style API. The runtime does not require an API key for known local engines such as:
