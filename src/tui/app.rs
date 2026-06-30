@@ -2102,7 +2102,13 @@ fn truncate_mid(text: &str, max: usize) -> String {
     if len <= max {
         return text.to_string();
     }
-    let head = max / 2 - 1;
+    if max == 0 {
+        return String::new();
+    }
+    if max == 1 {
+        return "…".to_string();
+    }
+    let head = max / 2;
     let tail = max - head - 1;
     let start: String = text.chars().take(head).collect();
     let end: String = text
@@ -2792,5 +2798,13 @@ mod tests {
         let queued = app.pending.front().unwrap();
         assert_eq!(queued.prompt, "/new");
         assert!(!queued.show_in_history);
+    }
+
+    #[test]
+    fn truncate_mid_handles_tiny_widths() {
+        assert_eq!(truncate_mid("abcdef", 0), "");
+        assert_eq!(truncate_mid("abcdef", 1), "…");
+        assert_eq!(truncate_mid("abcdef", 2), "a…");
+        assert_eq!(truncate_mid("abcdef", 3), "a…f");
     }
 }

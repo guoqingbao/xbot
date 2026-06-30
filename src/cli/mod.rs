@@ -2343,7 +2343,10 @@ fn truncate_middle(text: &str, max_chars: usize) -> String {
     if chars <= max_chars {
         return text.to_string();
     }
-    let head = max_chars / 2 - 2;
+    if max_chars <= 3 {
+        return ".".repeat(max_chars);
+    }
+    let head = ((max_chars - 3) / 2).max(1);
     let tail = max_chars.saturating_sub(head + 3);
     let start = text.chars().take(head).collect::<String>();
     let end = text
@@ -2403,6 +2406,14 @@ mod tests {
         let value = truncate_middle("/very/long/path/to/a/project/workspace/directory", 20);
         assert!(value.contains("..."));
         assert!(value.len() <= 20);
+    }
+
+    #[test]
+    fn truncates_middle_for_tiny_widths() {
+        assert_eq!(truncate_middle("abcdef", 0), "");
+        assert_eq!(truncate_middle("abcdef", 1), ".");
+        assert_eq!(truncate_middle("abcdef", 3), "...");
+        assert_eq!(truncate_middle("abcdef", 4), "a...");
     }
 
     #[test]

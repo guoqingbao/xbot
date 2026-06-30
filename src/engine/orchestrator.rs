@@ -28,7 +28,7 @@ use crate::tools::{
     ReadFileTool, SpawnTool, ToolOutput, ToolRegistry, WaitSubagentsTool, WebFetchTool,
     WebSearchTool, WriteFileTool,
 };
-use crate::util::{build_status_content, workspace_state_dir};
+use crate::util::{build_status_content, truncate_chars_ellipsis, workspace_state_dir};
 
 pub type ModelSwitchCallback = Arc<dyn Fn(String, Option<usize>) -> Result<()> + Send + Sync>;
 
@@ -1694,35 +1694,17 @@ impl AgentLoop {
                 let preview = if all_lines.len() <= 8 {
                     all_lines
                         .iter()
-                        .map(|l| {
-                            if l.len() > 100 {
-                                format!("{}…", &l[..99])
-                            } else {
-                                l.to_string()
-                            }
-                        })
+                        .map(|l| truncate_chars_ellipsis(l, 100))
                         .collect::<Vec<_>>()
                         .join("\n")
                 } else {
                     let head: Vec<String> = all_lines[..4]
                         .iter()
-                        .map(|l| {
-                            if l.len() > 100 {
-                                format!("{}…", &l[..99])
-                            } else {
-                                l.to_string()
-                            }
-                        })
+                        .map(|l| truncate_chars_ellipsis(l, 100))
                         .collect();
                     let tail: Vec<String> = all_lines[all_lines.len() - 4..]
                         .iter()
-                        .map(|l| {
-                            if l.len() > 100 {
-                                format!("{}…", &l[..99])
-                            } else {
-                                l.to_string()
-                            }
-                        })
+                        .map(|l| truncate_chars_ellipsis(l, 100))
                         .collect();
                     format!(
                         "{}\n  … {} lines …\n{}",

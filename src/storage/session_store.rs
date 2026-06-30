@@ -7,7 +7,9 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::util::{ensure_dir, now_iso, safe_filename, workspace_state_dir};
+use crate::util::{
+    ensure_dir, now_iso, safe_filename, truncate_chars_ellipsis, workspace_state_dir,
+};
 
 pub const SESSION_CONTEXT_TOKENS_KEY: &str = "contextTokens";
 
@@ -159,11 +161,7 @@ impl Session {
             })
             .map(|text| {
                 let first_line = text.lines().next().unwrap_or(text);
-                if first_line.len() <= max_len {
-                    first_line.to_string()
-                } else {
-                    format!("{}…", &first_line[..max_len.saturating_sub(1)])
-                }
+                truncate_chars_ellipsis(first_line, max_len)
             })
             .unwrap_or_else(|| "(empty session)".to_string())
     }
@@ -359,6 +357,19 @@ mod tests {
 
         assert_eq!(s.title(40), "Find all bugs in the authentication mod…");
         assert_eq!(s.title(100), "Find all bugs in the authentication module");
+    }
+
+    #[test]
+    fn session_title_truncates_multibyte_text_on_char_boundary() {
+        use super::Session;
+        let mut s = Session::new("test-key");
+        s.add_message("user", format!("{}{}", "a".repeat(39), "架构"));
+
+        let title = s.title(40);
+
+        assert_eq!(title.chars().count(), 40);
+        assert!(title.ends_with('…'));
+        assert!(title.is_char_boundary(title.len()));
     }
 
     #[test]

@@ -116,6 +116,21 @@ pub fn safe_filename(name: &str) -> String {
         .to_string()
 }
 
+pub fn truncate_chars_ellipsis(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    if max_chars == 0 {
+        return String::new();
+    }
+    if max_chars == 1 {
+        return "…".to_string();
+    }
+    let mut out = text.chars().take(max_chars - 1).collect::<String>();
+    out.push('…');
+    out
+}
+
 pub fn split_message(content: &str, max_len: usize) -> Vec<String> {
     if content.is_empty() {
         return Vec::new();
@@ -559,7 +574,9 @@ fn maybe_move_legacy_path(source: &Path, target: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{current_time_str, sync_workspace_templates, workspace_state_dir};
+    use super::{
+        current_time_str, sync_workspace_templates, truncate_chars_ellipsis, workspace_state_dir,
+    };
     use tempfile::tempdir;
 
     #[test]
@@ -570,6 +587,16 @@ mod tests {
         assert!(!current.contains('+'));
         assert!(current.contains('('));
         assert!(current.contains(')'));
+    }
+
+    #[test]
+    fn truncate_chars_ellipsis_handles_multibyte_boundaries() {
+        let text = format!("{}{}", "a".repeat(98), "架".repeat(4));
+        let truncated = truncate_chars_ellipsis(&text, 100);
+
+        assert_eq!(truncated.chars().count(), 100);
+        assert!(truncated.ends_with('…'));
+        assert!(truncated.is_char_boundary(truncated.len()));
     }
 
     #[test]

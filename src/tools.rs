@@ -1428,20 +1428,37 @@ impl Tool for ExecTool {
                 if let Some(status) = status {
                     output.push_str(&format!("\nExit code: {}", status.code().unwrap_or(-1)));
                 }
-                if output.len() > Self::MAX_OUTPUT {
-                    let half = Self::MAX_OUTPUT / 2;
-                    output = format!(
-                        "{}\n\n... ({} chars truncated) ...\n\n{}",
-                        &output[..half],
-                        output.len().saturating_sub(Self::MAX_OUTPUT),
-                        &output[output.len() - half..]
-                    );
+                if let Some(truncated) = truncate_middle_for_output(&output, Self::MAX_OUTPUT) {
+                    output = truncated;
                 }
                 ToolOutput::Text(output)
             }
             Err(err) => ToolOutput::Text(format!("Error executing command: {err}")),
         }
     }
+}
+
+fn truncate_middle_for_output(output: &str, max_chars: usize) -> Option<String> {
+    let output_chars = output.chars().count();
+    if output_chars <= max_chars {
+        return None;
+    }
+    let half = max_chars / 2;
+    let head = output.chars().take(half).collect::<String>();
+    let tail = output
+        .chars()
+        .rev()
+        .take(half)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    Some(format!(
+        "{}\n\n... ({} chars truncated) ...\n\n{}",
+        head,
+        output_chars.saturating_sub(max_chars),
+        tail
+    ))
 }
 
 fn build_http_client(
@@ -2213,6 +2230,17 @@ impl Tool for CronTool {
 mod web_fetch_tests {
     use super::*;
     use serde_json::from_str;
+
+    #[test]
+    fn exec_output_truncation_handles_multibyte_boundaries() {
+        let output = format!("{}{}", "架".repeat(8), "构".repeat(8));
+        let truncated = truncate_middle_for_output(&output, 10).unwrap();
+
+        assert!(truncated.contains("... (6 chars truncated) ..."));
+        assert!(truncated.starts_with(&"架".repeat(5)));
+        assert!(truncated.ends_with(&"构".repeat(5)));
+        assert!(truncated.is_char_boundary(truncated.len()));
+    }
 
     #[test]
     fn web_fetch_text_payload_includes_untrusted_and_banner() {

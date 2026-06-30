@@ -32,7 +32,8 @@ use xbot::runtime::{
 use xbot::storage::{InboundMessage, MessageBus, OutboundMessage, SessionManager};
 use xbot::tools::MessageSendCallback;
 use xbot::util::{
-    sync_workspace_templates, sync_workspace_templates_without_memory, workspace_state_dir,
+    sync_workspace_templates, sync_workspace_templates_without_memory, truncate_chars_ellipsis,
+    workspace_state_dir,
 };
 
 #[derive(Parser)]
@@ -477,11 +478,7 @@ fn format_relative_time(iso: &str) -> String {
 }
 
 fn truncate_display(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max.saturating_sub(1)])
-    }
+    truncate_chars_ellipsis(s, max)
 }
 
 fn format_session_context_tokens(tokens: Option<usize>) -> String {
