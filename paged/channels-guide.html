@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Channel Configuration — xbot</title>
+  <link rel="icon" href="assets/images/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/css/main.css?v=5">
+</head>
+<body>
+<canvas id="particles"></canvas>
+<header class="site-header"><div class="header-inner"><a href="index.html" class="logo"><img src="assets/images/logo.svg" alt="xbot"><span>xbot</span></a><nav class="nav-links"><a href="index.html" data-zh="首页" data-en="Home">Home</a><a href="getting-started.html" data-zh="快速开始" data-en="Getting Started">Getting Started</a><a href="user-guide.html" data-zh="使用指南" data-en="User Guide">User Guide</a><a href="channels-guide.html" data-zh="通道" data-en="Channels">Channels</a><a href="developer-guide.html" data-zh="开发者" data-en="Developer">Developer</a><a href="api-reference.html" data-zh="API" data-en="API">API</a></nav><div class="nav-actions"><button class="lang-toggle" aria-label="Switch language">中文</button><div class="theme-dropdown"><select class="theme-select" aria-label="Select theme"><option value="light">☀️ Light</option><option value="dark">🌙 Dark</option><option value="enflame">🔥 Enflame</option></select></div><a href="https://github.com/guoqingbao/xbot" class="btn btn-sm btn-page" target="_blank">GitHub</a><button class="mobile-toggle" aria-label="Menu"><span></span><span></span><span></span></button></div></div></header>
+<div class="scroll-progress"></div>
+
+<div class="page-header">
+  <div class="container">
+    <h1 data-zh="通道配置指南" data-en="Channel Configuration Guide">Channel Configuration Guide</h1>
+    <p data-zh="为 13+ 通道后端获取凭证并配置连接的详细指南。" data-en="Detailed guide for obtaining credentials and configuring connections for 13+ channel backends.">Detailed guide for obtaining credentials and configuring connections for 13+ channel backends.</p>
+  </div>
+</div>
+
+<section class="section">
+  <div class="container">
+    <div class="doc-layout">
+      <nav class="doc-sidebar">
+        <div class="doc-sidebar-group">
+          <h4 data-zh="通用" data-en="General">General</h4>
+          <a href="#overview" data-zh="概览" data-en="Overview">Overview</a>
+          <a href="#delivery" data-zh="消息投递" data-en="Delivery Config">Delivery Config</a>
+        </div>
+        <div class="doc-sidebar-group">
+          <h4 data-zh="即时通讯" data-en="Messaging">Messaging</h4>
+          <a href="#slack">Slack</a>
+          <a href="#telegram">Telegram</a>
+          <a href="#discord">Discord</a>
+          <a href="#feishu" data-zh="飞书" data-en="Feishu">Feishu</a>
+          <a href="#dingtalk" data-zh="钉钉" data-en="DingTalk">DingTalk</a>
+          <a href="#matrix">Matrix</a>
+        </div>
+        <div class="doc-sidebar-group">
+          <h4 data-zh="中国生态" data-en="China Ecosystem">China Ecosystem</h4>
+          <a href="#wecom" data-zh="企业微信" data-en="WeCom">WeCom</a>
+          <a href="#weixin" data-zh="微信" data-en="WeChat">WeChat</a>
+          <a href="#qq">QQ</a>
+          <a href="#mochat">MoChat</a>
+        </div>
+        <div class="doc-sidebar-group">
+          <h4 data-zh="其他" data-en="Other">Other</h4>
+          <a href="#email">Email</a>
+          <a href="#whatsapp">WhatsApp</a>
+        </div>
+      </nav>
+
+      <div class="doc-content">
+        <h2 id="overview" data-zh="通道概览" data-en="Channel Overview">Channel Overview</h2>
+        <p data-zh="xbot 支持 13 种通道后端。使用交互式 CLI 配置或手动编辑 config.json。" data-en="xbot supports 13 channel backends. Configure via the interactive CLI or edit config.json manually.">xbot supports 13 channel backends. Configure via the interactive CLI or edit config.json manually.</p>
+        <pre style="position:relative"><code><span class="token-keyword">xbot</span> config <span class="token-flag">--channel</span>       <span class="token-comment"># Interactive setup</span>
+<span class="token-keyword">xbot</span> channels list          <span class="token-comment"># List all channels</span>
+<span class="token-keyword">xbot</span> channels status        <span class="token-comment"># Show enabled/disabled</span>
+<span class="token-keyword">xbot</span> channels setup <span class="token-string">slack</span>   <span class="token-comment"># Credential instructions</span></code><button class="copy-btn" data-copy-text="xbot config --channel">Copy</button></pre>
+
+        <h2 id="delivery" data-zh="消息投递配置" data-en="Delivery Configuration">Delivery Configuration</h2>
+        <p data-zh="全局投递行为配置，适用于所有通道：" data-en="Global delivery behavior settings applying to all channels:">Global delivery behavior settings applying to all channels:</p>
+        <pre style="position:relative"><code>{
+  <span class="token-string">"channels"</span>: {
+    <span class="token-string">"sendProgress"</span>: <span class="token-keyword">true</span>,
+    <span class="token-string">"sendToolHints"</span>: <span class="token-keyword">false</span>,
+    <span class="token-string">"sendMaxRetries"</span>: <span class="token-value">3</span>
+  }
+}</code><button class="copy-btn">Copy</button></pre>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="配置" data-en="Setting">Setting</th><th data-zh="默认" data-en="Default">Default</th><th data-zh="说明" data-en="Description">Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>sendProgress</code></td><td><code>true</code></td><td data-zh="向通道发送任务进度更新" data-en="Send task progress updates to channel">Send task progress updates to channel</td></tr>
+              <tr><td><code>sendToolHints</code></td><td><code>false</code></td><td data-zh="false=首次工具调用时发送提示+每10次工具调用批量摘要；true=每次工具调用都发送" data-en="false = muted notice on first tool call + batch every 10; true = every tool call">false = muted notice on first tool call + batch every 10; true = every tool call</td></tr>
+              <tr><td><code>sendMaxRetries</code></td><td><code>3</code></td><td data-zh="指数退避重试次数（1s, 2s, 4s...）" data-en="Exponential backoff retry count (1s, 2s, 4s...)">Exponential backoff retry count (1s, 2s, 4s...)</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="slack" data-zh="Slack" data-en="Slack">Slack</h2>
+        <p data-zh="Slack 支持两种模式：Socket Mode（无需公网 URL）和 Webhook 模式。" data-en="Slack supports two modes: Socket Mode (no public URL needed) and Webhook mode.">Slack supports two modes: Socket Mode (no public URL needed) and Webhook mode.</p>
+        <h3 data-zh="获取凭证" data-en="Obtaining Credentials">Obtaining Credentials</h3>
+        <ol class="steps">
+          <li class="step-item"><p data-zh="访问 api.slack.com/apps 创建应用" data-en="Go to api.slack.com/apps and create an app">Go to <code>api.slack.com/apps</code> and create an app</p></li>
+          <li class="step-item"><p data-zh="在 OAuth & Permissions 下添加 Bot Scopes：chat:write, channels:read, channels:history" data-en="Under OAuth &amp; Permissions, add Bot Scopes: chat:write, channels:read, channels:history">Under OAuth &amp; Permissions, add Bot Scopes: <code>chat:write</code>, <code>channels:read</code>, <code>channels:history</code></p></li>
+          <li class="step-item"><p data-zh="安装到工作区，复制 Bot Token (xoxb-...)" data-en="Install to workspace, copy Bot Token (xoxb-...)">Install to workspace, copy Bot Token (<code>xoxb-...</code>)</p></li>
+          <li class="step-item"><p data-zh="Socket Mode：在 Socket Mode 页面启用并创建 App Token (xapp-...)" data-en="Socket Mode: Enable on Socket Mode page and create App Token (xapp-...)">Socket Mode: Enable on Socket Mode page and create App Token (<code>xapp-...</code>)</p></li>
+        </ol>
+        <h3 data-zh="Socket Mode（推荐）" data-en="Socket Mode (Recommended)">Socket Mode (Recommended)</h3>
+        <pre style="position:relative"><code>{
+  <span class="token-string">"channels"</span>: {
+    <span class="token-string">"slack"</span>: {
+      <span class="token-string">"enabled"</span>: <span class="token-keyword">true</span>,
+      <span class="token-string">"mode"</span>: <span class="token-string">"socket"</span>,
+      <span class="token-string">"allowFrom"</span>: [<span class="token-string">"*"</span>],
+      <span class="token-string">"botToken"</span>: <span class="token-string">"xoxb-..."</span>,
+      <span class="token-string">"appToken"</span>: <span class="token-string">"xapp-..."</span>,
+      <span class="token-string">"replyInThread"</span>: <span class="token-keyword">true</span>,
+      <span class="token-string">"groupPolicy"</span>: <span class="token-string">"mention"</span>
+    }
+  }
+}</code><button class="copy-btn">Copy</button></pre>
+        <div class="callout-info"><div class="callout-title" data-zh="提示" data-en="Tip">Tip</div><p data-zh="Socket Mode 不需要 signingSecret 或公网 webhook URL。" data-en="Socket Mode does not require signingSecret or a public webhook URL.">Socket Mode does not require <code>signingSecret</code> or a public webhook URL.</p></div>
+
+        <h2 id="telegram" data-zh="Telegram" data-en="Telegram">Telegram</h2>
+        <h3 data-zh="获取凭证" data-en="Obtaining Credentials">Obtaining Credentials</h3>
+        <ol class="steps">
+          <li class="step-item"><p data-zh="在 Telegram 中找到 @BotFather" data-en="Find @BotFather in Telegram">Find <code>@BotFather</code> in Telegram</p></li>
+          <li class="step-item"><p data-zh="发送 /newbot 创建机器人，获取 token" data-en="Send /newbot to create a bot, receive the token">Send <code>/newbot</code> to create a bot, receive the token</p></li>
+          <li class="step-item"><p data-zh="设置 Webhook URL 到 https://<your-domain>/telegram/webhook" data-en="Set webhook URL to https://<your-domain>/telegram/webhook">Set webhook URL to <code>https://&lt;your-domain&gt;/telegram/webhook</code></p></li>
+        </ol>
+        <pre style="position:relative"><code>{
+  <span class="token-string">"channels"</span>: {
+    <span class="token-string">"telegram"</span>: {
+      <span class="token-string">"enabled"</span>: <span class="token-keyword">true</span>,
+      <span class="token-string">"allowFrom"</span>: [<span class="token-string">"*"</span>],
+      <span class="token-string">"token"</span>: <span class="token-string">"&lt;bot-token&gt;"</span>,
+      <span class="token-string">"webhookPath"</span>: <span class="token-string">"/telegram/webhook"</span>,
+      <span class="token-string">"webhookSecret"</span>: <span class="token-string">"optional-secret"</span>,
+      <span class="token-string">"replyToMessage"</span>: <span class="token-keyword">true</span>,
+      <span class="token-string">"groupPolicy"</span>: <span class="token-string">"mention"</span>
+    }
+  }
+}</code><button class="copy-btn">Copy</button></pre>
+
+        <h2 id="discord" data-zh="Discord" data-en="Discord">Discord</h2>
+        <h3 data-zh="获取凭证" data-en="Obtaining Credentials">Obtaining Credentials</h3>
+        <ol class="steps">
+          <li class="step-item"><p data-zh="访问 discord.com/developers/applications 创建应用" data-en="Go to discord.com/developers/applications, create an app">Go to <code>discord.com/developers/applications</code>, create an app</p></li>
+          <li class="step-item"><p data-zh="Bot 页面 → Add Bot → 复制 token" data-en="Bot page → Add Bot → copy token">Bot page → Add Bot → copy token</p></li>
+          <li class="step-item"><p data-zh="启用 Message Content Intent（Privileged Gateway Intents）" data-en="Enable Message Content Intent (Privileged Gateway Intents)">Enable <code>Message Content Intent</code> (Privileged Gateway Intents)</p></li>
+          <li class="step-item"><p data-zh="OAuth2 URL Generator → bot scope + Send Messages → 邀请到服务器" data-en="OAuth2 URL Generator → bot scope + Send Messages → invite to server">OAuth2 URL Generator → bot scope + Send Messages → invite to server</p></li>
+        </ol>
+        <pre style="position:relative"><code>{
+  <span class="token-string">"channels"</span>: {
+    <span class="token-string">"discord"</span>: {
+      <span class="token-string">"enabled"</span>: <span class="token-keyword">true</span>,
+      <span class="token-string">"allowFrom"</span>: [<span class="token-string">"*"</span>],
+      <span class="token-string">"botToken"</span>: <span class="token-string">"&lt;bot-token&gt;"</span>,
+      <span class="token-string">"groupPolicy"</span>: <span class="token-string">"mention"</span>
+    }
+  }
+}</code><button class="copy-btn">Copy</button></pre>
+
+        <h2 id="feishu" data-zh="飞书" data-en="Feishu (Lark)">Feishu (Lark)</h2>
+        <h3 data-zh="获取凭证" data-en="Obtaining Credentials">Obtaining Credentials</h3>
+        <ol class="steps">
+          <li class="step-item"><p data-zh="访问 open.feishu.cn 创建自建应用" data-en="Go to open.feishu.cn and create a custom app">Go to <code>open.feishu.cn</code> and create a custom app</p></li>
+          <li class="step-item"><p data-zh="复制 App ID 和 App Secret" data-en="Copy App ID and App Secret">Copy App ID and App Secret</p></li>
+          <li class="step-item"><p data-zh="在事件订阅中配置请求网址" data-en="Configure request URL in event subscription">Configure request URL in event subscription</p></li>
+        </ol>
+        <pre style="position:relative"><code>{
+  <span class="token-string">"channels"</span>: {
+    <span class="token-string">"feishu"</span>: {
+      <span class="token-string">"enabled"</span>: <span class="token-keyword">true</span>,
+      <span class="token-string">"allowFrom"</span>: [<span class="token-string">"*"</span>],
+      <span class="token-string">"appId"</span>: <span class="token-string">"cli_xxx"</span>,
+      <span class="token-string">"appSecret"</span>: <span class="token-string">"..."</span>,
+      <span class="token-string">"verificationToken"</span>: <span class="token-string">"..."</span>,
+      <span class="token-string">"webhookPath"</span>: <span class="token-string">"/feishu/events"</span>,
+      <span class="token-string">"groupPolicy"</span>: <span class="token-string">"mention"</span>,
+      <span class="token-string">"replyToMessage"</span>: <span class="token-keyword">true</span>,
+      <span class="token-string">"reactEmoji"</span>: <span class="token-string">"THUMBSUP"</span>
+    }
+  }
+}</code><button class="copy-btn">Copy</button></pre>
+
+        <h2 id="dingtalk" data-zh="钉钉" data-en="DingTalk">DingTalk</h2>
+        <ol class="steps">
+          <li class="step-item"><p data-zh="访问 open-dev.dingtalk.com 创建机器人应用" data-en="Go to open-dev.dingtalk.com and create a robot app">Go to <code>open-dev.dingtalk.com</code> and create a robot app</p></li>
+          <li class="step-item"><p data-zh="复制 Client ID (AppKey)、Client Secret (AppSecret)、Robot Code" data-en="Copy Client ID (AppKey), Client Secret (AppSecret), and Robot Code">Copy Client ID (AppKey), Client Secret (AppSecret), and Robot Code</p></li>
+        </ol>
+        <pre style="position:relative"><code>{
+  <span class="token-string">"channels"</span>: {
+    <span class="token-string">"dingtalk"</span>: {
+      <span class="token-string">"enabled"</span>: <span class="token-keyword">true</span>,
+      <span class="token-string">"allowFrom"</span>: [<span class="token-string">"*"</span>],
+      <span class="token-string">"clientId"</span>: <span class="token-string">"&lt;AppKey&gt;"</span>,
+      <span class="token-string">"clientSecret"</span>: <span class="token-string">"&lt;AppSecret&gt;"</span>,
+      <span class="token-string">"robotCode"</span>: <span class="token-string">"&lt;Robot Code&gt;"</span>
+    }
+  }
+}</code><button class="copy-btn">Copy</button></pre>
+
+        <h2 id="matrix" data-zh="Matrix" data-en="Matrix">Matrix</h2>
+        <ol class="steps">
+          <li class="step-item"><p data-zh="在 Matrix 服务器上创建机器人账号" data-en="Create a bot account on your Matrix homeserver">Create a bot account on your Matrix homeserver</p></li>
+          <li class="step-item"><p data-zh="获取 Access Token（如通过 Element: Settings > Help & About）" data-en="Obtain access token (e.g., via Element: Settings > Help &amp; About)">Obtain access token (e.g., via Element: Settings &gt; Help &amp; About)</p></li>
+          <li class="step-item"><p data-zh="邀请机器人到需要响应的房间" data-en="Invite the bot to rooms where it should respond">Invite the bot to rooms where it should respond</p></li>
+        </ol>
+        <pre style="position:relative"><code>{
+  <span class="token-string">"channels"</span>: {
+    <span class="token-string">"matrix"</span>: {
+      <span class="token-string">"enabled"</span>: <span class="token-keyword">true</span>,
+      <span class="token-string">"allowFrom"</span>: [<span class="token-string">"*"</span>],
+      <span class="token-string">"homeserverUrl"</span>: <span class="token-string">"https://matrix.example.com"</span>,
+      <span class="token-string">"accessToken"</span>: <span class="token-string">"&lt;token&gt;"</span>,
+      <span class="token-string">"userId"</span>: <span class="token-string">"@bot:example.com"</span>
+    }
+  }
+}</code><button class="copy-btn">Copy</button></pre>
+        <div class="callout-warning"><div class="callout-title" data-zh="注意" data-en="Note">Note</div><p data-zh="不支持端到端加密房间（m.room.encrypted）。" data-en="End-to-end encrypted rooms (m.room.encrypted) are not supported.">End-to-end encrypted rooms (<code>m.room.encrypted</code>) are not supported.</p></div>
+
+        <h2 id="wecom" data-zh="企业微信" data-en="WeCom (Enterprise WeChat)">WeCom (Enterprise WeChat)</h2>
+        <ol class="steps">
+          <li class="step-item"><p data-zh="登录 work.weixin.qq.com 管理后台" data-en="Log in to work.weixin.qq.com admin console">Log in to <code>work.weixin.qq.com</code> admin console</p></li>
+          <li class="step-item"><p data-zh="应用管理 → 创建自建应用" data-en="App Management → Create self-built application">App Management → Create self-built application</p></li>
+          <li class="step-item"><p data-zh="复制 Corp ID、Agent ID、Secret" data-en="Copy Corp ID, Agent ID, and Secret">Copy Corp ID, Agent ID, and Secret</p></li>
+        </ol>
+        <pre style="position:relative"><code>{
+  <span class="token-string">"channels"</span>: {
+    <span class="token-string">"wecom"</span>: {
+      <span class="token-string">"enabled"</span>: <span class="token-keyword">true</span>,
+      <span class="token-string">"allowFrom"</span>: [<span class="token-string">"*"</span>],
+      <span class="token-string">"corpId"</span>: <span class="token-string">"&lt;corp-id&gt;"</span>,
+      <span class="token-string">"agentId"</span>: <span class="token-string">"&lt;agent-id&gt;"</span>,
+      <span class="token-string">"secret"</span>: <span class="token-string">"&lt;secret&gt;"</span>
+    }
+  }
+}</code><button class="copy-btn">Copy</button></pre>
+
+        <h2 id="weixin" data-zh="微信（个人）" data-en="WeChat (Personal)">WeChat (Personal)</h2>
+        <p data-zh="微信通道使用 HTTP long-poll + QR 码登录。无需提前配置 token。" data-en="WeChat uses HTTP long-poll with QR code login. No token needed upfront.">WeChat uses HTTP long-poll with QR code login. No token needed upfront.</p>
+        <ol class="steps">
+          <li class="step-item"><p data-zh="在 config.json 中启用通道" data-en="Enable the channel in config.json">Enable the channel in config.json</p></li>
+          <li class="step-item"><p data-zh="运行 xbot channels login weixin — 会输出 QR 码 URL" data-en="Run xbot channels login weixin — a QR code URL will be printed">Run <code>xbot channels login weixin</code> — a QR code URL will be printed</p></li>
+          <li class="step-item"><p data-zh="在微信中扫码授权" data-en="Scan the QR code in WeChat to authorize">Scan the QR code in WeChat to authorize</p></li>
+        </ol>
+        <pre style="position:relative"><code>{
+  <span class="token-string">"channels"</span>: {
+    <span class="token-string">"weixin"</span>: {
+      <span class="token-string">"enabled"</span>: <span class="token-keyword">true</span>,
+      <span class="token-string">"allowFrom"</span>: [<span class="token-string">"*"</span>]
+    }
+  }
+}</code><button class="copy-btn">Copy</button></pre>
+
+        <h2 id="qq" data-zh="QQ" data-en="QQ">QQ</h2>
+        <ol class="steps">
+          <li class="step-item"><p data-zh="访问 q.qq.com 注册 QQ Bot 开发者" data-en="Go to q.qq.com and register as QQ Bot developer">Go to <code>q.qq.com</code> and register as QQ Bot developer</p></li>
+          <li class="step-item"><p data-zh="创建机器人应用，获取 App ID 和 Secret" data-en="Create bot application, obtain App ID and Secret">Create bot application, obtain App ID and Secret</p></li>
+        </ol>
+        <pre style="position:relative"><code>{
+  <span class="token-string">"channels"</span>: {
+    <span class="token-string">"qq"</span>: {
+      <span class="token-string">"enabled"</span>: <span class="token-keyword">true</span>,
+      <span class="token-string">"allowFrom"</span>: [<span class="token-string">"*"</span>],
+      <span class="token-string">"appId"</span>: <span class="token-string">"&lt;app-id&gt;"</span>,
+      <span class="token-string">"secret"</span>: <span class="token-string">"&lt;secret&gt;"</span>
+    }
+  }
+}</code><button class="copy-btn">Copy</button></pre>
+
+        <h2 id="mochat" data-zh="MoChat" data-en="MoChat">MoChat</h2>
+        <pre style="position:relative"><code>{
+  <span class="token-string">"channels"</span>: {
+    <span class="token-string">"mochat"</span>: {
+      <span class="token-string">"enabled"</span>: <span class="token-keyword">true</span>,
+      <span class="token-string">"allowFrom"</span>: [<span class="token-string">"*"</span>],
+      <span class="token-string">"baseUrl"</span>: <span class="token-string">"https://your-instance.com"</span>,
+      <span class="token-string">"clawToken"</span>: <span class="token-string">"&lt;token&gt;"</span>,
+      <span class="token-string">"sessions"</span>: [<span class="token-string">"session-id-1"</span>],
+      <span class="token-string">"panels"</span>: []
+    }
+  }
+}</code><button class="copy-btn">Copy</button></pre>
+
+        <h2 id="email" data-zh="Email" data-en="Email">Email</h2>
+        <p data-zh="Email 使用 IMAP 轮询接收 + SMTP 发送。不需要公网 webhook。" data-en="Email uses IMAP polling for receiving + SMTP for sending. No public webhook needed.">Email uses IMAP polling for receiving + SMTP for sending. No public webhook needed.</p>
+        <pre style="position:relative"><code>{
+  <span class="token-string">"channels"</span>: {
+    <span class="token-string">"email"</span>: {
+      <span class="token-string">"enabled"</span>: <span class="token-keyword">true</span>,
+      <span class="token-string">"allowFrom"</span>: [<span class="token-string">"*"</span>],
+      <span class="token-string">"imapHost"</span>: <span class="token-string">"imap.example.com"</span>,
+      <span class="token-string">"imapPort"</span>: <span class="token-value">993</span>,
+      <span class="token-string">"imapUsername"</span>: <span class="token-string">"bot@example.com"</span>,
+      <span class="token-string">"imapPassword"</span>: <span class="token-string">"..."</span>,
+      <span class="token-string">"imapUseSsl"</span>: <span class="token-keyword">true</span>,
+      <span class="token-string">"smtpHost"</span>: <span class="token-string">"smtp.example.com"</span>,
+      <span class="token-string">"smtpPort"</span>: <span class="token-value">587</span>,
+      <span class="token-string">"smtpUsername"</span>: <span class="token-string">"bot@example.com"</span>,
+      <span class="token-string">"smtpPassword"</span>: <span class="token-string">"..."</span>,
+      <span class="token-string">"smtpUseTls"</span>: <span class="token-keyword">true</span>,
+      <span class="token-string">"fromAddress"</span>: <span class="token-string">"bot@example.com"</span>,
+      <span class="token-string">"pollIntervalSeconds"</span>: <span class="token-value">30</span>
+    }
+  }
+}</code><button class="copy-btn">Copy</button></pre>
+
+        <h2 id="whatsapp" data-zh="WhatsApp" data-en="WhatsApp">WhatsApp</h2>
+        <p data-zh="WhatsApp 通过 Node.js Baileys 桥接 WebSocket 连接。" data-en="WhatsApp connects via a Node.js Baileys bridge over WebSocket.">WhatsApp connects via a Node.js Baileys bridge over WebSocket.</p>
+        <ol class="steps">
+          <li class="step-item"><p data-zh="安装 Node.js v18+" data-en="Install Node.js v18+">Install Node.js v18+</p></li>
+          <li class="step-item"><p data-zh="克隆 Baileys 桥：git clone https://github.com/nicepkg/whatsapp-bridge" data-en="Clone Baileys bridge: git clone ...">Clone Baileys bridge: <code>git clone https://github.com/nicepkg/whatsapp-bridge</code></p></li>
+          <li class="step-item"><p data-zh="cd whatsapp-bridge && npm install && npm start" data-en="cd whatsapp-bridge && npm install && npm start"><code>cd whatsapp-bridge && npm install && npm start</code></p></li>
+          <li class="step-item"><p data-zh="扫描终端中显示的 QR 码" data-en="Scan the QR code displayed in the bridge terminal">Scan the QR code displayed in the bridge terminal</p></li>
+        </ol>
+        <pre style="position:relative"><code>{
+  <span class="token-string">"channels"</span>: {
+    <span class="token-string">"whatsapp"</span>: {
+      <span class="token-string">"enabled"</span>: <span class="token-keyword">true</span>,
+      <span class="token-string">"allowFrom"</span>: [<span class="token-string">"*"</span>],
+      <span class="token-string">"bridgeUrl"</span>: <span class="token-string">"ws://localhost:3001"</span>,
+      <span class="token-string">"bridgeToken"</span>: <span class="token-string">""</span>,
+      <span class="token-string">"groupPolicy"</span>: <span class="token-string">"open"</span>
+    }
+  }
+}</code><button class="copy-btn">Copy</button></pre>
+        <div class="callout-warning"><div class="callout-title" data-zh="注意" data-en="Important">Important</div><p data-zh="Baileys 桥必须在 xbot run 之前启动。" data-en="The Baileys bridge must be running before xbot run.">The Baileys bridge must be running before <code>xbot run</code>.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="site-footer"><div class="container"><div class="footer-grid"><div class="footer-brand"><a href="index.html" class="logo"><img src="assets/images/logo.svg" alt="xbot"><span>xbot</span></a><p data-zh="纯 Rust 实现的自主 AI Agent 运行时。" data-en="Rust-native autonomous bot runtime.">Rust-native autonomous bot runtime.</p></div><div class="footer-col"><h4 data-zh="文档" data-en="Docs">Docs</h4><a href="getting-started.html">Getting Started</a><a href="user-guide.html">User Guide</a><a href="channels-guide.html">Channels</a><a href="developer-guide.html">Developer Guide</a><a href="api-reference.html">API Reference</a></div><div class="footer-col"><h4 data-zh="资源" data-en="Resources">Resources</h4><a href="https://github.com/guoqingbao/xbot/releases" target="_blank">Releases</a><a href="https://github.com/guoqingbao/xbot" target="_blank">GitHub</a></div><div class="footer-col"><h4 data-zh="社区" data-en="Community">Community</h4><a href="https://github.com/guoqingbao/xbot/issues" target="_blank">Issues</a><a href="https://github.com/guoqingbao/xbot/discussions" target="_blank">Discussions</a></div></div><div class="footer-bottom"><span>MIT License · Copyright 2026 Guoqing Bao</span><span data-zh="用 Rust 和 ❤️ 构建" data-en="Built with Rust and ❤️">Built with Rust and ❤️</span></div></div></footer>
+<script src="assets/js/main.js?v=5"></script>
+</body>
+</html>

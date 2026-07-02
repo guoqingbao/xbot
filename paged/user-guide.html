@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>User Guide — xbot</title>
+  <link rel="icon" href="assets/images/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/css/main.css?v=5">
+</head>
+<body>
+<canvas id="particles"></canvas>
+<header class="site-header"><div class="header-inner"><a href="index.html" class="logo"><img src="assets/images/logo.svg" alt="xbot"><span>xbot</span></a><nav class="nav-links"><a href="index.html" data-zh="首页" data-en="Home">Home</a><a href="getting-started.html" data-zh="快速开始" data-en="Getting Started">Getting Started</a><a href="user-guide.html" data-zh="使用指南" data-en="User Guide">User Guide</a><a href="channels-guide.html" data-zh="通道" data-en="Channels">Channels</a><a href="developer-guide.html" data-zh="开发者" data-en="Developer">Developer</a><a href="api-reference.html" data-zh="API" data-en="API">API</a></nav><div class="nav-actions"><button class="lang-toggle" aria-label="Switch language">中文</button><div class="theme-dropdown"><select class="theme-select" aria-label="Select theme"><option value="light">☀️ Light</option><option value="dark">🌙 Dark</option><option value="enflame">🔥 Enflame</option></select></div><a href="https://github.com/guoqingbao/xbot" class="btn btn-sm btn-page" target="_blank">GitHub</a><button class="mobile-toggle" aria-label="Menu"><span></span><span></span><span></span></button></div></div></header>
+<div class="scroll-progress"></div>
+
+<div class="page-header">
+  <div class="container">
+    <h1 data-zh="使用指南" data-en="User Guide">User Guide</h1>
+    <p data-zh="深入了解 xbot 的每一项功能 — 工具、记忆、技能、调度、混合路由和 MCP 集成。" data-en="Deep dive into every xbot feature — tools, memory, skills, scheduling, hybrid routing, and MCP integration.">Deep dive into every xbot feature — tools, memory, skills, scheduling, hybrid routing, and MCP integration.</p>
+  </div>
+</div>
+
+<section class="section">
+  <div class="container">
+    <div class="doc-layout">
+      <nav class="doc-sidebar">
+        <div class="doc-sidebar-group">
+          <h4 data-zh="工作模式" data-en="Operating Modes">Operating Modes</h4>
+          <a href="#cli" data-zh="CLI 模式" data-en="CLI Mode">CLI Mode</a>
+          <a href="#repl" data-zh="REPL 交互" data-en="REPL Interactive">REPL Interactive</a>
+          <a href="#backend" data-zh="后端服务" data-en="Backend Service">Backend Service</a>
+        </div>
+        <div class="doc-sidebar-group">
+          <h4 data-zh="工具" data-en="Tools">Tools</h4>
+          <a href="#tools" data-zh="内置工具" data-en="Built-in Tools">Built-in Tools</a>
+          <a href="#mcp" data-zh="MCP 集成" data-en="MCP Integration">MCP Integration</a>
+        </div>
+        <div class="doc-sidebar-group">
+          <h4 data-zh="智能功能" data-en="Intelligence">Intelligence</h4>
+          <a href="#memory" data-zh="记忆系统" data-en="Memory System">Memory System</a>
+          <a href="#skills" data-zh="技能" data-en="Skills">Skills</a>
+          <a href="#subagents" data-zh="子 Agent" data-en="Subagents">Subagents</a>
+        </div>
+        <div class="doc-sidebar-group">
+          <h4 data-zh="高级" data-en="Advanced">Advanced</h4>
+          <a href="#hybrid" data-zh="混合路由" data-en="Hybrid Routing">Hybrid Routing</a>
+          <a href="#providers" data-zh="提供商" data-en="Providers">Providers</a>
+          <a href="#cron" data-zh="定时任务" data-en="Cron Scheduling">Cron Scheduling</a>
+          <a href="#gateway" data-zh="Gateway" data-en="Gateway">Gateway</a>
+          <a href="#config" data-zh="完整配置" data-en="Full Config">Full Config</a>
+        </div>
+      </nav>
+
+      <div class="doc-content">
+        <h2 id="cli" data-zh="CLI 模式" data-en="CLI Mode">CLI Mode</h2>
+        <p data-zh="xbot chat 用于一次性 Agent 对话。默认使用当前目录作为工作区。" data-en="xbot chat runs one-shot agent conversations. Defaults to the current directory as workspace.">xbot chat runs one-shot agent conversations. Defaults to the current directory as workspace.</p>
+        <div class="code-block">
+          <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" data-copy-text="xbot chat &quot;refactor the database layer&quot;" data-zh="复制" data-en="Copy">Copy</button></div>
+          <pre><code><span class="token-comment"># Initialize project context (creates .xbot/ and XBOT.md)</span>
+<span class="token-keyword">xbot</span> chat <span class="token-string">/init</span>
+
+<span class="token-comment"># One-shot task in current directory</span>
+<span class="token-keyword">xbot</span> chat <span class="token-string">"refactor the database layer"</span>
+
+<span class="token-comment"># Use explicit workspace</span>
+<span class="token-keyword">xbot</span> chat <span class="token-flag">--workspace</span> <span class="token-string">/path/to/project</span> <span class="token-string">"find bugs"</span>
+
+<span class="token-comment"># Use global workspace for non-project tasks</span>
+<span class="token-keyword">xbot</span> chat <span class="token-flag">--global</span> <span class="token-string">"research quantum computing"</span>
+
+<span class="token-comment"># Override model for this task</span>
+<span class="token-keyword">xbot</span> chat <span class="token-flag">--model</span> <span class="token-string">anthropic/claude-sonnet-4-20250514</span> <span class="token-string">"review my code"</span></code></pre>
+        </div>
+
+        <h2 id="repl" data-zh="REPL 交互模式" data-en="REPL Interactive Mode">REPL Interactive Mode</h2>
+        <p data-zh="Ratatui 构建的富文本终端界面，支持流式响应、持久会话、子 Agent 通知和运行时模型切换。" data-en="Rich terminal UI built with Ratatui — streamed responses, persistent sessions, subagent notifications, and runtime model switching.">Rich terminal UI built with Ratatui — streamed responses, persistent sessions, subagent notifications, and runtime model switching.</p>
+        <div class="code-block">
+          <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" data-copy-text="xbot repl" data-zh="复制" data-en="Copy">Copy</button></div>
+          <pre><code><span class="token-keyword">xbot</span> repl
+<span class="token-keyword">xbot</span> repl <span class="token-flag">--workspace</span> <span class="token-string">/path/to/project</span>
+<span class="token-keyword">xbot</span> repl <span class="token-flag">--global</span></code></pre>
+        </div>
+
+        <h2 id="backend" data-zh="后端服务" data-en="Backend Service">Backend Service</h2>
+        <p data-zh="xbot run 启动全天候 AI 助手后端。它同时启动 Gateway HTTP 服务器、心跳服务、Cron 调度器和所有已配置的通道后端。" data-en="xbot run starts the always-on AI assistant backend. It simultaneously launches the Gateway HTTP server, heartbeat service, cron scheduler, and all configured channel backends.">xbot run starts the always-on AI assistant backend. It simultaneously launches the Gateway HTTP server, heartbeat service, cron scheduler, and all configured channel backends.</p>
+        <div class="code-block">
+          <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" data-copy-text="xbot run" data-zh="复制" data-en="Copy">Copy</button></div>
+          <pre><code><span class="token-keyword">xbot</span> run
+<span class="token-keyword">xbot</span> run <span class="token-flag">--workspace</span> <span class="token-string">/path/to/project</span></code></pre>
+        </div>
+
+        <h2 id="tools" data-zh="内置工具" data-en="Built-in Tools">Built-in Tools</h2>
+        <p data-zh="xbot 提供 12 种内置工具，Agent 可以自主调用来完成任务。" data-en="xbot provides 12 built-in tools that agents can invoke autonomously to complete tasks.">xbot provides 12 built-in tools that agents can invoke autonomously to complete tasks.</p>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="工具" data-en="Tool">Tool</th><th data-zh="用途" data-en="Purpose">Purpose</th><th data-zh="说明" data-en="Notes">Notes</th></tr></thead>
+            <tbody>
+              <tr><td><code>read_file</code></td><td data-zh="读取文件内容" data-en="Read file contents">Read file contents</td><td data-zh="支持偏移和行数限制" data-en="Supports offset and line limit">Supports offset and line limit</td></tr>
+              <tr><td><code>write_file</code></td><td data-zh="创建或覆盖文件" data-en="Create or overwrite file">Create or overwrite file</td><td data-zh="需要审批（可配置）" data-en="Requires approval (configurable)">Requires approval (configurable)</td></tr>
+              <tr><td><code>edit_file</code></td><td data-zh="精确字符串替换编辑" data-en="Precise string-replace edit">Precise string-replace edit</td><td data-zh="带 diff 预览的审批流" data-en="Approval flow with diff preview">Approval flow with diff preview</td></tr>
+              <tr><td><code>list_dir</code></td><td data-zh="列出目录内容" data-en="List directory contents">List directory contents</td><td data-zh="递归展示文件树" data-en="Recursive file tree display">Recursive file tree display</td></tr>
+              <tr><td><code>grep_files</code></td><td data-zh="在文件中搜索模式" data-en="Search for patterns in files">Search for patterns in files</td><td data-zh="正则表达式支持" data-en="Regex pattern support">Regex pattern support</td></tr>
+              <tr><td><code>exec</code></td><td data-zh="执行 Shell 命令" data-en="Execute shell commands">Execute shell commands</td><td data-zh="可配置超时，默认 120 秒" data-en="Configurable timeout, default 120s">Configurable timeout, default 120s</td></tr>
+              <tr><td><code>web_search</code></td><td data-zh="网络搜索" data-en="Web search">Web search</td><td data-zh="DuckDuckGo 默认，可配置" data-en="DuckDuckGo default, configurable">DuckDuckGo default, configurable</td></tr>
+              <tr><td><code>web_fetch</code></td><td data-zh="抓取网页内容" data-en="Fetch webpage content">Fetch webpage content</td><td data-zh="HTML 到 Markdown 转换" data-en="HTML to Markdown conversion">HTML to Markdown conversion</td></tr>
+              <tr><td><code>message</code></td><td data-zh="发送消息到通道" data-en="Send message to channel">Send message to channel</td><td data-zh="跨通道消息投递" data-en="Cross-channel delivery">Cross-channel delivery</td></tr>
+              <tr><td><code>cron</code></td><td data-zh="创建定时任务" data-en="Create scheduled jobs">Create scheduled jobs</td><td data-zh="一次性、周期性或 Cron 表达式" data-en="One-shot, interval, or cron expr">One-shot, interval, or cron expr</td></tr>
+              <tr><td><code>spawn</code></td><td data-zh="生成后台子 Agent" data-en="Spawn background subagent">Spawn background subagent</td><td data-zh="并行子任务，最多 3 并发" data-en="Parallel subtasks, max 3 concurrent">Parallel subtasks, max 3 concurrent</td></tr>
+              <tr><td><code>wait_subagents</code></td><td data-zh="等待子 Agent 完成" data-en="Wait for subagents">Wait for subagents</td><td data-zh="收集子 Agent 结果" data-en="Collect subagent results">Collect subagent results</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout-info">
+          <div class="callout-title" data-zh="文件编辑审批" data-en="File Edit Approval">File Edit Approval</div>
+          <p data-zh="write_file 和 edit_file 支持审批流（Allow Once / Always Allow / Deny），带 diff 预览。可通过 restrictToWorkspace 限制文件操作范围。" data-en="write_file and edit_file support an approval flow (Allow Once / Always Allow / Deny) with diff preview. Use restrictToWorkspace to sandbox file operations.">write_file and edit_file support an approval flow (Allow Once / Always Allow / Deny) with diff preview. Use <code>restrictToWorkspace</code> to sandbox file operations.</p>
+        </div>
+
+        <h2 id="mcp" data-zh="MCP 工具服务器" data-en="MCP Tool Servers">MCP Tool Servers</h2>
+        <p data-zh="xbot 支持 MCP (Model Context Protocol) stdio 协议。启用的 MCP 工具以 mcp_&lt;server&gt;_&lt;tool&gt; 格式注册为原生工具。" data-en="xbot supports MCP (Model Context Protocol) over stdio. Enabled tools register as native tools with mcp_&lt;server&gt;_&lt;tool&gt; naming.">xbot supports MCP (Model Context Protocol) over stdio. Enabled tools register as native tools with <code>mcp_&lt;server&gt;_&lt;tool&gt;</code> naming.</p>
+        <div class="code-block">
+          <div class="code-header"><span class="code-lang">json</span><button class="copy-btn" data-zh="复制" data-en="Copy">Copy</button></div>
+          <pre><code>{
+  <span class="token-string">"tools"</span>: {
+    <span class="token-string">"mcpServers"</span>: {
+      <span class="token-string">"github"</span>: {
+        <span class="token-string">"enabled"</span>: <span class="token-keyword">true</span>,
+        <span class="token-string">"type"</span>: <span class="token-string">"stdio"</span>,
+        <span class="token-string">"command"</span>: <span class="token-string">"npx"</span>,
+        <span class="token-string">"args"</span>: [<span class="token-string">"-y"</span>, <span class="token-string">"@modelcontextprotocol/server-github"</span>],
+        <span class="token-string">"env"</span>: { <span class="token-string">"GITHUB_TOKEN"</span>: <span class="token-string">"ghp_..."</span> },
+        <span class="token-string">"enabledTools"</span>: [<span class="token-string">"*"</span>],
+        <span class="token-string">"toolTimeout"</span>: <span class="token-value">30</span>
+      },
+      <span class="token-string">"filesystem"</span>: {
+        <span class="token-string">"enabled"</span>: <span class="token-keyword">true</span>,
+        <span class="token-string">"type"</span>: <span class="token-string">"stdio"</span>,
+        <span class="token-string">"command"</span>: <span class="token-string">"npx"</span>,
+        <span class="token-string">"args"</span>: [<span class="token-string">"-y"</span>, <span class="token-string">"@modelcontextprotocol/server-filesystem"</span>, <span class="token-string">"/tmp"</span>]
+      }
+    }
+  }
+}</code></pre>
+        </div>
+
+        <h2 id="memory" data-zh="记忆系统" data-en="Memory System">Memory System</h2>
+        <p data-zh="xbot 实现了一套双文件持久记忆架构，确保重要信息在会话之间保持可用。" data-en="xbot implements a dual-file persistent memory architecture ensuring important information persists across sessions.">xbot implements a dual-file persistent memory architecture ensuring important information persists across sessions.</p>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="文件" data-en="File">File</th><th data-zh="用途" data-en="Purpose">Purpose</th><th data-zh="生命周期" data-en="Lifecycle">Lifecycle</th></tr></thead>
+            <tbody>
+              <tr><td><code>MEMORY.md</code></td><td data-zh="持久性事实、用户偏好、项目知识" data-en="Durable facts, user preferences, project knowledge">Durable facts, user preferences, project knowledge</td><td data-zh="永久保存" data-en="Permanent">Permanent</td></tr>
+              <tr><td><code>HISTORY.md</code></td><td data-zh="可重置的事件日志" data-en="Resettable event log">Resettable event log</td><td data-zh="可重置" data-en="Resettable">Resettable</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <h3 data-zh="记忆整合" data-en="Memory Consolidation">Memory Consolidation</h3>
+        <p data-zh="当上下文使用达到约 75% 时，LLM 驱动的整合自动触发，压缩旧记忆。3 次 LLM 整合失败后回退到原始归档模式。" data-en="LLM-driven consolidation auto-triggers when context usage reaches ~75%, compressing older memories. Falls back to raw archive mode after 3 LLM consolidation failures.">LLM-driven consolidation auto-triggers when context usage reaches ~75%, compressing older memories. Falls back to raw archive mode after 3 LLM consolidation failures.</p>
+        <h3 data-zh="显式记忆" data-en="Explicit Memory">Explicit Memory</h3>
+        <div class="code-block">
+          <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" data-copy-text="/memorize Always use tabs for indentation in this project" data-zh="复制" data-en="Copy">Copy</button></div>
+          <pre><code><span class="token-comment"># In REPL or via channel</span>
+<span class="token-keyword">/memorize</span> <span class="token-string">Always use tabs for indentation in this project</span></code></pre>
+        </div>
+
+        <h2 id="skills" data-zh="技能系统" data-en="Skills System">Skills System</h2>
+        <p data-zh="技能是模块化的 SKILL.md 文件，位于 skills/&lt;name&gt;/SKILL.md，使用 YAML frontmatter 定义触发器和优先级。" data-en="Skills are modular SKILL.md files in skills/&lt;name&gt;/SKILL.md with YAML frontmatter defining triggers and priority.">Skills are modular SKILL.md files in <code>skills/&lt;name&gt;/SKILL.md</code> with YAML frontmatter defining triggers and priority.</p>
+        <div class="code-block">
+          <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" data-copy-text="xbot skills list" data-zh="复制" data-en="Copy">Copy</button></div>
+          <pre><code><span class="token-keyword">xbot</span> skills list             <span class="token-comment"># List all skills</span>
+<span class="token-keyword">xbot</span> skills init <span class="token-string">my-skill</span>    <span class="token-comment"># Create a custom skill</span></code></pre>
+        </div>
+        <h3 data-zh="内置技能列表" data-en="Built-in Skills">Built-in Skills</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="技能" data-en="Skill">Skill</th><th data-zh="用途" data-en="Purpose">Purpose</th></tr></thead>
+            <tbody>
+              <tr><td><code>software-engineer</code></td><td data-zh="代码编写、调试、重构" data-en="Code writing, debugging, refactoring">Code writing, debugging, refactoring</td></tr>
+              <tr><td><code>summarize</code></td><td data-zh="内容摘要和报告生成" data-en="Content summarization and report generation">Content summarization and report generation</td></tr>
+              <tr><td><code>github</code></td><td data-zh="GitHub 仓库操作和 CI/CD" data-en="GitHub repository operations and CI/CD">GitHub repository operations and CI/CD</td></tr>
+              <tr><td><code>github-cli</code></td><td data-zh="gh 命令行集成" data-en="gh CLI integration">gh CLI integration</td></tr>
+              <tr><td><code>data-analyst</code></td><td data-zh="数据分析和可视化" data-en="Data analysis and visualization">Data analysis and visualization</td></tr>
+              <tr><td><code>cron</code></td><td data-zh="定时任务管理" data-en="Scheduled task management">Scheduled task management</td></tr>
+              <tr><td><code>scheduled-ops</code></td><td data-zh="定时运维操作" data-en="Scheduled operations">Scheduled operations</td></tr>
+              <tr><td><code>memory</code></td><td data-zh="记忆管理" data-en="Memory management">Memory management</td></tr>
+              <tr><td><code>memory-hygiene</code></td><td data-zh="记忆清理和整理" data-en="Memory cleanup and organization">Memory cleanup and organization</td></tr>
+              <tr><td><code>memory-entry-writer</code></td><td data-zh="任务摘要自动写入记忆" data-en="Auto-write task summaries to memory">Auto-write task summaries to memory</td></tr>
+              <tr><td><code>weather</code></td><td data-zh="天气查询" data-en="Weather lookup">Weather lookup</td></tr>
+              <tr><td><code>project-init</code></td><td data-zh="项目初始化" data-en="Project initialization">Project initialization</td></tr>
+              <tr><td><code>project-context</code></td><td data-zh="项目上下文理解" data-en="Project context understanding">Project context understanding</td></tr>
+              <tr><td><code>workspace-operator</code></td><td data-zh="工作区操作" data-en="Workspace operations">Workspace operations</td></tr>
+              <tr><td><code>delivery-rules</code></td><td data-zh="消息投递规则" data-en="Message delivery rules">Message delivery rules</td></tr>
+              <tr><td><code>tmux</code></td><td data-zh="tmux 会话管理" data-en="tmux session management">tmux session management</td></tr>
+              <tr><td><code>clawhub</code></td><td data-zh="ClawHub 集成" data-en="ClawHub integration">ClawHub integration</td></tr>
+              <tr><td><code>skill-creator</code></td><td data-zh="创建新技能" data-en="Create new skills">Create new skills</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="subagents" data-zh="子 Agent 系统" data-en="Subagent System">Subagent System</h2>
+        <p data-zh="主 Agent 可以使用 spawn 工具生成后台子 Agent，并行执行子任务。子 Agent 默认最多 3 并发，每个最多 100 次迭代。" data-en="The main agent can spawn background subagents for parallel subtask execution. Subagents default to 3 max concurrent with 100 max iterations each.">The main agent can spawn background subagents for parallel subtask execution. Subagents default to 3 max concurrent with 100 max iterations each.</p>
+        <div class="callout-warning">
+          <div class="callout-title" data-zh="限制" data-en="Limitations">Limitations</div>
+          <p data-zh="子 Agent 不能使用 spawn、cron 或 message 工具。如果 subagents.model 为空，子 Agent 继承主任务模型。" data-en="Subagents cannot use spawn, cron, or message tools. If subagents.model is empty, subagents inherit the main task model.">Subagents cannot use <code>spawn</code>, <code>cron</code>, or <code>message</code> tools. If <code>subagents.model</code> is empty, subagents inherit the main task model.</p>
+        </div>
+
+        <h2 id="hybrid" data-zh="混合模型路由" data-en="Hybrid Model Routing">Hybrid Model Routing</h2>
+        <p data-zh="主任务使用远程前沿 API（如 OpenAI GPT-4.1），子 Agent 切换到本地模型（如 vLLM 上的 Qwen）进行并行工作，兼顾质量与成本。" data-en="Main task on a remote frontier API (e.g., OpenAI GPT-4.1), subagents switch to a local model (e.g., Qwen on vLLM) for parallel work — balancing quality and cost.">Main task on a remote frontier API (e.g., OpenAI GPT-4.1), subagents switch to a local model (e.g., Qwen on vLLM) for parallel work — balancing quality and cost.</p>
+        <div class="code-block">
+          <div class="code-header"><span class="code-lang">json</span><button class="copy-btn" data-zh="复制" data-en="Copy">Copy</button></div>
+          <pre><code>{
+  <span class="token-string">"agents"</span>: {
+    <span class="token-string">"defaults"</span>: {
+      <span class="token-string">"model"</span>: <span class="token-string">"openai/gpt-4.1"</span>,
+      <span class="token-string">"provider"</span>: <span class="token-string">"openai"</span>
+    },
+    <span class="token-string">"subagents"</span>: {
+      <span class="token-string">"model"</span>: <span class="token-string">"qwen2.5-coder:7b"</span>,
+      <span class="token-string">"provider"</span>: <span class="token-string">"local-vllm"</span>,
+      <span class="token-string">"apiBase"</span>: <span class="token-string">"http://127.0.0.1:8001/v1"</span>
+    }
+  },
+  <span class="token-string">"providers"</span>: {
+    <span class="token-string">"openai"</span>: { <span class="token-string">"apiKey"</span>: <span class="token-string">"sk-..."</span> },
+    <span class="token-string">"local-vllm"</span>: {
+      <span class="token-string">"apiKey"</span>: <span class="token-string">""</span>,
+      <span class="token-string">"apiBase"</span>: <span class="token-string">"http://127.0.0.1:8001/v1"</span>
+    }
+  }
+}</code></pre>
+        </div>
+
+        <h2 id="providers" data-zh="提供商配置" data-en="Provider Configuration">Provider Configuration</h2>
+        <p data-zh="xbot 支持 26 种 LLM 提供商，具有自动模型路由功能 — 从模型名称前缀、API Key 前缀或 API Base URL 自动检测提供商。" data-en="xbot supports 26 LLM providers with automatic model routing — auto-detecting provider from model name prefixes, API key prefixes, or API base URLs.">xbot supports 26 LLM providers with automatic model routing — auto-detecting provider from model name prefixes, API key prefixes, or API base URLs.</p>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="类别" data-en="Category">Category</th><th data-zh="提供商" data-en="Providers">Providers</th></tr></thead>
+            <tbody>
+              <tr><td data-zh="云端 API" data-en="Cloud APIs">Cloud APIs</td><td>OpenAI, Anthropic, DeepSeek, Groq, Gemini, Moonshot, MiniMax, Mistral, StepFun, Zhipu, DashScope, Azure OpenAI</td></tr>
+              <tr><td data-zh="网关" data-en="Gateways">Gateways</td><td>OpenRouter, AIHubMix, SiliconFlow, Volcengine, BytePlus</td></tr>
+              <tr><td data-zh="本地推理" data-en="Local">Local</td><td>Ollama, vLLM, OVMS, Custom</td></tr>
+              <tr><td data-zh="OAuth" data-en="OAuth">OAuth</td><td>GitHub Copilot, OpenAI Codex</td></tr>
+              <tr><td data-zh="其他" data-en="Other">Other</td><td>Cursor</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="cron" data-zh="定时任务调度" data-en="Cron Scheduling">Cron Scheduling</h2>
+        <p data-zh="三种调度模式：一次性定时（At）、周期性（Every）和 Cron 表达式（Cron），支持时区配置。任务持久化到 .xbot/state/cron/jobs.json。" data-en="Three scheduling modes: one-shot (At), interval (Every), and cron expression (Cron) with timezone support. Jobs persist to .xbot/state/cron/jobs.json.">Three scheduling modes: one-shot (At), interval (Every), and cron expression (Cron) with timezone support. Jobs persist to <code>.xbot/state/cron/jobs.json</code>.</p>
+        <div class="code-block">
+          <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" data-copy-text="xbot jobs" data-zh="复制" data-en="Copy">Copy</button></div>
+          <pre><code><span class="token-keyword">xbot</span> jobs              <span class="token-comment"># List all scheduled jobs</span></code></pre>
+        </div>
+
+        <h2 id="gateway" data-zh="Gateway 端点" data-en="Gateway Endpoints">Gateway Endpoints</h2>
+        <p data-zh="xbot run 启动的 Gateway HTTP 服务器默认监听 0.0.0.0:18790。" data-en="The Gateway HTTP server started by xbot run listens on 0.0.0.0:18790 by default.">The Gateway HTTP server started by <code>xbot run</code> listens on <code>0.0.0.0:18790</code> by default.</p>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="端点" data-en="Endpoint">Endpoint</th><th data-zh="用途" data-en="Purpose">Purpose</th></tr></thead>
+            <tbody>
+              <tr><td><code>GET /healthz</code></td><td data-zh="健康检查" data-en="Health check">Health check</td></tr>
+              <tr><td><code>GET /readyz</code></td><td data-zh="就绪检查" data-en="Readiness check">Readiness check</td></tr>
+              <tr><td><code>GET /status</code></td><td data-zh="运行时状态 JSON" data-en="Runtime status JSON">Runtime status JSON</td></tr>
+              <tr><td><code>GET /metrics</code></td><td data-zh="Prometheus 格式指标" data-en="Prometheus-format metrics">Prometheus-format metrics</td></tr>
+              <tr><td><code>GET /admin</code></td><td data-zh="Web 管理界面" data-en="Web admin UI">Web admin UI</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="config" data-zh="完整配置参考" data-en="Full Configuration Reference">Full Configuration Reference</h2>
+        <p data-zh="配置文件位于 ~/.xbot/config.json。以下是所有可用配置项：" data-en="Config file at ~/.xbot/config.json. All available settings:">Config file at <code>~/.xbot/config.json</code>. All available settings:</p>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="路径" data-en="Path">Path</th><th data-zh="默认值" data-en="Default">Default</th><th data-zh="说明" data-en="Description">Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>agents.defaults.model</code></td><td><code>openai/gpt-4.1-mini</code></td><td data-zh="默认 LLM 模型" data-en="Default LLM model">Default LLM model</td></tr>
+              <tr><td><code>agents.defaults.provider</code></td><td><code>auto</code></td><td data-zh="提供商选择" data-en="Provider selection">Provider selection</td></tr>
+              <tr><td><code>agents.defaults.maxTokens</code></td><td><code>16384</code></td><td data-zh="最大补全 token 数" data-en="Max completion tokens">Max completion tokens</td></tr>
+              <tr><td><code>agents.defaults.contextWindowTokens</code></td><td><code>65536</code></td><td data-zh="上下文窗口大小" data-en="Context window size">Context window size</td></tr>
+              <tr><td><code>agents.defaults.maxConcurrentTools</code></td><td><code>5</code></td><td data-zh="并行工具执行数" data-en="Parallel tool execution count">Parallel tool execution count</td></tr>
+              <tr><td><code>agents.defaults.maxConcurrentRequests</code></td><td><code>3</code></td><td data-zh="全局请求并发数" data-en="Global request concurrency">Global request concurrency</td></tr>
+              <tr><td><code>agents.defaults.memoryMaxBytes</code></td><td><code>32768</code></td><td data-zh="记忆文件大小上限" data-en="Memory file size cap">Memory file size cap</td></tr>
+              <tr><td><code>gateway.host</code></td><td><code>0.0.0.0</code></td><td data-zh="Gateway 监听地址" data-en="Gateway listen host">Gateway listen host</td></tr>
+              <tr><td><code>gateway.port</code></td><td><code>18790</code></td><td data-zh="Gateway 监听端口" data-en="Gateway listen port">Gateway listen port</td></tr>
+              <tr><td><code>gateway.heartbeat.enabled</code></td><td><code>true</code></td><td data-zh="心跳服务" data-en="Heartbeat service">Heartbeat service</td></tr>
+              <tr><td><code>gateway.heartbeat.intervalS</code></td><td><code>1800</code></td><td data-zh="心跳间隔（秒）" data-en="Heartbeat interval (seconds)">Heartbeat interval (seconds)</td></tr>
+              <tr><td><code>tools.exec.enable</code></td><td><code>true</code></td><td data-zh="启用 Shell 执行" data-en="Enable shell execution">Enable shell execution</td></tr>
+              <tr><td><code>tools.exec.timeout</code></td><td><code>120</code></td><td data-zh="Shell 超时（秒）" data-en="Shell timeout (seconds)">Shell timeout (seconds)</td></tr>
+              <tr><td><code>tools.restrictToWorkspace</code></td><td><code>false</code></td><td data-zh="限制文件操作到工作区" data-en="Restrict file ops to workspace">Restrict file ops to workspace</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p data-zh="完整 API 参考见" data-en="For the complete API reference, see the"><a href="api-reference.html" data-zh="API 参考" data-en="API Reference page">API Reference page</a>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="site-footer"><div class="container"><div class="footer-grid"><div class="footer-brand"><a href="index.html" class="logo"><img src="assets/images/logo.svg" alt="xbot"><span>xbot</span></a><p data-zh="纯 Rust 实现的自主 AI Agent 运行时。" data-en="Rust-native autonomous bot runtime.">Rust-native autonomous bot runtime.</p></div><div class="footer-col"><h4 data-zh="文档" data-en="Docs">Docs</h4><a href="getting-started.html">Getting Started</a><a href="user-guide.html">User Guide</a><a href="channels-guide.html">Channels</a><a href="developer-guide.html">Developer Guide</a><a href="api-reference.html">API Reference</a></div><div class="footer-col"><h4 data-zh="资源" data-en="Resources">Resources</h4><a href="https://github.com/guoqingbao/xbot/releases" target="_blank">Releases</a><a href="https://github.com/guoqingbao/xbot" target="_blank">GitHub</a></div><div class="footer-col"><h4 data-zh="社区" data-en="Community">Community</h4><a href="https://github.com/guoqingbao/xbot/issues" target="_blank">Issues</a><a href="https://github.com/guoqingbao/xbot/discussions" target="_blank">Discussions</a></div></div><div class="footer-bottom"><span>MIT License · Copyright 2026 Guoqing Bao</span><span data-zh="用 Rust 和 ❤️ 构建" data-en="Built with Rust and ❤️">Built with Rust and ❤️</span></div></div></footer>
+<script src="assets/js/main.js?v=5"></script>
+</body>
+</html>

@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>xbot — Autonomous Bot Runtime in Rust</title>
+  <meta name="description" content="Rust-native autonomous bot runtime for persistent chat automation, tool execution, scheduled work, and multi-channel message delivery. 26 LLM providers, 13 channels, 12 tools.">
+  <link rel="icon" href="assets/images/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/css/main.css?v=5">
+</head>
+<body>
+<canvas id="particles"></canvas>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a href="index.html" class="logo">
+      <img src="assets/images/logo.svg" alt="xbot">
+      <span data-zh="xbot" data-en="xbot">xbot</span>
+    </a>
+    <nav class="nav-links">
+      <a href="index.html" data-zh="首页" data-en="Home">Home</a>
+      <a href="getting-started.html" data-zh="快速开始" data-en="Getting Started">Getting Started</a>
+      <a href="user-guide.html" data-zh="使用指南" data-en="User Guide">User Guide</a>
+      <a href="channels-guide.html" data-zh="通道" data-en="Channels">Channels</a>
+      <a href="developer-guide.html" data-zh="开发者" data-en="Developer">Developer</a>
+      <a href="api-reference.html" data-zh="API" data-en="API">API</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="lang-toggle" aria-label="Switch language">中文</button>
+      <div class="theme-dropdown">
+        <select class="theme-select" aria-label="Select theme">
+          <option value="light">☀️ Light</option>
+          <option value="dark">🌙 Dark</option>
+          <option value="enflame">🔥 Enflame</option>
+        </select>
+      </div>
+      <a href="https://github.com/guoqingbao/xbot" class="btn btn-sm btn-page" target="_blank">GitHub</a>
+      <button class="mobile-toggle" aria-label="Menu"><span></span><span></span><span></span></button>
+    </div>
+  </div>
+</header>
+<div class="scroll-progress"></div>
+
+<div class="search-overlay">
+  <div class="search-box">
+    <div class="search-input-wrapper">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="text" class="search-input" placeholder="Search documentation... (Ctrl+K)">
+    </div>
+    <div class="search-results"><div class="search-hint" data-zh="输入以搜索文档..." data-en="Type to search documentation...">Type to search documentation...</div></div>
+  </div>
+</div>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-bg"></div>
+  <div class="container">
+    <div class="hero-split">
+      <div class="hero-text">
+        <div class="hero-badge"><em>🤖</em> <span data-zh="v0.1.7 · 纯 Rust · MIT 开源" data-en="v0.1.7 · Pure Rust · MIT Licensed">v0.1.7 · Pure Rust · MIT Licensed</span></div>
+        <h1>
+          <span class="gradient-text" data-zh="自主 AI Agent 运行时" data-en="Autonomous Bot Runtime">Autonomous Bot Runtime</span><br>
+          <span data-zh="用纯 Rust 构建" data-en="Built in Pure Rust">Built in Pure Rust</span>
+        </h1>
+        <p data-zh="持久化聊天自动化、智能工具执行、定时任务调度、多通道消息投递。支持 26 种 LLM 提供商、13+ 通道后端、混合模型路由、永久记忆系统。" data-en="Persistent chat automation, intelligent tool execution, scheduled task orchestration, and multi-channel message delivery. 26 LLM providers, 13+ channel backends, hybrid model routing, and permanent memory.">Persistent chat automation, intelligent tool execution, scheduled task orchestration, and multi-channel message delivery. 26 LLM providers, 13+ channel backends, hybrid model routing, and permanent memory.</p>
+        <div class="hero-actions">
+          <a href="getting-started.html" class="btn btn-primary" data-zh="快速开始 →" data-en="Get Started →">Get Started →</a>
+          <a href="https://github.com/guoqingbao/xbot" target="_blank" class="btn btn-outline" data-zh="GitHub →" data-en="GitHub →">GitHub →</a>
+          <button class="btn btn-outline" data-search-trigger data-zh="搜索文档 (Ctrl+K)" data-en="Search Docs (Ctrl+K)">Search Docs (Ctrl+K)</button>
+        </div>
+      </div>
+      <div class="hero-code" id="hero-typing-code">
+        <div class="code-block">
+          <div class="terminal-bar">
+            <span class="terminal-dot"></span>
+            <span class="terminal-dot"></span>
+            <span class="terminal-dot"></span>
+            <span class="terminal-title">Terminal</span>
+          </div>
+          <pre><code></code></pre>
+        </div>
+      </div>
+    </div>
+    <div class="stats-row reveal">
+      <div class="stat-card">
+        <div class="stat-value" data-counter data-target="26">0</div>
+        <div class="stat-label" data-zh="LLM 提供商" data-en="LLM Providers">LLM Providers</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" data-counter data-target="13">0</div>
+        <div class="stat-label" data-zh="通道后端" data-en="Channel Backends">Channel Backends</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" data-counter data-target="12">0</div>
+        <div class="stat-label" data-zh="内置工具" data-en="Built-in Tools">Built-in Tools</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" data-counter data-target="18">0</div>
+        <div class="stat-label" data-zh="内置技能" data-en="Built-in Skills">Built-in Skills</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" data-counter data-target="100">0</div>
+        <div class="stat-label" data-zh="纯 Rust %" data-en="% Pure Rust">% Pure Rust</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Install -->
+<section class="section">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="overline" data-zh="安装" data-en="Install">Install</div>
+      <h2 data-zh="一行命令即可安装" data-en="One-Line Install">One-Line Install</h2>
+      <p data-zh="支持 Linux (x64/ARM64)、macOS (Intel/Apple Silicon)、Windows (x64/ARM64)" data-en="Linux (x64/ARM64), macOS (Intel/Apple Silicon), Windows (x64/ARM64)">Linux (x64/ARM64), macOS (Intel/Apple Silicon), Windows (x64/ARM64)</p>
+    </div>
+    <div class="tabs reveal">
+      <button class="tab-btn active" data-tab="tab-install-sh" data-zh="一行安装 (推荐)" data-en="One-line Install (Recommended)">One-line Install (Recommended)</button>
+      <button class="tab-btn" data-tab="tab-install-npm" data-zh="npm" data-en="npm">npm</button>
+      <button class="tab-btn" data-tab="tab-install-cargo" data-zh="Cargo" data-en="Cargo">Cargo</button>
+      <button class="tab-btn" data-tab="tab-install-source" data-zh="源码编译" data-en="From Source">From Source</button>
+    </div>
+    <div class="tab-content active" id="tab-install-sh">
+      <div class="code-block">
+        <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" data-copy-text="curl -sSL https://guoqingbao.github.io/xbot/install.sh | bash" data-zh="复制" data-en="Copy">Copy</button></div>
+        <pre><code><span class="token-comment"># Auto-detects OS and architecture</span>
+<span class="token-keyword">curl</span> <span class="token-flag">-sSL</span> <span class="token-string">https://guoqingbao.github.io/xbot/install.sh</span> | <span class="token-keyword">bash</span></code></pre>
+      </div>
+    </div>
+    <div class="tab-content" id="tab-install-npm">
+      <div class="code-block">
+        <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" data-copy-text="npm install -g @trusted-ai/xbot" data-zh="复制" data-en="Copy">Copy</button></div>
+        <pre><code><span class="token-keyword">npm install</span> <span class="token-flag">-g</span> <span class="token-string">@trusted-ai/xbot</span></code></pre>
+      </div>
+    </div>
+    <div class="tab-content" id="tab-install-cargo">
+      <div class="code-block">
+        <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" data-copy-text="cargo install xbot" data-zh="复制" data-en="Copy">Copy</button></div>
+        <pre><code><span class="token-keyword">cargo install</span> <span class="token-string">xbot</span></code></pre>
+      </div>
+    </div>
+    <div class="tab-content" id="tab-install-source">
+      <div class="code-block">
+        <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" data-copy-text="git clone https://github.com/guoqingbao/xbot.git&#10;cd xbot&#10;cargo install --path ." data-zh="复制" data-en="Copy">Copy</button></div>
+        <pre><code><span class="token-keyword">git clone</span> <span class="token-string">https://github.com/guoqingbao/xbot.git</span>
+<span class="token-keyword">cd</span> xbot
+<span class="token-keyword">cargo install</span> <span class="token-flag">--path</span> .</code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Features -->
+<section class="section">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="overline" data-zh="核心功能" data-en="Core Features">Core Features</div>
+      <h2 data-zh="为自主自动化而生" data-en="Built for Autonomous Automation">Built for Autonomous Automation</h2>
+      <p data-zh="从交互式 CLI 到全天候后台服务，xbot 覆盖所有 AI Agent 使用场景。" data-en="From interactive CLI to always-on backend, xbot covers every AI agent use case.">From interactive CLI to always-on backend, xbot covers every AI agent use case.</p>
+    </div>
+    <div class="features-grid">
+      <div class="feature-card reveal"><span class="feature-icon">🧠</span><h3 data-zh="持久化 Agent 运行时" data-en="Persistent Agent Runtime">Persistent Agent Runtime</h3><p data-zh="长运行后端服务，JSONL 会话持久化，可配置并发控制（默认 3 并发），CLI、REPL、后端三种工作模式。" data-en="Long-running backend with JSONL session persistence, configurable concurrency (default 3), and three operating modes: CLI, REPL, and backend service.">Long-running backend with JSONL session persistence, configurable concurrency (default 3), and three operating modes: CLI, REPL, and backend service.</p></div>
+      <div class="feature-card reveal"><span class="feature-icon">📝</span><h3 data-zh="永久记忆系统" data-en="Permanent Memory">Permanent Memory</h3><p data-zh="LLM 驱动的记忆整合（上下文达 75% 时自动触发），MEMORY.md + HISTORY.md 双文件架构，/memorize 命令，话题相关检索。" data-en="LLM-driven memory consolidation (auto-triggers at 75% context), dual-file MEMORY.md + HISTORY.md architecture, /memorize command, and topic-relevant retrieval.">LLM-driven memory consolidation (auto-triggers at 75% context), dual-file MEMORY.md + HISTORY.md architecture, /memorize command, and topic-relevant retrieval.</p></div>
+      <div class="feature-card reveal"><span class="feature-icon">🛠️</span><h3 data-zh="12 种内置工具" data-en="12 Built-in Tools">12 Built-in Tools</h3><p data-zh="文件读写编辑、目录浏览、grep 搜索、Shell 命令、网络搜索/抓取、消息投递、Cron 调度、子 Agent 生成。" data-en="File read/write/edit, directory listing, grep search, shell exec, web search/fetch, messaging, cron scheduling, and subagent spawning.">File read/write/edit, directory listing, grep search, shell exec, web search/fetch, messaging, cron scheduling, and subagent spawning.</p></div>
+      <div class="feature-card reveal"><span class="feature-icon">🧵</span><h3 data-zh="混合模型路由" data-en="Hybrid Model Routing">Hybrid Model Routing</h3><p data-zh="主任务使用远程前沿 API（OpenAI、DeepSeek），子 Agent 切换到本地模型（Ollama、vLLM）并行执行，最大化效率与成本控制。" data-en="Main task on remote frontier API (OpenAI, DeepSeek), subagents fan out onto local models (Ollama, vLLM) for parallel execution — maximizing efficiency and cost control.">Main task on remote frontier API (OpenAI, DeepSeek), subagents fan out onto local models (Ollama, vLLM) for parallel execution — maximizing efficiency and cost control.</p></div>
+      <div class="feature-card reveal"><span class="feature-icon">📬</span><h3 data-zh="13+ 通道后端" data-en="13+ Channel Backends">13+ Channel Backends</h3><p data-zh="Slack、Telegram、Discord、飞书、钉钉、微信、企业微信、QQ、WhatsApp、Matrix、Email、MoChat 等，统一消息总线架构。" data-en="Slack, Telegram, Discord, Feishu, DingTalk, WeChat, WeCom, QQ, WhatsApp, Matrix, Email, MoChat, and more — unified message bus architecture.">Slack, Telegram, Discord, Feishu, DingTalk, WeChat, WeCom, QQ, WhatsApp, Matrix, Email, MoChat, and more — unified message bus architecture.</p></div>
+      <div class="feature-card reveal"><span class="feature-icon">🤝</span><h3 data-zh="26 种 LLM 提供商" data-en="26 LLM Providers">26 LLM Providers</h3><p data-zh="OpenAI、Anthropic、DeepSeek、Gemini、Groq、Mistral 等云端 API，以及 Ollama、vLLM 等本地推理，自动检测模型路由。" data-en="Cloud APIs (OpenAI, Anthropic, DeepSeek, Gemini, Groq, Mistral) plus local inference (Ollama, vLLM) with automatic model routing.">Cloud APIs (OpenAI, Anthropic, DeepSeek, Gemini, Groq, Mistral) plus local inference (Ollama, vLLM) with automatic model routing.</p></div>
+      <div class="feature-card reveal"><span class="feature-icon">🔌</span><h3 data-zh="MCP 工具集成" data-en="MCP Integration">MCP Integration</h3><p data-zh="MCP stdio 协议支持，连接外部工具服务器（GitHub、数据库、文件系统等），工具以 mcp_server_tool 格式注册。" data-en="MCP stdio protocol support for external tool servers (GitHub, databases, filesystems). Tools register as mcp_server_tool format.">MCP stdio protocol support for external tool servers (GitHub, databases, filesystems). Tools register as mcp_server_tool format.</p></div>
+      <div class="feature-card reveal"><span class="feature-icon">🧩</span><h3 data-zh="18 种内置技能" data-en="18 Built-in Skills">18 Built-in Skills</h3><p data-zh="软件工程、研究报告、GitHub/CI、定时运维、记忆管理、数据分析、项目初始化等模块化技能系统。" data-en="Software engineering, research, GitHub/CI, scheduled ops, memory management, data analysis, project initialization, and more modular skills.">Software engineering, research, GitHub/CI, scheduled ops, memory management, data analysis, project initialization, and more modular skills.</p></div>
+      <div class="feature-card reveal"><span class="feature-icon">⏱️</span><h3 data-zh="Cron 调度 + 心跳" data-en="Cron Scheduling + Heartbeat">Cron Scheduling + Heartbeat</h3><p data-zh="支持一次性定时、周期性和 Cron 表达式调度，内置心跳服务（默认每 30 分钟自主检查任务）。" data-en="One-shot, interval, and cron expression scheduling with built-in heartbeat service (default 30-minute autonomous task review).">One-shot, interval, and cron expression scheduling with built-in heartbeat service (default 30-minute autonomous task review).</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- Providers -->
+<section class="section" style="background:var(--surface-alt)">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="overline" data-zh="提供商" data-en="Providers">Providers</div>
+      <h2 data-zh="26 种 LLM 提供商" data-en="26 LLM Providers">26 LLM Providers</h2>
+      <p data-zh="云端 API、本地推理、OAuth 登录 — 自动检测路由，一套配置适配所有模型。" data-en="Cloud APIs, local inference, OAuth login — auto-detect routing, one config fits all models.">Cloud APIs, local inference, OAuth login — auto-detect routing, one config fits all models.</p>
+    </div>
+    <div class="model-families reveal">
+      <div class="model-family"><span class="model-family-icon">🟢</span><span class="model-family-name">OpenAI</span></div>
+      <div class="model-family"><span class="model-family-icon">🟠</span><span class="model-family-name">Anthropic</span></div>
+      <div class="model-family"><span class="model-family-icon">🔵</span><span class="model-family-name">DeepSeek</span></div>
+      <div class="model-family"><span class="model-family-icon">⚡</span><span class="model-family-name">Groq</span></div>
+      <div class="model-family"><span class="model-family-icon">💎</span><span class="model-family-name">Gemini</span></div>
+      <div class="model-family"><span class="model-family-icon">🌙</span><span class="model-family-name">Moonshot</span></div>
+      <div class="model-family"><span class="model-family-icon">🔷</span><span class="model-family-name">Mistral</span></div>
+      <div class="model-family"><span class="model-family-icon">🌊</span><span class="model-family-name">MiniMax</span></div>
+      <div class="model-family"><span class="model-family-icon">🪜</span><span class="model-family-name">StepFun</span></div>
+      <div class="model-family"><span class="model-family-icon">📡</span><span class="model-family-name">Zhipu</span></div>
+      <div class="model-family"><span class="model-family-icon">☁️</span><span class="model-family-name">DashScope</span></div>
+      <div class="model-family"><span class="model-family-icon">🔶</span><span class="model-family-name">Azure OpenAI</span></div>
+      <div class="model-family"><span class="model-family-icon">🔀</span><span class="model-family-name">OpenRouter</span></div>
+      <div class="model-family"><span class="model-family-icon">🔗</span><span class="model-family-name">SiliconFlow</span></div>
+      <div class="model-family"><span class="model-family-icon">🌋</span><span class="model-family-name">Volcengine</span></div>
+      <div class="model-family"><span class="model-family-icon">🦙</span><span class="model-family-name">Ollama</span></div>
+      <div class="model-family"><span class="model-family-icon">⚙️</span><span class="model-family-name">vLLM</span></div>
+      <div class="model-family"><span class="model-family-icon">🐙</span><span class="model-family-name">GitHub Copilot</span></div>
+      <div class="model-family"><span class="model-family-icon">✏️</span><span class="model-family-name">Cursor</span></div>
+      <div class="model-family"><span class="model-family-icon">🔧</span><span class="model-family-name">Custom</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- Downloads -->
+<section class="section">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="overline" data-zh="下载" data-en="Downloads">Downloads</div>
+      <h2 data-zh="预编译包" data-en="Pre-built Packages">Pre-built Packages</h2>
+      <p data-zh="每个平台的预编译二进制文件，即下即用。" data-en="Pre-compiled binaries for every platform. Download and run.">Pre-compiled binaries for every platform. Download and run.</p>
+    </div>
+    <div class="table-wrapper reveal">
+      <table>
+        <thead>
+          <tr>
+            <th data-zh="平台" data-en="Platform">Platform</th>
+            <th data-zh="架构" data-en="Architecture">Architecture</th>
+            <th data-zh="格式" data-en="Format">Format</th>
+            <th data-zh="下载" data-en="Download">Download</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Linux</td><td>x86_64</td><td>.deb / .tar.gz</td><td><a href="https://github.com/guoqingbao/xbot/releases/latest" class="btn btn-sm btn-outline" target="_blank" data-zh="下载 →" data-en="Download →">Download →</a></td></tr>
+          <tr><td>Linux</td><td>ARM64</td><td>.deb / .tar.gz</td><td><a href="https://github.com/guoqingbao/xbot/releases/latest" class="btn btn-sm btn-outline" target="_blank" data-zh="下载 →" data-en="Download →">Download →</a></td></tr>
+          <tr><td>macOS</td><td>Apple Silicon</td><td>.tar.gz</td><td><a href="https://github.com/guoqingbao/xbot/releases/latest" class="btn btn-sm btn-outline" target="_blank" data-zh="下载 →" data-en="Download →">Download →</a></td></tr>
+          <tr><td>macOS</td><td>Intel x64</td><td>.tar.gz</td><td><a href="https://github.com/guoqingbao/xbot/releases/latest" class="btn btn-sm btn-outline" target="_blank" data-zh="下载 →" data-en="Download →">Download →</a></td></tr>
+          <tr><td>Windows</td><td>x86_64</td><td>.zip</td><td><a href="https://github.com/guoqingbao/xbot/releases/latest" class="btn btn-sm btn-outline" target="_blank" data-zh="下载 →" data-en="Download →">Download →</a></td></tr>
+          <tr><td>Windows</td><td>ARM64</td><td>.zip</td><td><a href="https://github.com/guoqingbao/xbot/releases/latest" class="btn btn-sm btn-outline" target="_blank" data-zh="下载 →" data-en="Download →">Download →</a></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- Use Cases -->
+<section class="section" style="background:var(--surface-alt)">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="overline" data-zh="应用场景" data-en="Use Cases">Use Cases</div>
+      <h2 data-zh="无限可能" data-en="Endless Possibilities">Endless Possibilities</h2>
+    </div>
+    <div class="features-grid">
+      <div class="feature-card reveal"><span class="feature-icon">💬</span><h3 data-zh="全渠道 AI 助手" data-en="Omni-Channel AI Assistant">Omni-Channel AI Assistant</h3><p data-zh="通过 Slack、Telegram、Discord、微信等同时接收和回复消息，统一管理所有对话。" data-en="Receive and reply across Slack, Telegram, Discord, WeChat simultaneously — unified management for all conversations.">Receive and reply across Slack, Telegram, Discord, WeChat simultaneously — unified management for all conversations.</p></div>
+      <div class="feature-card reveal"><span class="feature-icon">🔧</span><h3 data-zh="DevOps 自动化" data-en="DevOps Automation">DevOps Automation</h3><p data-zh="文件管理、Shell 命令执行、GitHub CI/CD 集成、定时运维任务 — 全自主执行。" data-en="File management, shell execution, GitHub CI/CD integration, and scheduled ops — fully autonomous execution.">File management, shell execution, GitHub CI/CD integration, and scheduled ops — fully autonomous execution.</p></div>
+      <div class="feature-card reveal"><span class="feature-icon">🔬</span><h3 data-zh="研究与报告" data-en="Research & Reporting">Research & Reporting</h3><p data-zh="网络搜索、数据抓取、多源信息整合、自动生成研究报告。" data-en="Web search, data fetching, multi-source aggregation, and automated research report generation.">Web search, data fetching, multi-source aggregation, and automated research report generation.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- Documentation Links -->
+<section class="section">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="overline" data-zh="文档" data-en="Documentation">Documentation</div>
+      <h2 data-zh="深入了解" data-en="Dive Deeper">Dive Deeper</h2>
+      <p data-zh="指南、架构说明、API 参考和运维手册。" data-en="Guides, architecture docs, API reference, and operations manual.">Guides, architecture docs, API reference, and operations manual.</p>
+    </div>
+    <div class="community-grid reveal">
+      <a href="getting-started.html" class="community-card"><div class="community-icon">🚀</div><h3 data-zh="快速开始" data-en="Getting Started">Getting Started</h3><p data-zh="安装、配置、首次运行" data-en="Install, configure, and run for the first time">Install, configure, and run for the first time</p></a>
+      <a href="user-guide.html" class="community-card"><div class="community-icon">📖</div><h3 data-zh="使用指南" data-en="User Guide">User Guide</h3><p data-zh="工作模式、记忆系统、技能、混合路由、MCP、Gateway" data-en="Operating modes, memory, skills, hybrid routing, MCP, gateway">Operating modes, memory, skills, hybrid routing, MCP, gateway</p></a>
+      <a href="channels-guide.html" class="community-card"><div class="community-icon">📬</div><h3 data-zh="通道配置" data-en="Channel Setup">Channel Setup</h3><p data-zh="13+ 通道的详细凭证获取与配置指南" data-en="Detailed credential and configuration guides for 13+ channels">Detailed credential and configuration guides for 13+ channels</p></a>
+      <a href="developer-guide.html" class="community-card"><div class="community-icon">🏗️</div><h3 data-zh="开发者指南" data-en="Developer Guide">Developer Guide</h3><p data-zh="架构、模块结构、贡献指南、扩展开发" data-en="Architecture, module structure, contributing, extending">Architecture, module structure, contributing, extending</p></a>
+      <a href="api-reference.html" class="community-card"><div class="community-icon">📡</div><h3 data-zh="API 参考" data-en="API Reference">API Reference</h3><p data-zh="CLI 命令、环境变量、Gateway 端点、Admin API" data-en="CLI commands, env vars, gateway endpoints, admin API">CLI commands, env vars, gateway endpoints, admin API</p></a>
+      <a href="https://github.com/guoqingbao/xbot/blob/main/docs/HYBRID_MODELS.md" target="_blank" class="community-card"><div class="community-icon">🧵</div><h3 data-zh="混合模型" data-en="Hybrid Models">Hybrid Models</h3><p data-zh="远程主模型 + 本地子 Agent 路由配置" data-en="Remote main model + local subagent routing">Remote main model + local subagent routing</p></a>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a href="index.html" class="logo"><img src="assets/images/logo.svg" alt="xbot"><span>xbot</span></a>
+        <p data-zh="纯 Rust 实现的自主 AI Agent 运行时，支持 26 种 LLM 提供商和 13+ 通道后端。" data-en="Rust-native autonomous bot runtime with 26 LLM providers and 13+ channel backends.">Rust-native autonomous bot runtime with 26 LLM providers and 13+ channel backends.</p>
+      </div>
+      <div class="footer-col">
+        <h4 data-zh="文档" data-en="Docs">Docs</h4>
+        <a href="getting-started.html" data-zh="快速开始" data-en="Getting Started">Getting Started</a>
+        <a href="user-guide.html" data-zh="使用指南" data-en="User Guide">User Guide</a>
+        <a href="channels-guide.html" data-zh="通道配置" data-en="Channels">Channels</a>
+        <a href="developer-guide.html" data-zh="开发者指南" data-en="Developer Guide">Developer Guide</a>
+        <a href="api-reference.html" data-zh="API 参考" data-en="API Reference">API Reference</a>
+      </div>
+      <div class="footer-col">
+        <h4 data-zh="资源" data-en="Resources">Resources</h4>
+        <a href="https://github.com/guoqingbao/xbot/releases" target="_blank" data-zh="版本发布" data-en="Releases">Releases</a>
+        <a href="https://github.com/guoqingbao/xbot/blob/main/docs/INSTALLATION.md" target="_blank" data-zh="安装指南" data-en="Installation">Installation</a>
+        <a href="https://github.com/guoqingbao/xbot/blob/main/docs/OPERATIONS.md" target="_blank" data-zh="运维手册" data-en="Operations">Operations</a>
+        <a href="https://github.com/guoqingbao/xbot/blob/main/CHANGELOG.md" target="_blank" data-zh="更新日志" data-en="Changelog">Changelog</a>
+      </div>
+      <div class="footer-col">
+        <h4 data-zh="社区" data-en="Community">Community</h4>
+        <a href="https://github.com/guoqingbao/xbot" target="_blank">GitHub</a>
+        <a href="https://github.com/guoqingbao/xbot/issues" target="_blank" data-zh="问题反馈" data-en="Issues">Issues</a>
+        <a href="https://github.com/guoqingbao/xbot/discussions" target="_blank" data-zh="讨论区" data-en="Discussions">Discussions</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>MIT License · Copyright 2026 Guoqing Bao</span>
+      <span data-zh="用 Rust 和 ❤️ 构建" data-en="Built with Rust and ❤️">Built with Rust and ❤️</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+window.SEARCH_INDEX = [
+  { title: 'Getting Started', url: 'getting-started.html', desc: 'Install, configure, and run xbot for the first time', keywords: 'install setup onboard config prerequisites' },
+  { title: 'User Guide', url: 'user-guide.html', desc: 'CLI modes, REPL, backend service, memory, skills, tools', keywords: 'repl chat run channels slack telegram memory skills tools cron' },
+  { title: 'Channel Setup', url: 'channels-guide.html', desc: 'Detailed setup guides for 13+ channel backends', keywords: 'slack telegram discord feishu dingtalk wechat wecom qq whatsapp matrix email mochat' },
+  { title: 'Developer Guide', url: 'developer-guide.html', desc: 'Architecture, contributing, extending xbot', keywords: 'architecture code contribute skills hooks channels engine providers' },
+  { title: 'API Reference', url: 'api-reference.html', desc: 'CLI flags, environment variables, gateway endpoints, admin API', keywords: 'cli flags env api gateway metrics admin sessions cron config' },
+  { title: 'Hybrid Models', url: 'https://github.com/guoqingbao/xbot/blob/main/docs/HYBRID_MODELS.md', desc: 'Remote main model + local subagent routing', keywords: 'hybrid model routing subagent local remote vllm ollama' },
+  { title: 'Operations', url: 'https://github.com/guoqingbao/xbot/blob/main/docs/OPERATIONS.md', desc: 'Production deployment, monitoring, troubleshooting', keywords: 'deploy production monitor metrics prometheus systemd docker' },
+  { title: 'Installation', url: 'getting-started.html#installation', desc: 'Install via script, npm, cargo, or source', keywords: 'install deb npm cargo source curl binary' },
+  { title: 'Memory System', url: 'user-guide.html#memory', desc: 'Permanent memory with LLM-driven consolidation', keywords: 'memory memorize consolidation history' },
+  { title: 'Skills', url: 'user-guide.html#skills', desc: '18 built-in skills for common automation tasks', keywords: 'skills software engineer github ci cron' },
+  { title: 'Tools', url: 'user-guide.html#tools', desc: '12 built-in tools plus dynamic MCP tools', keywords: 'tools read write exec grep search fetch cron spawn' },
+  { title: 'MCP Integration', url: 'user-guide.html#mcp', desc: 'MCP stdio tool server integration', keywords: 'mcp model context protocol stdio tools' },
+  { title: 'Gateway', url: 'api-reference.html#endpoints', desc: 'HTTP gateway with health, metrics, and admin endpoints', keywords: 'gateway http healthz readyz metrics admin' },
+];
+</script>
+<script src="assets/js/main.js?v=5"></script>
+</body>
+</html>

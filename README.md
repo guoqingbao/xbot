@@ -31,25 +31,66 @@ The screenshot highlights one of `xbot`'s core advantages: the main agent can us
 
 ## 📚 Documentation
 
+**[📖 Full Documentation Website →](https://guoqingbao.github.io/xbot/)**
+
 - [🚀 Getting Started](./docs/USAGE.md)
 - [📦 Installation](./docs/INSTALLATION.md)
 - [🧵 Hybrid Remote Main + Local Subagents](./docs/HYBRID_MODELS.md)
 - [🏗️ Architecture](./docs/ARCHITECTURE.md)
 - [⚙️ Operations Guide](./docs/OPERATIONS.md)
 
-## ⚡ Quick Start
+## 🚀 Quick Start
 
-### Install xbot:
+### 📦 Install
+
+**Option 1 — One-line install (Recommended)**
+
+```bash
+curl -sSL https://guoqingbao.github.io/xbot/install.sh | bash
+```
+
+Auto-detects your OS (Linux/macOS) and architecture (x64/ARM64), then installs the latest pre-built binary. On Linux, offers deb package or binary install. On macOS, installs to `/usr/local/bin`.
+
+**Option 2 — npm**
 
 ```bash
 npm install -g @trusted-ai/xbot
-# or cargo install xbot
-# or install a .deb from GitHub Releases
-# or install from source code
+```
+
+**Option 3 — Cargo**
+
+```bash
+cargo install xbot
+```
+
+**Option 4 — Debian/Ubuntu (.deb)**
+
+```bash
+# Download from GitHub Releases (choose your arch)
+curl -fSL -o xbot.deb https://github.com/guoqingbao/xbot/releases/latest/download/xbot-linux-x64.deb
+sudo dpkg -i xbot.deb
+```
+
+**Option 5 — Build from source**
+
+```bash
+git clone https://github.com/guoqingbao/xbot.git
+cd xbot
 cargo install --path .
 ```
 
 The installed command is `xbot`. See [Installation](./docs/INSTALLATION.md) for details.
+
+### Supported Platforms
+
+| Platform | Architecture | Package Format |
+|----------|-------------|----------------|
+| Linux | x86_64 | .deb, .tar.gz |
+| Linux | ARM64 | .deb, .tar.gz |
+| macOS | Apple Silicon | .tar.gz |
+| macOS | Intel x64 | .tar.gz |
+| Windows | x86_64 | .zip |
+| Windows | ARM64 | .zip |
 
 ### Initialize config and workspace:
 

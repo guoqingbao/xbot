@@ -1,6 +1,38 @@
 # Installation
 
-`xbot` supports direct installation without cloning the repository.
+`xbot` supports multiple installation methods across Linux, macOS, and Windows.
+
+## One-Line Install (Recommended)
+
+The easiest way to install `xbot` on Linux or macOS:
+
+```bash
+curl -sSL https://guoqingbao.github.io/xbot/install.sh | bash
+```
+
+This script:
+- Auto-detects your operating system (Linux/macOS)
+- Auto-detects your CPU architecture (x64/ARM64)
+- Downloads the appropriate pre-built binary from GitHub Releases
+- On Linux: offers deb package or binary install options
+- On macOS: installs directly to `/usr/local/bin`
+
+**Environment variable overrides:**
+
+| Variable | Description |
+|----------|-------------|
+| `XBOT_PLATFORM` | Override platform detection (e.g., `linux-x64`, `darwin-arm64`) |
+| `XBOT_MODE` | Skip interactive prompt (`1` = deb, `2` = binary) |
+
+**Non-interactive install (e.g., in CI):**
+
+```bash
+# Install deb package non-interactively
+curl -sSL https://guoqingbao.github.io/xbot/install.sh | XBOT_MODE=1 bash
+
+# Install binary to /usr/local/bin non-interactively
+curl -sSL https://guoqingbao.github.io/xbot/install.sh | XBOT_MODE=2 bash
+```
 
 ## Debian / Ubuntu
 
@@ -76,3 +108,34 @@ cargo build --release
 ```
 
 The source checkout automatically uses the repository `skills/` directory as the built-in skills location.
+
+## Windows
+
+Download the `.zip` archive for your architecture from [GitHub Releases](https://github.com/guoqingbao/xbot/releases/latest):
+
+- `xbot-<version>-win32-x64.zip` — Windows x86_64
+- `xbot-<version>-win32-arm64.zip` — Windows ARM64
+
+Extract and add to your `PATH`:
+
+```powershell
+# Extract to a directory
+Expand-Archive xbot-*-win32-x64.zip -DestinationPath $env:USERPROFILE\.xbot\bin
+
+# Add to PATH (PowerShell)
+$env:PATH += ";$env:USERPROFILE\.xbot\bin"
+
+# Verify installation
+xbot --help
+```
+
+## Supported Platforms Summary
+
+| Platform | Architecture | Install Methods |
+|----------|-------------|-----------------|
+| Linux | x86_64 | install.sh, .deb, npm, cargo, source |
+| Linux | ARM64 | install.sh, .deb, npm, cargo, source |
+| macOS | Apple Silicon | install.sh, npm, cargo, source |
+| macOS | Intel x64 | install.sh, npm, cargo, source |
+| Windows | x86_64 | .zip, npm, cargo, source |
+| Windows | ARM64 | .zip, cargo, source |

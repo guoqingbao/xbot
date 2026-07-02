@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Developer Guide — xbot</title>
+  <link rel="icon" href="assets/images/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/css/main.css?v=5">
+</head>
+<body>
+<canvas id="particles"></canvas>
+<header class="site-header"><div class="header-inner"><a href="index.html" class="logo"><img src="assets/images/logo.svg" alt="xbot"><span>xbot</span></a><nav class="nav-links"><a href="index.html" data-zh="首页" data-en="Home">Home</a><a href="getting-started.html" data-zh="快速开始" data-en="Getting Started">Getting Started</a><a href="user-guide.html" data-zh="使用指南" data-en="User Guide">User Guide</a><a href="channels-guide.html" data-zh="通道" data-en="Channels">Channels</a><a href="developer-guide.html" data-zh="开发者" data-en="Developer">Developer</a><a href="api-reference.html" data-zh="API" data-en="API">API</a></nav><div class="nav-actions"><button class="lang-toggle" aria-label="Switch language">中文</button><div class="theme-dropdown"><select class="theme-select" aria-label="Select theme"><option value="light">☀️ Light</option><option value="dark">🌙 Dark</option><option value="enflame">🔥 Enflame</option></select></div><a href="https://github.com/guoqingbao/xbot" class="btn btn-sm btn-page" target="_blank">GitHub</a><button class="mobile-toggle" aria-label="Menu"><span></span><span></span><span></span></button></div></div></header>
+<div class="scroll-progress"></div>
+
+<div class="page-header">
+  <div class="container">
+    <h1 data-zh="开发者指南" data-en="Developer Guide">Developer Guide</h1>
+    <p data-zh="了解 xbot 的内部架构、51 个源文件的模块结构、如何贡献代码和扩展功能。" data-en="Understand xbot's internal architecture, 51-file module structure, how to contribute, and extend functionality.">Understand xbot's internal architecture, 51-file module structure, how to contribute, and extend functionality.</p>
+  </div>
+</div>
+
+<section class="section">
+  <div class="container">
+    <div class="doc-layout">
+      <nav class="doc-sidebar">
+        <div class="doc-sidebar-group">
+          <h4 data-zh="架构" data-en="Architecture">Architecture</h4>
+          <a href="#overview" data-zh="概览" data-en="Overview">Overview</a>
+          <a href="#diagram" data-zh="架构图" data-en="Diagram">Diagram</a>
+          <a href="#modules" data-zh="模块结构" data-en="Modules">Modules</a>
+          <a href="#message-flow" data-zh="消息流" data-en="Message Flow">Message Flow</a>
+        </div>
+        <div class="doc-sidebar-group">
+          <h4 data-zh="贡献" data-en="Contributing">Contributing</h4>
+          <a href="#setup" data-zh="开发环境" data-en="Dev Setup">Dev Setup</a>
+          <a href="#testing" data-zh="测试" data-en="Testing">Testing</a>
+          <a href="#code-style" data-zh="代码风格" data-en="Code Style">Code Style</a>
+        </div>
+        <div class="doc-sidebar-group">
+          <h4 data-zh="扩展" data-en="Extending">Extending</h4>
+          <a href="#custom-skills" data-zh="自定义技能" data-en="Custom Skills">Custom Skills</a>
+          <a href="#hooks" data-zh="Hook 系统" data-en="Hook System">Hook System</a>
+          <a href="#channels-dev" data-zh="通道开发" data-en="Channel Dev">Channel Dev</a>
+        </div>
+        <div class="doc-sidebar-group">
+          <h4 data-zh="运维" data-en="Operations">Operations</h4>
+          <a href="#deployment" data-zh="部署" data-en="Deployment">Deployment</a>
+          <a href="#concurrency" data-zh="并发安全" data-en="Concurrency">Concurrency</a>
+          <a href="#observability" data-zh="可观测性" data-en="Observability">Observability</a>
+        </div>
+      </nav>
+
+      <div class="doc-content">
+        <h2 id="overview" data-zh="架构概览" data-en="Architecture Overview">Architecture Overview</h2>
+        <p data-zh="xbot 是纯 Rust 构建的自主 Agent 运行时，基于 tokio 异步运行时和 axum HTTP 框架。核心设计原则：单一二进制、无 GPU 依赖、统一消息总线架构。" data-en="xbot is a pure Rust autonomous agent runtime built on tokio async runtime and axum HTTP framework. Core design principles: single binary, no GPU dependency, unified message bus architecture.">xbot is a pure Rust autonomous agent runtime built on tokio async runtime and axum HTTP framework. Core design principles: single binary, no GPU dependency, unified message bus architecture.</p>
+
+        <h2 id="diagram" data-zh="架构图" data-en="Architecture Diagram">Architecture Diagram</h2>
+        <div class="diagram-container">
+          <div class="arch-diagram">
+            <div class="arch-layer" style="background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.3)" data-zh="CLI / TUI (Ratatui) / Gateway (Axum) — 入口层" data-en="CLI / TUI (Ratatui) / Gateway (Axum) — Entry Layer" data-highlight-group="entry">CLI / TUI (Ratatui) / Gateway (Axum) — Entry Layer</div>
+            <div class="arch-arrow">↓</div>
+            <div class="arch-layer" style="background:rgba(6,182,212,0.1);border:1px solid rgba(6,182,212,0.3)" data-zh="Engine — AgentLoop / Orchestrator / Subagents / Memory / Skills / Hooks" data-en="Engine — AgentLoop / Orchestrator / Subagents / Memory / Skills / Hooks" data-highlight-group="engine">Engine — AgentLoop / Orchestrator / Subagents / Memory / Skills / Hooks</div>
+            <div class="arch-arrow">↓</div>
+            <div class="arch-layer" style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3)" data-zh="Tools — Registry / Executor (12 内置 + MCP 动态)" data-en="Tools — Registry / Executor (12 built-in + MCP dynamic)" data-highlight-group="tools">Tools — Registry / Executor (12 built-in + MCP dynamic)</div>
+            <div class="arch-arrow">↓</div>
+            <div class="arch-layer" style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3)" data-zh="Providers — LLM 抽象层 (26 提供商，OpenAI 兼容 + Anthropic 原生)" data-en="Providers — LLM Abstraction (26 providers, OpenAI-compatible + Anthropic native)" data-highlight-group="providers">Providers — LLM Abstraction (26 providers, OpenAI-compatible + Anthropic native)</div>
+            <div class="arch-arrow">↓</div>
+            <div class="arch-layer" style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3)" data-zh="Channels — 13 通道后端 (ChannelManager + 插件注册)" data-en="Channels — 13 backends (ChannelManager + plugin registry)" data-highlight-group="channels">Channels — 13 backends (ChannelManager + plugin registry)</div>
+            <div class="arch-arrow">↓</div>
+            <div class="arch-layer" style="background:rgba(139,92,246,0.1);border:1px solid rgba(139,92,246,0.3)" data-zh="Storage — MessageBus / SessionManager (JSONL 持久化)" data-en="Storage — MessageBus / SessionManager (JSONL persistence)" data-highlight-group="storage">Storage — MessageBus / SessionManager (JSONL persistence)</div>
+          </div>
+        </div>
+
+        <h2 id="modules" data-zh="模块结构" data-en="Module Structure">Module Structure</h2>
+        <p data-zh="共 51 个 Rust 源文件，19 个集成测试文件。" data-en="51 Rust source files, 19 integration test files.">51 Rust source files, 19 integration test files.</p>
+        <div class="code-block">
+          <div class="code-header"><span class="code-lang">tree</span><button class="copy-btn" data-zh="复制" data-en="Copy">Copy</button></div>
+          <pre><code>src/
+├── main.rs              <span class="token-comment"># CLI entry, clap command routing</span>
+├── lib.rs               <span class="token-comment"># Library root</span>
+├── config.rs            <span class="token-comment"># Configuration loading/saving/validation</span>
+├── tools.rs             <span class="token-comment"># Tool definitions, registry, execution engine</span>
+├── cron.rs              <span class="token-comment"># Cron scheduling service (At/Every/Cron)</span>
+├── observability.rs     <span class="token-comment"># Prometheus metrics, CPU/memory snapshots</span>
+├── security.rs          <span class="token-comment"># URL validation, workspace sandboxing</span>
+├── diff.rs              <span class="token-comment"># Diff rendering for file edit approval</span>
+├── util.rs              <span class="token-comment"># Utility functions</span>
+├── cli/                 <span class="token-comment"># CLI subcommands</span>
+│   ├── config_cli.rs    <span class="token-comment"># Interactive provider/channel config</span>
+│   ├── channels_cli.rs  <span class="token-comment"># Channel management commands</span>
+│   └── skills_cli.rs    <span class="token-comment"># Skill management commands</span>
+├── tui/                 <span class="token-comment"># Ratatui TUI</span>
+│   ├── app.rs           <span class="token-comment"># TUI application state</span>
+│   ├── ui.rs            <span class="token-comment"># Terminal rendering</span>
+│   └── markdown.rs      <span class="token-comment"># Markdown-to-TUI rendering</span>
+├── channels/            <span class="token-comment"># 13 channel implementations</span>
+│   ├── slack.rs         <span class="token-comment"># Socket Mode + Webhook</span>
+│   ├── telegram.rs      <span class="token-comment"># Webhook + REST</span>
+│   ├── discord.rs       <span class="token-comment"># Gateway v10 WebSocket</span>
+│   ├── feishu.rs        <span class="token-comment"># Webhook + REST</span>
+│   ├── dingtalk.rs      <span class="token-comment"># Stream gateway WebSocket</span>
+│   ├── matrix.rs        <span class="token-comment"># CS API v3 long-poll</span>
+│   ├── whatsapp.rs      <span class="token-comment"># Baileys WebSocket bridge</span>
+│   ├── qq.rs            <span class="token-comment"># QQ Bot API WebSocket</span>
+│   ├── wecom.rs         <span class="token-comment"># Enterprise WeChat WebSocket</span>
+│   ├── weixin.rs        <span class="token-comment"># HTTP long-poll (QR login)</span>
+│   ├── mochat.rs        <span class="token-comment"># HTTP polling</span>
+│   └── email.rs         <span class="token-comment"># IMAP + SMTP</span>
+├── engine/              <span class="token-comment"># Agent core</span>
+│   ├── orchestrator.rs  <span class="token-comment"># Main agent orchestration</span>
+│   ├── context.rs       <span class="token-comment"># Context window management</span>
+│   ├── memory.rs        <span class="token-comment"># Memory consolidation engine</span>
+│   ├── skills.rs        <span class="token-comment"># Skill loading and matching</span>
+│   ├── subtasks.rs      <span class="token-comment"># Subagent spawn/wait</span>
+│   └── hook.rs          <span class="token-comment"># AgentHook trait + CallbackHook</span>
+├── providers/           <span class="token-comment"># LLM abstractions</span>
+│   ├── registry.rs      <span class="token-comment"># 26-provider registry + auto-detect</span>
+│   ├── anthropic.rs     <span class="token-comment"># Native Anthropic Messages API</span>
+│   └── transcription.rs <span class="token-comment"># Groq audio transcription</span>
+├── runtime/             <span class="token-comment"># Runtime services</span>
+│   ├── bootstrap.rs     <span class="token-comment"># Startup orchestration</span>
+│   ├── worker.rs        <span class="token-comment"># AgentRuntime with semaphore</span>
+│   ├── http.rs          <span class="token-comment"># Axum HTTP server + webhooks</span>
+│   └── heartbeat.rs     <span class="token-comment"># Periodic autonomous review</span>
+├── storage/             <span class="token-comment"># Persistence</span>
+│   ├── message_bus.rs   <span class="token-comment"># Inbound/outbound message queues</span>
+│   └── session_store.rs <span class="token-comment"># JSONL session persistence</span>
+└── integrations/        <span class="token-comment"># External integrations</span>
+    └── mcp.rs           <span class="token-comment"># MCP stdio protocol client</span></code></pre>
+        </div>
+
+        <h2 id="message-flow" data-zh="消息处理流程" data-en="Message Processing Flow">Message Processing Flow</h2>
+        <ol class="steps">
+          <li class="step-item"><p data-zh="Channel 接收消息 → InboundMessage → MessageBus" data-en="Channel receives message → InboundMessage → MessageBus">Channel receives message → <code>InboundMessage</code> → MessageBus</p></li>
+          <li class="step-item"><p data-zh="AgentRuntime（全局信号量 + 会话互斥锁）→ AgentLoop" data-en="AgentRuntime (global semaphore + per-session mutex) → AgentLoop">AgentRuntime (global semaphore + per-session mutex) → AgentLoop</p></li>
+          <li class="step-item"><p data-zh="Agent 构建上下文（记忆 + 技能 + 历史）→ 调用 LLM" data-en="Agent builds context (memory + skills + history) → calls LLM">Agent builds context (memory + skills + history) → calls LLM</p></li>
+          <li class="step-item"><p data-zh="LLM 返回工具调用 → ToolRegistry 并行执行（最多 5 并发）" data-en="LLM returns tool calls → ToolRegistry parallel execution (max 5 concurrent)">LLM returns tool calls → ToolRegistry parallel execution (max 5 concurrent)</p></li>
+          <li class="step-item"><p data-zh="Agent 持久化会话 → OutboundMessage → MessageBus → ChannelManager（重试 + 流式）" data-en="Agent persists session → OutboundMessage → MessageBus → ChannelManager (retry + streaming)">Agent persists session → <code>OutboundMessage</code> → MessageBus → ChannelManager (retry + streaming)</p></li>
+        </ol>
+
+        <h2 id="setup" data-zh="开发环境搭建" data-en="Development Setup">Development Setup</h2>
+        <ol class="steps">
+          <li class="step-item"><p data-zh="安装 Rust 工具链（edition 2024）" data-en="Install Rust toolchain (edition 2024)"><code>curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh</code></p></li>
+          <li class="step-item"><p data-zh="克隆仓库" data-en="Clone the repository"><code>git clone https://github.com/guoqingbao/xbot.git && cd xbot</code></p></li>
+          <li class="step-item"><p data-zh="构建并运行" data-en="Build and run"><code>cargo build --release && cargo run --release -- --help</code></p></li>
+        </ol>
+
+        <h2 id="testing" data-zh="测试" data-en="Testing">Testing</h2>
+        <p data-zh="19 个集成测试文件，使用 wiremock 模拟 HTTP 和 serial_test 进行互斥测试。" data-en="19 integration test files using wiremock for HTTP mocking and serial_test for mutual exclusion.">19 integration test files using wiremock for HTTP mocking and serial_test for mutual exclusion.</p>
+        <div class="code-block">
+          <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" data-copy-text="cargo test" data-zh="复制" data-en="Copy">Copy</button></div>
+          <pre><code><span class="token-keyword">cargo</span> test                                          <span class="token-comment"># All tests</span>
+<span class="token-keyword">cargo</span> test <span class="token-flag">--test</span> test_config <span class="token-flag">--</span> load_config         <span class="token-comment"># Single test</span>
+<span class="token-keyword">cargo</span> test <span class="token-flag">--lib</span> config                               <span class="token-comment"># Module tests</span>
+<span class="token-keyword">cargo</span> test <span class="token-flag">--</span> <span class="token-flag">--nocapture</span>                             <span class="token-comment"># Show output</span>
+<span class="token-keyword">cargo</span> check                                          <span class="token-comment"># Fast compile check</span></code></pre>
+        </div>
+
+        <h2 id="code-style" data-zh="代码风格" data-en="Code Style">Code Style</h2>
+        <div class="code-block">
+          <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" data-copy-text="cargo fmt && cargo clippy -- -D warnings" data-zh="复制" data-en="Copy">Copy</button></div>
+          <pre><code><span class="token-keyword">cargo</span> fmt                             <span class="token-comment"># Format all code</span>
+<span class="token-keyword">cargo</span> fmt <span class="token-flag">--check</span>                      <span class="token-comment"># Check formatting</span>
+<span class="token-keyword">cargo</span> clippy <span class="token-flag">--</span> <span class="token-flag">-D</span> warnings            <span class="token-comment"># Lint (warnings = errors)</span></code></pre>
+        </div>
+        <p data-zh="命名约定：模块 snake_case，类型 PascalCase，函数/变量 snake_case，常量 SCREAMING_SNAKE_CASE。" data-en="Naming: modules snake_case, types PascalCase, functions/variables snake_case, constants SCREAMING_SNAKE_CASE.">Naming: modules <code>snake_case</code>, types <code>PascalCase</code>, functions/variables <code>snake_case</code>, constants <code>SCREAMING_SNAKE_CASE</code>.</p>
+
+        <h2 id="custom-skills" data-zh="自定义技能" data-en="Custom Skills">Custom Skills</h2>
+        <p data-zh="技能位于 skills/&lt;name&gt;/SKILL.md，使用 YAML frontmatter 定义元数据：" data-en="Skills live in skills/&lt;name&gt;/SKILL.md with YAML frontmatter for metadata:">Skills live in <code>skills/&lt;name&gt;/SKILL.md</code> with YAML frontmatter for metadata:</p>
+        <div class="code-block">
+          <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" data-copy-text="xbot skills init my-skill" data-zh="复制" data-en="Copy">Copy</button></div>
+          <pre><code><span class="token-keyword">xbot</span> skills init <span class="token-string">my-skill</span></code></pre>
+        </div>
+        <div class="code-block">
+          <div class="code-header"><span class="code-lang">yaml</span><button class="copy-btn" data-zh="复制" data-en="Copy">Copy</button></div>
+          <pre><code><span class="token-comment">---</span>
+<span class="token-keyword">name</span>: <span class="token-string">my-skill</span>
+<span class="token-keyword">description</span>: <span class="token-string">Brief description of the skill</span>
+<span class="token-keyword">metadata</span>:
+  <span class="token-keyword">rbot</span>:
+    <span class="token-keyword">triggers</span>: [<span class="token-string">pattern1</span>, <span class="token-string">pattern2</span>]
+    <span class="token-keyword">priority</span>: <span class="token-value">50</span>
+<span class="token-comment">---</span>
+
+<span class="token-comment"># Instructions for the agent follow here...</span></code></pre>
+        </div>
+
+        <h2 id="hooks" data-zh="Hook 系统" data-en="Hook System">Hook System</h2>
+        <p data-zh="实现 AgentHook trait 以在 Agent 生命周期中注入自定义行为：" data-en="Implement the AgentHook trait to inject custom behavior into the agent lifecycle:">Implement the <code>AgentHook</code> trait to inject custom behavior into the agent lifecycle:</p>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="回调" data-en="Callback">Callback</th><th data-zh="触发时机" data-en="When">When</th></tr></thead>
+            <tbody>
+              <tr><td><code>before_iteration</code></td><td data-zh="每次 Agent 迭代开始前" data-en="Before each agent iteration">Before each agent iteration</td></tr>
+              <tr><td><code>on_stream</code></td><td data-zh="LLM 流式响应的每个 delta" data-en="Each delta of LLM streaming response">Each delta of LLM streaming response</td></tr>
+              <tr><td><code>on_stream_end</code></td><td data-zh="LLM 流式响应结束" data-en="End of LLM streaming response">End of LLM streaming response</td></tr>
+              <tr><td><code>before_execute_tools</code></td><td data-zh="工具执行前" data-en="Before tool execution">Before tool execution</td></tr>
+              <tr><td><code>after_iteration</code></td><td data-zh="每次 Agent 迭代结束后" data-en="After each agent iteration">After each agent iteration</td></tr>
+              <tr><td><code>finalize_content</code></td><td data-zh="最终内容输出前" data-en="Before final content output">Before final content output</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="channels-dev" data-zh="开发新通道" data-en="Developing New Channels">Developing New Channels</h2>
+        <p data-zh="在 src/channels/ 中添加新模块，实现消息接收和发送接口。参考现有通道（如 slack.rs、discord.rs）的实现模式。通道注册到 ChannelManager，也可使用 register_plugin() API。" data-en="Add a new module in src/channels/ implementing ingress and delivery interfaces. Reference existing channels (slack.rs, discord.rs) for the pattern. Register with ChannelManager or use the register_plugin() API.">Add a new module in <code>src/channels/</code> implementing ingress and delivery interfaces. Reference existing channels (slack.rs, discord.rs) for the pattern. Register with ChannelManager or use the <code>register_plugin()</code> API.</p>
+
+        <h2 id="deployment" data-zh="部署模式" data-en="Deployment Pattern">Deployment Pattern</h2>
+        <ol class="steps">
+          <li class="step-item"><p data-zh="使用稳定工作区路径" data-en="Use a stable workspace path">Use a stable workspace path (<code>~/.xbot/workspace</code> or dedicated project directory)</p></li>
+          <li class="step-item"><p data-zh="使用进程管理器（systemd, launchd, Docker, Kubernetes）" data-en="Use a process supervisor (systemd, launchd, Docker, Kubernetes)">Use a process supervisor (systemd, launchd, Docker, Kubernetes)</p></li>
+          <li class="step-item"><p data-zh="Webhook 通道指向稳定公网 URL" data-en="Point webhook channels at a stable public URL">Point webhook channels at a stable public URL</p></li>
+          <li class="step-item"><p data-zh="暴露 /metrics 到 Prometheus 监控" data-en="Expose /metrics to Prometheus monitoring">Expose <code>/metrics</code> to Prometheus monitoring</p></li>
+          <li class="step-item"><p data-zh="定期检查 .xbot/HEARTBEAT.md 和 cron 任务" data-en="Review .xbot/HEARTBEAT.md and cron jobs regularly">Review <code>.xbot/HEARTBEAT.md</code> and cron jobs regularly</p></li>
+        </ol>
+
+        <h2 id="concurrency" data-zh="并发与安全" data-en="Concurrency &amp; Safety">Concurrency &amp; Safety</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="机制" data-en="Mechanism">Mechanism</th><th data-zh="说明" data-en="Description">Description</th></tr></thead>
+            <tbody>
+              <tr><td data-zh="全局信号量" data-en="Global semaphore">Global semaphore</td><td><code>maxConcurrentRequests</code> (default: 3)</td></tr>
+              <tr><td data-zh="会话互斥锁" data-en="Per-session mutex">Per-session mutex</td><td data-zh="同一会话消息串行化处理" data-en="Messages for same session serialized">Messages for same session serialized</td></tr>
+              <tr><td data-zh="并行工具执行" data-en="Parallel tool execution">Parallel tool execution</td><td><code>maxConcurrentTools</code> (default: 5)</td></tr>
+              <tr><td data-zh="子 Agent 并发" data-en="Subagent concurrency">Subagent concurrency</td><td data-zh="最多 3 并发子 Agent" data-en="Max 3 concurrent subagents">Max 3 concurrent subagents</td></tr>
+              <tr><td data-zh="消息重试退避" data-en="Message retry backoff">Message retry backoff</td><td><code>sendMaxRetries</code> (default: 3, 1s/2s/4s...)</td></tr>
+              <tr><td data-zh="记忆整合" data-en="Memory consolidation">Memory consolidation</td><td data-zh="LLM 驱动 + 3 次失败后回退到原始归档" data-en="LLM-driven + raw archive after 3 failures">LLM-driven + raw archive after 3 failures</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="observability" data-zh="可观测性" data-en="Observability">Observability</h2>
+        <p data-zh="xbot 提供 Prometheus 格式指标、CPU/内存快照、提供商模型目录探测和结构化日志。" data-en="xbot provides Prometheus-format metrics, CPU/memory snapshots, provider model catalog probing, and structured logging.">xbot provides Prometheus-format metrics, CPU/memory snapshots, provider model catalog probing, and structured logging.</p>
+        <div class="code-block">
+          <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn" data-copy-text="curl http://localhost:18790/metrics" data-zh="复制" data-en="Copy">Copy</button></div>
+          <pre><code><span class="token-comment"># Prometheus metrics</span>
+<span class="token-keyword">curl</span> <span class="token-string">http://localhost:18790/metrics</span>
+
+<span class="token-comment"># Runtime status</span>
+<span class="token-keyword">curl</span> <span class="token-string">http://localhost:18790/status</span> | <span class="token-keyword">jq</span>
+
+<span class="token-comment"># CLI status</span>
+<span class="token-keyword">xbot</span> status</code></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="site-footer"><div class="container"><div class="footer-grid"><div class="footer-brand"><a href="index.html" class="logo"><img src="assets/images/logo.svg" alt="xbot"><span>xbot</span></a><p data-zh="纯 Rust 实现的自主 AI Agent 运行时。" data-en="Rust-native autonomous bot runtime.">Rust-native autonomous bot runtime.</p></div><div class="footer-col"><h4 data-zh="文档" data-en="Docs">Docs</h4><a href="getting-started.html">Getting Started</a><a href="user-guide.html">User Guide</a><a href="channels-guide.html">Channels</a><a href="developer-guide.html">Developer Guide</a><a href="api-reference.html">API Reference</a></div><div class="footer-col"><h4 data-zh="资源" data-en="Resources">Resources</h4><a href="https://github.com/guoqingbao/xbot/releases" target="_blank">Releases</a><a href="https://github.com/guoqingbao/xbot" target="_blank">GitHub</a></div><div class="footer-col"><h4 data-zh="社区" data-en="Community">Community</h4><a href="https://github.com/guoqingbao/xbot/issues" target="_blank">Issues</a><a href="https://github.com/guoqingbao/xbot/discussions" target="_blank">Discussions</a></div></div><div class="footer-bottom"><span>MIT License · Copyright 2026 Guoqing Bao</span><span data-zh="用 Rust 和 ❤️ 构建" data-en="Built with Rust and ❤️">Built with Rust and ❤️</span></div></div></footer>
+<script src="assets/js/main.js?v=5"></script>
+</body>
+</html>

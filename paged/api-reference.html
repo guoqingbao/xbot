@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Reference — xbot</title>
+  <link rel="icon" href="assets/images/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/css/main.css?v=5">
+</head>
+<body>
+<canvas id="particles"></canvas>
+<header class="site-header"><div class="header-inner"><a href="index.html" class="logo"><img src="assets/images/logo.svg" alt="xbot"><span>xbot</span></a><nav class="nav-links"><a href="index.html" data-zh="首页" data-en="Home">Home</a><a href="getting-started.html" data-zh="快速开始" data-en="Getting Started">Getting Started</a><a href="user-guide.html" data-zh="使用指南" data-en="User Guide">User Guide</a><a href="channels-guide.html" data-zh="通道" data-en="Channels">Channels</a><a href="developer-guide.html" data-zh="开发者" data-en="Developer">Developer</a><a href="api-reference.html" data-zh="API" data-en="API">API</a></nav><div class="nav-actions"><button class="lang-toggle" aria-label="Switch language">中文</button><div class="theme-dropdown"><select class="theme-select" aria-label="Select theme"><option value="light">☀️ Light</option><option value="dark">🌙 Dark</option><option value="enflame">🔥 Enflame</option></select></div><a href="https://github.com/guoqingbao/xbot" class="btn btn-sm btn-page" target="_blank">GitHub</a><button class="mobile-toggle" aria-label="Menu"><span></span><span></span><span></span></button></div></div></header>
+<div class="scroll-progress"></div>
+
+<div class="page-header">
+  <div class="container">
+    <h1 data-zh="API 参考" data-en="API Reference">API Reference</h1>
+    <p data-zh="CLI 命令、环境变量、配置项、Gateway REST 端点和 Admin API 的完整参考。" data-en="Complete reference for CLI commands, environment variables, configuration, Gateway REST endpoints, and Admin API.">Complete reference for CLI commands, environment variables, configuration, Gateway REST endpoints, and Admin API.</p>
+  </div>
+</div>
+
+<section class="section">
+  <div class="container">
+    <div class="doc-layout">
+      <nav class="doc-sidebar">
+        <div class="doc-sidebar-group">
+          <h4 data-zh="CLI" data-en="CLI">CLI</h4>
+          <a href="#commands" data-zh="命令" data-en="Commands">Commands</a>
+          <a href="#global-flags" data-zh="全局参数" data-en="Global Flags">Global Flags</a>
+          <a href="#repl-commands" data-zh="REPL 命令" data-en="REPL Commands">REPL Commands</a>
+          <a href="#channel-commands" data-zh="通道命令" data-en="Channel Commands">Channel Commands</a>
+        </div>
+        <div class="doc-sidebar-group">
+          <h4 data-zh="环境" data-en="Environment">Environment</h4>
+          <a href="#env-vars" data-zh="环境变量" data-en="Env Variables">Env Variables</a>
+        </div>
+        <div class="doc-sidebar-group">
+          <h4 data-zh="配置" data-en="Configuration">Configuration</h4>
+          <a href="#config-agents" data-zh="Agent 配置" data-en="Agent Config">Agent Config</a>
+          <a href="#config-providers" data-zh="提供商配置" data-en="Provider Config">Provider Config</a>
+          <a href="#config-tools" data-zh="工具配置" data-en="Tools Config">Tools Config</a>
+          <a href="#config-gateway" data-zh="Gateway 配置" data-en="Gateway Config">Gateway Config</a>
+        </div>
+        <div class="doc-sidebar-group">
+          <h4 data-zh="Gateway" data-en="Gateway">Gateway</h4>
+          <a href="#endpoints" data-zh="端点" data-en="Endpoints">Endpoints</a>
+          <a href="#admin-api" data-zh="Admin API" data-en="Admin API">Admin API</a>
+        </div>
+      </nav>
+
+      <div class="doc-content">
+        <h2 id="commands" data-zh="CLI 命令" data-en="CLI Commands">CLI Commands</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="命令" data-en="Command">Command</th><th data-zh="说明" data-en="Description">Description</th><th data-zh="常用参数" data-en="Key Flags">Key Flags</th></tr></thead>
+            <tbody>
+              <tr><td><code>xbot onboard</code></td><td data-zh="初始化全局配置和工作区" data-en="Initialize global config and workspace">Initialize global config and workspace</td><td><code>--workspace</code></td></tr>
+              <tr><td><code>xbot chat &lt;msg&gt;</code></td><td data-zh="一次性 Agent 对话" data-en="One-shot agent conversation">One-shot agent conversation</td><td><code>--model</code>, <code>--workspace</code>, <code>--global</code></td></tr>
+              <tr><td><code>xbot repl</code></td><td data-zh="交互式 TUI 模式" data-en="Interactive TUI mode">Interactive TUI mode</td><td><code>--model</code>, <code>--workspace</code>, <code>--global</code></td></tr>
+              <tr><td><code>xbot run</code></td><td data-zh="启动后端 Agent 服务" data-en="Start backend agent service">Start backend agent service</td><td><code>--model</code>, <code>--workspace</code></td></tr>
+              <tr><td><code>xbot config</code></td><td data-zh="交互式配置管理" data-en="Interactive configuration">Interactive configuration</td><td><code>--provider</code>, <code>--channel</code></td></tr>
+              <tr><td><code>xbot channels</code></td><td data-zh="管理通道" data-en="Manage channels">Manage channels</td><td><code>list</code>, <code>status</code>, <code>login</code>, <code>setup</code></td></tr>
+              <tr><td><code>xbot skills</code></td><td data-zh="管理技能" data-en="Manage skills">Manage skills</td><td><code>list</code>, <code>init &lt;name&gt;</code></td></tr>
+              <tr><td><code>xbot status</code></td><td data-zh="显示运行时状态" data-en="Show runtime status">Show runtime status</td><td><code>--model</code></td></tr>
+              <tr><td><code>xbot sessions</code></td><td data-zh="列出活跃会话" data-en="List active sessions">List active sessions</td><td></td></tr>
+              <tr><td><code>xbot jobs</code></td><td data-zh="列出 Cron 任务" data-en="List cron jobs">List cron jobs</td><td></td></tr>
+              <tr><td><code>xbot print-config</code></td><td data-zh="输出当前配置 JSON" data-en="Dump current config JSON">Dump current config JSON</td><td></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="global-flags" data-zh="全局参数" data-en="Global Flags">Global Flags</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="参数" data-en="Flag">Flag</th><th data-zh="说明" data-en="Description">Description</th><th data-zh="默认值" data-en="Default">Default</th></tr></thead>
+            <tbody>
+              <tr><td><code>--config &lt;path&gt;</code></td><td data-zh="配置文件路径" data-en="Config file path">Config file path</td><td><code>~/.xbot/config.json</code></td></tr>
+              <tr><td><code>--workspace &lt;path&gt;</code></td><td data-zh="指定工作区目录" data-en="Set workspace directory">Set workspace directory</td><td data-zh="当前目录" data-en="Current directory">Current directory</td></tr>
+              <tr><td><code>--global</code></td><td data-zh="使用全局工作区" data-en="Use global workspace">Use global workspace</td><td><code>~/.xbot/workspace</code></td></tr>
+              <tr><td><code>--model &lt;name&gt;</code></td><td data-zh="覆盖默认模型" data-en="Override default model">Override default model</td><td data-zh="配置值" data-en="Config value">Config value</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="repl-commands" data-zh="REPL 内置命令" data-en="REPL Built-in Commands">REPL Built-in Commands</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="命令" data-en="Command">Command</th><th data-zh="说明" data-en="Description">Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>/help</code></td><td data-zh="显示可用命令列表" data-en="Show available commands">Show available commands</td></tr>
+              <tr><td><code>/new</code> / <code>/clear</code></td><td data-zh="开始新会话" data-en="Start new session">Start new session</td></tr>
+              <tr><td><code>/memorize &lt;text&gt;</code></td><td data-zh="存储永久记忆条目" data-en="Store permanent memory entry">Store permanent memory entry</td></tr>
+              <tr><td><code>/status</code></td><td data-zh="查看运行时状态" data-en="View runtime status">View runtime status</td></tr>
+              <tr><td><code>/stop</code></td><td data-zh="停止当前正在执行的任务" data-en="Stop currently running task">Stop currently running task</td></tr>
+              <tr><td><code>/model &lt;name&gt;</code></td><td data-zh="运行时切换模型" data-en="Switch model at runtime">Switch model at runtime</td></tr>
+              <tr><td><code>/init</code></td><td data-zh="初始化项目上下文" data-en="Initialize project context">Initialize project context</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="channel-commands" data-zh="通道命令" data-en="Channel Commands">Channel Commands</h2>
+        <p data-zh="在通道消息中可使用以下命令（带或不带 / 前缀）：" data-en="These commands work in channel messages (with or without / prefix):">These commands work in channel messages (with or without <code>/</code> prefix):</p>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="命令" data-en="Command">Command</th><th data-zh="说明" data-en="Description">Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>stop</code></td><td data-zh="停止当前任务" data-en="Stop current task">Stop current task</td></tr>
+              <tr><td><code>clear</code> / <code>new</code></td><td data-zh="开始新会话" data-en="Start new session">Start new session</td></tr>
+              <tr><td><code>memorize &lt;text&gt;</code></td><td data-zh="存储记忆" data-en="Store memory">Store memory</td></tr>
+              <tr><td><code>status</code></td><td data-zh="查看状态" data-en="View status">View status</td></tr>
+              <tr><td><code>help</code></td><td data-zh="显示帮助" data-en="Show help">Show help</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="env-vars" data-zh="环境变量" data-en="Environment Variables">Environment Variables</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="变量" data-en="Variable">Variable</th><th data-zh="说明" data-en="Description">Description</th><th data-zh="默认" data-en="Default">Default</th></tr></thead>
+            <tbody>
+              <tr><td><code>XBOT_CONFIG</code></td><td data-zh="配置文件路径" data-en="Config file path">Config file path</td><td><code>~/.xbot/config.json</code></td></tr>
+              <tr><td><code>XBOT_WORKSPACE</code></td><td data-zh="默认工作区路径" data-en="Default workspace path">Default workspace path</td><td><code>~/.xbot/workspace</code></td></tr>
+              <tr><td><code>XBOT_LOG_LEVEL</code></td><td data-zh="日志级别" data-en="Log level">Log level</td><td><code>info</code></td></tr>
+              <tr><td><code>OPENAI_API_KEY</code></td><td data-zh="OpenAI API 密钥（可替代配置文件）" data-en="OpenAI API key (alternative to config)">OpenAI API key (alternative to config)</td><td></td></tr>
+              <tr><td><code>ANTHROPIC_API_KEY</code></td><td data-zh="Anthropic API 密钥" data-en="Anthropic API key">Anthropic API key</td><td></td></tr>
+              <tr><td><code>XBOT_INSTALL_BASE_URL</code></td><td data-zh="npm 安装时覆盖下载基地址" data-en="Override artifact download URL for npm">Override artifact download URL for npm</td><td></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="config-agents" data-zh="Agent 配置" data-en="Agent Configuration">Agent Configuration</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="路径" data-en="Path">Path</th><th data-zh="类型" data-en="Type">Type</th><th data-zh="默认值" data-en="Default">Default</th><th data-zh="说明" data-en="Description">Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>agents.defaults.workspace</code></td><td>string</td><td><code>~/.xbot/workspace</code></td><td data-zh="全局工作区路径" data-en="Global workspace path">Global workspace path</td></tr>
+              <tr><td><code>agents.defaults.model</code></td><td>string</td><td><code>openai/gpt-4.1-mini</code></td><td data-zh="默认 LLM 模型" data-en="Default LLM model">Default LLM model</td></tr>
+              <tr><td><code>agents.defaults.provider</code></td><td>string</td><td><code>auto</code></td><td data-zh="提供商选择（auto 为自动检测）" data-en="Provider (auto for auto-detect)">Provider (auto for auto-detect)</td></tr>
+              <tr><td><code>agents.defaults.maxTokens</code></td><td>number</td><td><code>16384</code></td><td data-zh="最大补全 token 数" data-en="Max completion tokens">Max completion tokens</td></tr>
+              <tr><td><code>agents.defaults.contextWindowTokens</code></td><td>number</td><td><code>65536</code></td><td data-zh="上下文窗口大小" data-en="Context window size">Context window size</td></tr>
+              <tr><td><code>agents.defaults.temperature</code></td><td>number?</td><td><code>null</code></td><td data-zh="采样温度" data-en="Sampling temperature">Sampling temperature</td></tr>
+              <tr><td><code>agents.defaults.maxToolIterations</code></td><td>number</td><td><code>0</code></td><td data-zh="工具循环限制（0 = 无限）" data-en="Tool loop limit (0 = unlimited)">Tool loop limit (0 = unlimited)</td></tr>
+              <tr><td><code>agents.defaults.maxConcurrentTools</code></td><td>number</td><td><code>5</code></td><td data-zh="并行工具执行数" data-en="Parallel tool execution">Parallel tool execution</td></tr>
+              <tr><td><code>agents.defaults.maxConcurrentRequests</code></td><td>number</td><td><code>3</code></td><td data-zh="全局请求并发" data-en="Global request concurrency">Global request concurrency</td></tr>
+              <tr><td><code>agents.defaults.memoryMaxBytes</code></td><td>number</td><td><code>32768</code></td><td data-zh="记忆文件大小上限" data-en="Memory file size cap">Memory file size cap</td></tr>
+              <tr><td><code>agents.subagents.model</code></td><td>string?</td><td></td><td data-zh="子 Agent 模型（空则继承主模型）" data-en="Subagent model (inherits if empty)">Subagent model (inherits if empty)</td></tr>
+              <tr><td><code>agents.subagents.provider</code></td><td>string?</td><td><code>auto</code></td><td data-zh="子 Agent 提供商" data-en="Subagent provider">Subagent provider</td></tr>
+              <tr><td><code>agents.subagents.apiBase</code></td><td>string?</td><td></td><td data-zh="子 Agent API Base URL" data-en="Subagent API base URL">Subagent API base URL</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="config-providers" data-zh="提供商配置" data-en="Provider Configuration">Provider Configuration</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="路径" data-en="Path">Path</th><th data-zh="类型" data-en="Type">Type</th><th data-zh="说明" data-en="Description">Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>providers.{name}.apiKey</code></td><td>string</td><td data-zh="API 密钥" data-en="API key">API key</td></tr>
+              <tr><td><code>providers.{name}.apiBase</code></td><td>string?</td><td data-zh="自定义 API Base URL" data-en="Custom API base URL">Custom API base URL</td></tr>
+              <tr><td><code>providers.{name}.extraHeaders</code></td><td>object?</td><td data-zh="额外 HTTP 请求头" data-en="Extra HTTP headers">Extra HTTP headers</td></tr>
+              <tr><td><code>providers.{name}.reasoningEffort</code></td><td>string?</td><td data-zh="推理努力程度" data-en="Reasoning effort level">Reasoning effort level</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="config-tools" data-zh="工具配置" data-en="Tools Configuration">Tools Configuration</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="路径" data-en="Path">Path</th><th data-zh="类型" data-en="Type">Type</th><th data-zh="默认" data-en="Default">Default</th><th data-zh="说明" data-en="Description">Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>tools.exec.enable</code></td><td>bool</td><td><code>true</code></td><td data-zh="启用 Shell 执行" data-en="Enable shell execution">Enable shell execution</td></tr>
+              <tr><td><code>tools.exec.timeout</code></td><td>number</td><td><code>120</code></td><td data-zh="Shell 超时秒数" data-en="Shell timeout seconds">Shell timeout seconds</td></tr>
+              <tr><td><code>tools.exec.pathAppend</code></td><td>string?</td><td></td><td data-zh="追加到 PATH" data-en="Append to PATH">Append to PATH</td></tr>
+              <tr><td><code>tools.web.proxy</code></td><td>string?</td><td></td><td data-zh="HTTP 代理" data-en="HTTP proxy">HTTP proxy</td></tr>
+              <tr><td><code>tools.web.search.provider</code></td><td>string</td><td><code>duckduckgo</code></td><td data-zh="搜索引擎" data-en="Search engine">Search engine</td></tr>
+              <tr><td><code>tools.web.search.maxResults</code></td><td>number</td><td><code>10</code></td><td data-zh="最大搜索结果数" data-en="Max search results">Max search results</td></tr>
+              <tr><td><code>tools.restrictToWorkspace</code></td><td>bool</td><td><code>false</code></td><td data-zh="限制文件操作到工作区" data-en="Sandbox file ops to workspace">Sandbox file ops to workspace</td></tr>
+              <tr><td><code>tools.mcpServers.{name}.enabled</code></td><td>bool</td><td></td><td data-zh="启用 MCP 服务器" data-en="Enable MCP server">Enable MCP server</td></tr>
+              <tr><td><code>tools.mcpServers.{name}.type</code></td><td>string</td><td><code>stdio</code></td><td data-zh="传输类型" data-en="Transport type">Transport type</td></tr>
+              <tr><td><code>tools.mcpServers.{name}.command</code></td><td>string</td><td></td><td data-zh="可执行命令" data-en="Executable command">Executable command</td></tr>
+              <tr><td><code>tools.mcpServers.{name}.args</code></td><td>string[]</td><td></td><td data-zh="命令参数" data-en="Command arguments">Command arguments</td></tr>
+              <tr><td><code>tools.mcpServers.{name}.env</code></td><td>object?</td><td></td><td data-zh="环境变量" data-en="Environment variables">Environment variables</td></tr>
+              <tr><td><code>tools.mcpServers.{name}.enabledTools</code></td><td>string[]</td><td><code>["*"]</code></td><td data-zh="启用的工具列表" data-en="Enabled tool names">Enabled tool names</td></tr>
+              <tr><td><code>tools.mcpServers.{name}.toolTimeout</code></td><td>number</td><td><code>30</code></td><td data-zh="工具超时秒数" data-en="Tool timeout seconds">Tool timeout seconds</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="config-gateway" data-zh="Gateway 配置" data-en="Gateway Configuration">Gateway Configuration</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="路径" data-en="Path">Path</th><th data-zh="类型" data-en="Type">Type</th><th data-zh="默认" data-en="Default">Default</th><th data-zh="说明" data-en="Description">Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>gateway.host</code></td><td>string</td><td><code>0.0.0.0</code></td><td data-zh="监听地址" data-en="Listen host">Listen host</td></tr>
+              <tr><td><code>gateway.port</code></td><td>number</td><td><code>18790</code></td><td data-zh="监听端口" data-en="Listen port">Listen port</td></tr>
+              <tr><td><code>gateway.heartbeat.enabled</code></td><td>bool</td><td><code>true</code></td><td data-zh="启用心跳服务" data-en="Enable heartbeat">Enable heartbeat</td></tr>
+              <tr><td><code>gateway.heartbeat.intervalS</code></td><td>number</td><td><code>1800</code></td><td data-zh="心跳间隔秒数" data-en="Heartbeat interval seconds">Heartbeat interval seconds</td></tr>
+              <tr><td><code>gateway.admin.enabled</code></td><td>bool</td><td><code>true</code></td><td data-zh="启用 Admin UI" data-en="Enable admin UI">Enable admin UI</td></tr>
+              <tr><td><code>gateway.admin.path</code></td><td>string</td><td><code>/admin</code></td><td data-zh="Admin 路径" data-en="Admin path">Admin path</td></tr>
+              <tr><td><code>gateway.metrics.enabled</code></td><td>bool</td><td><code>true</code></td><td data-zh="启用 Prometheus 指标" data-en="Enable Prometheus metrics">Enable Prometheus metrics</td></tr>
+              <tr><td><code>gateway.metrics.path</code></td><td>string</td><td><code>/metrics</code></td><td data-zh="指标路径" data-en="Metrics path">Metrics path</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="endpoints" data-zh="Gateway 端点" data-en="Gateway Endpoints">Gateway Endpoints</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="方法" data-en="Method">Method</th><th data-zh="路径" data-en="Path">Path</th><th data-zh="说明" data-en="Description">Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>GET</code></td><td><code>/healthz</code></td><td data-zh="健康检查（200 = 运行中）" data-en="Health check (200 = running)">Health check (200 = running)</td></tr>
+              <tr><td><code>GET</code></td><td><code>/readyz</code></td><td data-zh="就绪检查（200 = 可接收请求）" data-en="Readiness (200 = accepting requests)">Readiness (200 = accepting requests)</td></tr>
+              <tr><td><code>GET</code></td><td><code>/status</code></td><td data-zh="运行时状态 JSON" data-en="Runtime status JSON">Runtime status JSON</td></tr>
+              <tr><td><code>GET</code></td><td><code>/metrics</code></td><td data-zh="Prometheus 格式指标" data-en="Prometheus-format metrics">Prometheus-format metrics</td></tr>
+              <tr><td><code>GET</code></td><td><code>/admin</code></td><td data-zh="Web 管理界面" data-en="Web admin UI">Web admin UI</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="admin-api" data-zh="Admin API" data-en="Admin API">Admin API</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th data-zh="方法" data-en="Method">Method</th><th data-zh="路径" data-en="Path">Path</th><th data-zh="说明" data-en="Description">Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>GET</code></td><td><code>/api/admin/overview</code></td><td data-zh="系统概览（CPU、内存、运行时间）" data-en="System overview (CPU, memory, uptime)">System overview (CPU, memory, uptime)</td></tr>
+              <tr><td><code>GET</code></td><td><code>/api/admin/sessions</code></td><td data-zh="列出所有活跃会话" data-en="List all active sessions">List all active sessions</td></tr>
+              <tr><td><code>GET</code></td><td><code>/api/admin/cron</code></td><td data-zh="列出 Cron 任务" data-en="List cron jobs">List cron jobs</td></tr>
+              <tr><td><code>GET</code></td><td><code>/api/admin/config</code></td><td data-zh="当前运行时配置" data-en="Current runtime config">Current runtime config</td></tr>
+              <tr><td><code>POST</code></td><td><code>/api/admin/heartbeat/trigger</code></td><td data-zh="手动触发心跳" data-en="Manually trigger heartbeat">Manually trigger heartbeat</td></tr>
+              <tr><td><code>POST</code></td><td><code>/api/admin/channels/{name}/{action}</code></td><td data-zh="通道管理（start/stop/restart）" data-en="Channel management (start/stop/restart)">Channel management (start/stop/restart)</td></tr>
+              <tr><td><code>POST</code></td><td><code>/api/admin/stop</code></td><td data-zh="停止指定会话的当前任务" data-en="Stop current task for a session">Stop current task for a session</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="site-footer"><div class="container"><div class="footer-grid"><div class="footer-brand"><a href="index.html" class="logo"><img src="assets/images/logo.svg" alt="xbot"><span>xbot</span></a><p data-zh="纯 Rust 实现的自主 AI Agent 运行时。" data-en="Rust-native autonomous bot runtime.">Rust-native autonomous bot runtime.</p></div><div class="footer-col"><h4 data-zh="文档" data-en="Docs">Docs</h4><a href="getting-started.html">Getting Started</a><a href="user-guide.html">User Guide</a><a href="channels-guide.html">Channels</a><a href="developer-guide.html">Developer Guide</a><a href="api-reference.html">API Reference</a></div><div class="footer-col"><h4 data-zh="资源" data-en="Resources">Resources</h4><a href="https://github.com/guoqingbao/xbot/releases" target="_blank">Releases</a><a href="https://github.com/guoqingbao/xbot" target="_blank">GitHub</a></div><div class="footer-col"><h4 data-zh="社区" data-en="Community">Community</h4><a href="https://github.com/guoqingbao/xbot/issues" target="_blank">Issues</a><a href="https://github.com/guoqingbao/xbot/discussions" target="_blank">Discussions</a></div></div><div class="footer-bottom"><span>MIT License · Copyright 2026 Guoqing Bao</span><span data-zh="用 Rust 和 ❤️ 构建" data-en="Built with Rust and ❤️">Built with Rust and ❤️</span></div></div></footer>
+<script src="assets/js/main.js?v=5"></script>
+</body>
+</html>

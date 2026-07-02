@@ -31,25 +31,66 @@
 
 ## 📚 文档
 
+**[📖 完整文档网站 →](https://guoqingbao.github.io/xbot/)**
+
 - [🚀 入门指南](./docs/USAGE.md)
 - [📦 安装](./docs/INSTALLATION.md)
 - [🧵 远程主模型 + 本地子 Agent 混合模式](./docs/HYBRID_MODELS.md)
 - [🏗️ 架构](./docs/ARCHITECTURE.md)
 - [⚙️ 运维指南](./docs/OPERATIONS.md)
 
-## ⚡ 快速开始
+## 🚀 快速开始
 
-### 安装 xbot：
+### 📦 安装
+
+**方式一 — 一键安装（推荐）**
+
+```bash
+curl -sSL https://guoqingbao.github.io/xbot/install.sh | bash
+```
+
+自动检测操作系统（Linux/macOS）和架构（x64/ARM64），然后安装最新的预编译二进制文件。Linux 上可选择 deb 包或二进制安装，macOS 上安装到 `/usr/local/bin`。
+
+**方式二 — npm**
 
 ```bash
 npm install -g @trusted-ai/xbot
-# 或 cargo install xbot
-# 或从 GitHub Releases 安装 .deb 包
-# 或从源代码编译安装
+```
+
+**方式三 — Cargo**
+
+```bash
+cargo install xbot
+```
+
+**方式四 — Debian/Ubuntu（.deb）**
+
+```bash
+# 从 GitHub Releases 下载（选择你的架构）
+curl -fSL -o xbot.deb https://github.com/guoqingbao/xbot/releases/latest/download/xbot-linux-x64.deb
+sudo dpkg -i xbot.deb
+```
+
+**方式五 — 从源码构建**
+
+```bash
+git clone https://github.com/guoqingbao/xbot.git
+cd xbot
 cargo install --path .
 ```
 
 安装后的命令为 `xbot`。详情请参阅[安装](./docs/INSTALLATION.md)。
+
+### 支持的平台
+
+| 平台 | 架构 | 包格式 |
+|------|------|--------|
+| Linux | x86_64 | .deb, .tar.gz |
+| Linux | ARM64 | .deb, .tar.gz |
+| macOS | Apple Silicon | .tar.gz |
+| macOS | Intel x64 | .tar.gz |
+| Windows | x86_64 | .zip |
+| Windows | ARM64 | .zip |
 
 ### 初始化配置和工作区：
 

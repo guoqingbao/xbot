@@ -1,0 +1,189 @@
+name: Deploy Documentation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'paged/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build site
+        run: |
+          VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          REPO="${{ github.repository }}"
+
+          mkdir -p site
+          cp -r paged/* site/
+
+          cat > site/install.sh << 'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          VERSION="__VERSION__"
+          PAGES_BASE="https://guoqingbao.github.io/xbot"
+          RELEASE_BASE="https://github.com/__REPO__/releases/download/v${VERSION}"
+
+          detect_platform() {
+            local os arch
+            os="$(uname -s)"
+            arch="$(uname -m)"
+            case "$os" in
+              Linux)
+                case "$arch" in
+                  x86_64|amd64)  echo "linux-x64" ;;
+                  aarch64|arm64) echo "linux-arm64" ;;
+                  *) echo "ERROR: Unsupported architecture: $arch" >&2; exit 1 ;;
+                esac ;;
+              Darwin)
+                case "$arch" in
+                  x86_64|amd64)  echo "darwin-x64" ;;
+                  arm64|aarch64) echo "darwin-arm64" ;;
+                  *) echo "ERROR: Unsupported architecture: $arch" >&2; exit 1 ;;
+                esac ;;
+              MINGW*|MSYS*|CYGWIN*)
+                case "$arch" in
+                  x86_64|amd64)  echo "win32-x64" ;;
+                  aarch64|arm64) echo "win32-arm64" ;;
+                  *) echo "ERROR: Unsupported Windows architecture: $arch" >&2; exit 1 ;;
+                esac ;;
+              *) echo "ERROR: Unsupported OS: $os" >&2; exit 1 ;;
+            esac
+          }
+
+          PLATFORM="${XBOT_PLATFORM:-$(detect_platform)}"
+          echo "==> Detected platform: ${PLATFORM}"
+          echo ""
+
+          SUDO=""
+          if [ "$(id -u)" -ne 0 ] && command -v sudo &>/dev/null; then SUDO="sudo"; fi
+
+          print_hints() {
+            echo ""
+            echo "============================================"
+            echo " xbot installed successfully!"
+            echo "============================================"
+            echo ""
+            echo " Quick start:"
+            echo "   xbot onboard          # Initialize config"
+            echo "   xbot repl             # Interactive TUI mode"
+            echo "   xbot chat \"hello\"     # One-shot prompt"
+            echo "   xbot run              # Start backend service"
+            echo ""
+            echo " Documentation:"
+            echo "   ${PAGES_BASE}/"
+            echo "============================================"
+          }
+
+          install_deb() {
+            local deb="xbot-${1}.deb" tmp
+            tmp="$(mktemp -d)"
+            echo "==> Downloading ${deb}..."
+            if ! curl -fSL -o "${tmp}/${deb}" "${RELEASE_BASE}/${deb}"; then
+              echo "ERROR: Failed to download" >&2; rm -rf "$tmp"; return 1
+            fi
+            echo "==> Installing..."
+            if ! ${SUDO} dpkg -i "${tmp}/${deb}"; then
+              echo "ERROR: dpkg failed. Re-run with: curl -sSL ${PAGES_BASE}/install.sh | sudo bash" >&2
+              rm -rf "$tmp"; return 1
+            fi
+            rm -rf "$tmp"
+            print_hints
+          }
+
+          install_tarball() {
+            local tarball="xbot-${VERSION}-${1}.tar.gz" tmp
+            tmp="$(mktemp -d)"
+            echo "==> Downloading ${tarball}..."
+            if ! curl -fSL -o "${tmp}/${tarball}" "${RELEASE_BASE}/${tarball}"; then
+              echo "ERROR: Failed to download" >&2; rm -rf "$tmp"; return 1
+            fi
+            tar -xzf "${tmp}/${tarball}" -C "${tmp}"
+            echo "==> Installing xbot to /usr/local/bin..."
+            if ! ${SUDO} install -m 755 "${tmp}/xbot" /usr/local/bin/xbot; then
+              echo "ERROR: Install failed. Re-run with: curl -sSL ${PAGES_BASE}/install.sh | sudo bash" >&2
+              rm -rf "$tmp"; return 1
+            fi
+            rm -rf "$tmp"
+            print_hints
+          }
+
+          install_zip() {
+            local zip="xbot-${VERSION}-${1}.zip" tmp
+            tmp="$(mktemp -d)"
+            echo "==> Downloading ${zip}..."
+            if ! curl -fSL -o "${tmp}/${zip}" "${RELEASE_BASE}/${zip}"; then
+              echo "ERROR: Failed to download" >&2; rm -rf "$tmp"; return 1
+            fi
+            echo "==> Extracting..."
+            if command -v unzip &>/dev/null; then
+              unzip -o "${tmp}/${zip}" -d "${tmp}" >/dev/null
+            elif command -v powershell &>/dev/null; then
+              powershell -Command "Expand-Archive -Path '${tmp}/${zip}' -DestinationPath '${tmp}' -Force"
+            else
+              echo "ERROR: No unzip or powershell found" >&2; rm -rf "$tmp"; return 1
+            fi
+            local install_dir="/usr/local/bin"
+            if [ -d "/c/Windows" ]; then
+              install_dir="${HOME}/bin"
+              mkdir -p "${install_dir}"
+            fi
+            cp "${tmp}/xbot.exe" "${install_dir}/xbot.exe" 2>/dev/null || cp "${tmp}/xbot" "${install_dir}/xbot" 2>/dev/null
+            echo "==> Installed xbot to ${install_dir}"
+            rm -rf "$tmp"
+            print_hints
+          }
+
+          case "$PLATFORM" in
+            linux-x64|linux-arm64)
+              echo "Install options:"
+              echo "  1) deb package  — installs 'xbot' system-wide (Debian/Ubuntu)"
+              echo "  2) binary       — installs 'xbot' to /usr/local/bin"
+              echo ""
+              MODE="${XBOT_MODE:-}"
+              if [ -z "$MODE" ]; then
+                if [ -e /dev/tty ]; then
+                  printf "Choose [1/2] (default: 1): "
+                  read -r MODE < /dev/tty
+                  MODE="${MODE:-1}"
+                else MODE="1"; fi
+              fi
+              case "$MODE" in
+                1|deb) install_deb "$PLATFORM" ;;
+                2|binary) install_tarball "$PLATFORM" ;;
+                *) echo "Invalid: $MODE"; exit 1 ;;
+              esac ;;
+            darwin-*) install_tarball "$PLATFORM" ;;
+            win32-*) install_zip "$PLATFORM" ;;
+            *) echo "ERROR: Unknown platform: $PLATFORM" >&2; exit 1 ;;
+          esac
+          SCRIPT
+
+          sed -i "s|__VERSION__|${VERSION}|g" site/install.sh
+          sed -i "s|__REPO__|${REPO}|g" site/install.sh
+          sed -i 's/^          //' site/install.sh
+          chmod +x site/install.sh
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - uses: actions/deploy-pages@v4
+        id: deploy

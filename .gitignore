@@ -20,4 +20,5 @@ instruction.md
 Cargo.lock
 XBOT.md
 npm_pub.sh
+install.sh
 .cursor
