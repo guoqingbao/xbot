@@ -28,6 +28,8 @@ pub struct AgentDefaults {
     pub memory_max_bytes: usize,
     #[serde(alias = "maxConcurrentRequests")]
     pub max_concurrent_requests: usize,
+    #[serde(alias = "duplicateMessageWindowSeconds")]
+    pub duplicate_message_window_seconds: u64,
 }
 
 impl Default for AgentDefaults {
@@ -43,6 +45,7 @@ impl Default for AgentDefaults {
             max_concurrent_tools: 5,
             memory_max_bytes: 32 * 1024,
             max_concurrent_requests: 3,
+            duplicate_message_window_seconds: 2,
         }
     }
 }

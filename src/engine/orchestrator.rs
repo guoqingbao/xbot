@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -11,6 +12,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::Semaphore;
+use tokio::time::Instant as TokioInstant;
 
 use crate::config::{ExecToolConfig, WebSearchConfig};
 use crate::cron::CronService;
@@ -42,6 +44,12 @@ const NANOBOT_STYLE_HELP: &str = "Available commands:\n\
 const SUBAGENT_WAIT_TIMEOUT: Duration = Duration::from_secs(300);
 const CONTEXT_COMPRESSION_THRESHOLD_PERCENT: usize = 90;
 const CONTEXT_COMPRESSION_TARGET_DIVISOR: usize = 10;
+
+#[derive(Clone, Copy)]
+struct MessageRecord {
+    content_hash: u64,
+    timestamp: TokioInstant,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentSnapshot {
@@ -88,6 +96,8 @@ pub struct AgentLoop {
     always_allow: Arc<Mutex<bool>>,
     steer_rx: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<String>>>>,
     steer_tx: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>>>,
+    message_rate_limiter: Arc<Mutex<BTreeMap<String, MessageRecord>>>,
+    duplicate_message_window_seconds: u64,
 }
 
 impl AgentLoop {
@@ -180,10 +190,21 @@ impl AgentLoop {
         );
         let mut tools = ToolRegistry::new();
         let allowed_dir = restrict_to_workspace.then(|| workspace.clone());
-        let blocked_dirs = if memory_enabled {
-            Vec::new()
-        } else {
-            vec![workspace_state_dir(&workspace).join("memory")]
+        let blocked_dirs = {
+            let mut dirs = Vec::new();
+            
+            // Block memory directory when memory is not enabled
+            if !memory_enabled {
+                dirs.push(workspace_state_dir(&workspace).join("memory"));
+            }
+            
+            // Block sessions directory to prevent xbot from reading its own sessions
+            dirs.push(workspace_state_dir(&workspace).join("sessions"));
+            
+            // Block tui_input_history.json to prevent xbot from reading its own input history
+            dirs.push(workspace_state_dir(&workspace).join("tui_input_history.json"));
+            
+            dirs
         };
         tools.register(Arc::new(
             ReadFileTool::new(Some(workspace.clone()), allowed_dir.clone(), vec![])
@@ -263,6 +284,8 @@ impl AgentLoop {
             always_allow,
             steer_rx: Arc::new(Mutex::new(None)),
             steer_tx: Arc::new(Mutex::new(None)),
+            message_rate_limiter: Arc::new(Mutex::new(BTreeMap::new())),
+            duplicate_message_window_seconds: 2, // Default value, can be overridden by config
         })
     }
 
@@ -284,14 +307,55 @@ impl AgentLoop {
             .expect("progress callback lock poisoned") = callback;
     }
 
-    pub fn set_subagent_notification_callback(
-        &self,
-        callback: Option<crate::engine::subtasks::SubagentNotificationCallback>,
-    ) {
-        self.subagents.set_notification_callback(callback);
-    }
+pub fn set_subagent_notification_callback(
+    &self,
+    callback: Option<crate::engine::subtasks::SubagentNotificationCallback>,
+) {
+    self.subagents.set_notification_callback(callback);
+}
 
-    pub fn setup_steer_channel(&self) -> tokio::sync::mpsc::UnboundedSender<String> {
+fn check_message_rate_limit(&self, session_key: &str, content: &str, window_seconds: u64) -> Result<()> {
+    let mut limiter = self.message_rate_limiter.lock().expect("rate limiter lock poisoned");
+    let now = TokioInstant::now();
+    
+    // Clean up old entries (older than window_seconds * 2)
+    limiter.retain(|_, record| {
+        now.duration_since(record.timestamp).as_secs() < window_seconds * 2
+    });
+    
+    // Check for duplicate content within the window
+    let content_hash = {
+        let mut hasher = DefaultHasher::new();
+        content.hash(&mut hasher);
+        hasher.finish()
+    };
+    
+    if let Some(record) = limiter.get(session_key) {
+        if record.content_hash == content_hash {
+            let elapsed = now.duration_since(record.timestamp);
+            if elapsed.as_secs() < window_seconds {
+                // Log the duplicate detection
+                eprintln!(
+                    "WARNING: Duplicate message detected for session {}: content hash {} within {} seconds (elapsed: {:?})",
+                    session_key,
+                    content_hash,
+                    window_seconds,
+                    elapsed
+                );
+                return Err(anyhow::anyhow!("Duplicate message detected within {} second window", window_seconds));
+            }
+        }
+    }
+    
+    // Store the new content hash and time
+    limiter.insert(session_key.to_string(), MessageRecord {
+        content_hash,
+        timestamp: now,
+    });
+    Ok(())
+}
+
+pub fn setup_steer_channel(&self) -> tokio::sync::mpsc::UnboundedSender<String> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         *self.steer_rx.lock().expect("steer_rx lock poisoned") = Some(rx);
         *self.steer_tx.lock().expect("steer_tx lock poisoned") = Some(tx.clone());
@@ -698,7 +762,7 @@ impl AgentLoop {
         channel: &str,
         chat_id: &str,
     ) -> Result<Option<OutboundMessage>> {
-        self.process_direct_stream(content, session_key, channel, chat_id, None, None)
+        self.process_direct_stream(content, session_key, channel, chat_id, None, None, None)
             .await
     }
 
@@ -708,6 +772,7 @@ impl AgentLoop {
         session_key: &str,
         channel: &str,
         chat_id: &str,
+        media: Option<&[String]>,
         text_stream: Option<TextStreamCallback>,
         reasoning_stream: Option<crate::providers::ReasoningStreamCallback>,
     ) -> Result<Option<OutboundMessage>> {
@@ -718,7 +783,7 @@ impl AgentLoop {
                 chat_id: chat_id.to_string(),
                 content: content.to_string(),
                 timestamp: chrono::Utc::now(),
-                media: Vec::new(),
+                media: media.map(|m| m.to_vec()).unwrap_or_default(),
                 metadata: BTreeMap::new(),
                 session_key_override: Some(session_key.to_string()),
             },
@@ -757,6 +822,11 @@ impl AgentLoop {
         }
 
         let session_key = msg.session_key();
+
+        // Rate limiting: prevent duplicate messages within configured window
+        if self.check_message_rate_limit(&session_key, trimmed, self.duplicate_message_window_seconds).is_err() {
+            return Ok(Some(target.outbound(format!("Message rate limited. Please wait {} seconds before sending another message.", self.duplicate_message_window_seconds))));
+        }
 
         // Immediate cancellation check: if user just sent a stop command, don't start a new turn
         if self.is_cancellation_pending(&session_key) {
@@ -811,6 +881,24 @@ impl AgentLoop {
         }
 
         let session_key = msg.session_key();
+        
+        // Get or build the static system prompt for this session
+        let static_system_prompt: Option<String> = {
+            let mut sessions = self.sessions.lock().expect("session manager lock poisoned");
+            let mut session = sessions.get_or_create(&session_key)?;
+            
+            if let Some(ref prompt) = session.system_prompt {
+                // Use existing static system prompt
+                Some(prompt.clone())
+            } else {
+                // Build a new system prompt and store it
+                let new_prompt = self.context.build_static_system_prompt()?;
+                session.system_prompt = Some(new_prompt.clone());
+                sessions.save(&session)?;
+                Some(new_prompt)
+            }
+        };
+        
         let history = {
             let mut sessions = self.sessions.lock().expect("session manager lock poisoned");
             sessions.get_or_create(&session_key)?.get_history(0)
@@ -822,6 +910,8 @@ impl AgentLoop {
             Some(&msg.channel),
             Some(&msg.chat_id),
             "user",
+            static_system_prompt.as_deref(),
+            Some(&self.tools.definitions()),
         )?;
 
         let loop_result = {
@@ -936,6 +1026,21 @@ impl AgentLoop {
         };
         let session_key = progress_target.session_key.clone();
 
+        // Get or build the static system prompt for this session
+        let static_system_prompt: Option<String> = {
+            let mut sessions = self.sessions.lock().expect("session manager lock poisoned");
+            let mut session = sessions.get_or_create(&session_key)?;
+            
+            if let Some(ref prompt) = session.system_prompt {
+                Some(prompt.clone())
+            } else {
+                let new_prompt = self.context.build_static_system_prompt()?;
+                session.system_prompt = Some(new_prompt.clone());
+                sessions.save(&session)?;
+                Some(new_prompt)
+            }
+        };
+
         {
             let mut sessions = self.sessions.lock().expect("session manager lock poisoned");
             let mut session = sessions.get_or_create(&session_key)?;
@@ -974,6 +1079,8 @@ impl AgentLoop {
             } else {
                 "user"
             },
+            static_system_prompt.as_deref(),
+            Some(&self.tools.definitions()),
         )?;
 
         let loop_result = {
@@ -1069,6 +1176,7 @@ impl AgentLoop {
         let mut context_compressed = false;
         let mut compression_pending = false;
         let mut empty_content_nudge_sent = false;
+        let mut empty_output_nudge_count = 0_usize;
         let think_re = Regex::new(r"(?s)<think>.*?</think>").expect("valid think regex");
         let mut last_tool_call_fingerprint: Option<String> = None;
         let mut repeated_tool_call_streak = 0_usize;
@@ -1195,6 +1303,12 @@ impl AgentLoop {
                     .filter(|text| !text.is_empty());
                 if let Some(content) = &assistant_content {
                     last_assistant_content = Some(content.clone());
+                }
+                // Reset counter if model produced content, reasoning, or tool calls
+                let has_reasoning = response.reasoning_content.as_ref().is_some_and(|r| !r.trim().is_empty());
+                let has_tool_calls = !response.tool_calls.is_empty();
+                if assistant_content.is_some() || has_reasoning || has_tool_calls {
+                    empty_output_nudge_count = 0;
                 }
                 self.context.add_assistant_message(
                     &mut messages,
@@ -1379,6 +1493,27 @@ impl AgentLoop {
                         "user",
                         "[SYSTEM] You produced reasoning but no visible response text. \
                          Please provide your answer or summary as regular text content.",
+                    ));
+                    if should_compress_after_response {
+                        compression_pending = true;
+                    }
+                    continue;
+                }
+
+                // Nudge the model when it returns completely empty output (no content, no reasoning)
+                if content.is_none() && !has_reasoning {
+                    empty_output_nudge_count += 1;
+                    if empty_output_nudge_count >= 3 {
+                        return Err(anyhow::anyhow!(
+                            "Model repeatedly produced no output after 3 attempts. \
+                             The model may be malfunctioning or the request is too ambiguous. \
+                             Please try rephrasing your request or switching to a different model."
+                        ));
+                    }
+                    messages.push(ChatMessage::text(
+                        "user",
+                        "[SYSTEM] You erroneously emitted no output. Please complete the last \
+                         directive issued by the user with a proper response.",
                     ));
                     if should_compress_after_response {
                         compression_pending = true;

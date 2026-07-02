@@ -1622,7 +1622,6 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
                 ("↑ / ↓", "Scroll transcript"),
                 ("Shift+↑ / Shift+↓", "Browse input history"),
                 ("PgUp / PgDn", "Page scroll"),
-                ("Mouse wheel", "Scroll transcript"),
             ],
         ),
         (

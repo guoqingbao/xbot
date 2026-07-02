@@ -43,14 +43,15 @@ impl ContextBuilder {
             .store(enabled, Ordering::SeqCst);
     }
 
-    pub fn build_system_prompt(&self, current_message: &str) -> Result<String> {
+pub fn build_static_system_prompt(&self) -> Result<String> {
         let mut parts = vec![self.identity()];
         let bootstrap = self.load_bootstrap_files()?;
         if !bootstrap.is_empty() {
             parts.push(bootstrap);
         }
         if self.memory_enabled.load(Ordering::SeqCst) {
-            let memory = self.memory.get_memory_context(current_message)?;
+            // Memory context is static - doesn't change per turn
+            let memory = self.memory.get_static_memory_context()?;
             if !memory.is_empty() {
                 parts.push(format!("# Memory\n\n{memory}"));
             }
@@ -78,24 +79,21 @@ impl ContextBuilder {
         channel: Option<&str>,
         chat_id: Option<&str>,
         current_role: &str,
+        static_system_prompt: Option<&str>,
+        tools: Option<&[Value]>,
     ) -> Result<Vec<ChatMessage>> {
         let current_content = self.build_user_content(current_message, media)?;
         let suggested_skills = self.skills.suggest_skills(current_message, 3);
 
         let mut messages = Vec::with_capacity(history.len() + 2);
-        let mut system_prompt = self.build_system_prompt(current_message)?;
-        if !suggested_skills.is_empty() {
-            let content = self.skills.load_skills_for_context(&suggested_skills);
-            if !content.trim().is_empty() {
-                system_prompt.push_str("\n\n---\n\n# Suggested Skills For This Task\n\n");
-                system_prompt.push_str(&content);
-            }
-        }
-        if current_role == "user" {
-            let runtime_ctx = self.build_runtime_context(channel, chat_id);
-            system_prompt.push_str("\n\n---\n\n");
-            system_prompt.push_str(&runtime_ctx);
-        }
+        
+        // Always use static system prompt - never append dynamic data to it
+        let system_prompt = if let Some(prompt) = static_system_prompt {
+            prompt.to_string()
+        } else {
+            self.build_static_system_prompt()?
+        };
+        
         messages.push(ChatMessage {
             role: "system".to_string(),
             content: Some(Value::String(system_prompt)),
@@ -107,10 +105,70 @@ impl ContextBuilder {
             thinking_blocks: None,
             metadata: None,
         });
+        
+        // Add conversation history (all previous turns)
         messages.extend(history);
+        
+        // Build dynamic context for the current turn
+        let mut dynamic_parts = Vec::new();
+        
+        // Add suggested skills
+        if !suggested_skills.is_empty() {
+            let content = self.skills.load_skills_for_context(&suggested_skills);
+            if !content.trim().is_empty() {
+                dynamic_parts.push(format!("# Suggested Skills For This Task\n\n{}", content));
+            }
+        }
+        
+        // Add runtime context
+        let runtime_ctx = self.build_runtime_context(channel, chat_id);
+        if !runtime_ctx.is_empty() {
+            dynamic_parts.push(runtime_ctx);
+        }
+        
+        // Add tools information
+        if let Some(tool_defs) = tools {
+            if !tool_defs.is_empty() {
+                dynamic_parts.push(format!(
+                    "# Available Tools\n\n{}",
+                    serde_json::to_string_pretty(tool_defs)?
+                ));
+            }
+        }
+        
+        // Append dynamic context to the current user message
+        let final_content = if dynamic_parts.is_empty() {
+            current_content
+        } else {
+            let dynamic_text = dynamic_parts.join("\n\n---\n\n");
+            match current_content {
+                Value::String(text) => {
+                    Value::String(format!("{}\n\n---\n\n{}", text, dynamic_text))
+                }
+                Value::Array(mut blocks) => {
+                    // Find the last text block and append dynamic context
+                    let last_text_idx = blocks.iter().rposition(|b| {
+                        b.get("type").and_then(|t| t.as_str()) == Some("text")
+                    });
+                    if let Some(idx) = last_text_idx {
+                        if let Some(text) = blocks[idx].get_mut("text") {
+                            let current = text.as_str().unwrap_or("");
+                            *text = Value::String(format!("{}\n\n---\n\n{}", current, dynamic_text));
+                        }
+                    } else {
+                        // No text block found, prepend dynamic context
+                        blocks.insert(0, json!({"type": "text", "text": dynamic_text}));
+                    }
+                    Value::Array(blocks)
+                }
+                other => other,
+            }
+        };
+        
+        // Add current user message with dynamic context appended
         messages.push(ChatMessage {
             role: current_role.to_string(),
-            content: Some(current_content),
+            content: Some(final_content),
             tool_calls: None,
             tool_call_id: None,
             name: None,
@@ -119,9 +177,9 @@ impl ContextBuilder {
             thinking_blocks: None,
             metadata: None,
         });
+        
         Ok(messages)
     }
-
     pub fn add_tool_result(
         &self,
         messages: &mut Vec<ChatMessage>,
@@ -411,23 +469,23 @@ mod tests {
     fn system_prompt_omits_task_summary_guidance_when_disabled() {
         let dir = tempdir().unwrap();
         let builder = ContextBuilder::new(dir.path(), 1024).unwrap();
-        let prompt = builder.build_system_prompt("finish task").unwrap();
+        let prompt = builder.build_static_system_prompt().unwrap();
         assert!(prompt.contains("record a durable summary"));
         assert!(prompt.contains("## Memory"));
 
         builder.set_task_summary_guidance_enabled(false);
-        let prompt = builder.build_system_prompt("finish task").unwrap();
+        let prompt = builder.build_static_system_prompt().unwrap();
         assert!(!prompt.contains("record a durable summary"));
         assert!(prompt.contains("On `memorize`"));
 
         builder.set_memory_enabled(false);
-        let prompt = builder.build_system_prompt("finish task").unwrap();
+        let prompt = builder.build_static_system_prompt().unwrap();
         assert!(!prompt.contains("## Memory"));
         assert!(!prompt.contains("On `memorize`"));
     }
 
     #[test]
-    fn build_messages_places_runtime_context_at_end_of_system_prompt() {
+    fn build_messages_separates_static_and_dynamic_context() {
         let dir = tempdir().unwrap();
         let builder = ContextBuilder::new(dir.path(), 1024).unwrap();
         let messages = builder
@@ -438,17 +496,27 @@ mod tests {
                 Some("cli"),
                 Some("direct"),
                 "user",
+                None,
+                None,
             )
             .unwrap();
 
-        let system = messages[0].content_as_text().unwrap();
-        let user = messages[1].content_as_text().unwrap();
-
-        assert!(system.contains(ContextBuilder::RUNTIME_CONTEXT_TAG));
-        assert!(system.contains("Channel: cli"));
-        assert!(system.ends_with("Chat ID: direct"));
-        assert_eq!(user, "continue");
-        assert!(!user.contains(ContextBuilder::RUNTIME_CONTEXT_TAG));
+        // First message is the static system prompt
+        let static_system = messages[0].content_as_text().unwrap();
+        
+        // Second message is the user message with dynamic context appended
+        let user_with_dynamic = messages[1].content_as_text().unwrap();
+        
+        // Static system should NOT contain runtime context
+        assert!(!static_system.contains("Current Time:"));
+        assert!(!static_system.contains("Channel:"));
+        assert!(!static_system.contains("Chat ID:"));
+        
+        // User message should contain the original content plus dynamic context
+        assert!(user_with_dynamic.contains("continue"));
+        assert!(user_with_dynamic.contains("Current Time:"));
+        assert!(user_with_dynamic.contains("Channel: cli"));
+        assert!(user_with_dynamic.contains("Chat ID: direct"));
     }
 
     #[test]

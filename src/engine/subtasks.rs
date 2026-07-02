@@ -636,10 +636,21 @@ impl SubagentManager {
     fn build_tools(&self) -> ToolRegistry {
         let mut tools = ToolRegistry::new();
         let allowed_dir = self.restrict_to_workspace.then(|| self.workspace.clone());
-        let blocked_dirs = if self.memory_enabled {
-            Vec::new()
-        } else {
-            vec![workspace_state_dir(&self.workspace).join("memory")]
+        let blocked_dirs = {
+            let mut dirs = Vec::new();
+            
+            // Block memory directory when memory is not enabled
+            if !self.memory_enabled {
+                dirs.push(workspace_state_dir(&self.workspace).join("memory"));
+            }
+            
+            // Block sessions directory to prevent xbot from reading its own sessions
+            dirs.push(workspace_state_dir(&self.workspace).join("sessions"));
+            
+            // Block tui_input_history.json to prevent xbot from reading its own input history
+            dirs.push(workspace_state_dir(&self.workspace).join("tui_input_history.json"));
+            
+            dirs
         };
         tools.register(Arc::new(
             ReadFileTool::new(Some(self.workspace.clone()), allowed_dir.clone(), vec![])

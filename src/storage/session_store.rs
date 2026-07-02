@@ -116,6 +116,8 @@ pub struct Session {
     pub metadata: BTreeMap<String, Value>,
     #[serde(default)]
     pub last_consolidated: usize,
+    #[serde(default)]
+    pub system_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -140,6 +142,7 @@ impl Session {
             updated_at: now,
             metadata: BTreeMap::new(),
             last_consolidated: 0,
+            system_prompt: None,
         }
     }
 
@@ -187,6 +190,7 @@ impl Session {
         self.messages.clear();
         self.last_consolidated = 0;
         self.metadata.remove(SESSION_CONTEXT_TOKENS_KEY);
+        self.system_prompt = None;
         self.updated_at = now_iso();
     }
 
@@ -202,10 +206,8 @@ impl Session {
             sliced = sliced[idx..].to_vec();
         }
 
-        let legal_start = find_legal_start(&sliced);
-        if legal_start > 0 {
-            sliced = sliced[legal_start..].to_vec();
-        }
+        // Repair incomplete tool calls instead of truncating
+        repair_incomplete_tool_calls(&mut sliced);
 
         sliced
             .into_iter()
@@ -224,45 +226,46 @@ impl Session {
     }
 }
 
-fn find_legal_start(messages: &[ChatMessage]) -> usize {
-    let mut declared: HashSet<String> = HashSet::new();
-    let mut start = 0;
-    for (idx, message) in messages.iter().enumerate() {
-        match message.role.as_str() {
-            "assistant" => {
-                if let Some(tool_calls) = &message.tool_calls {
-                    for tool_call in tool_calls {
-                        if let Some(id) = tool_call.get("id").and_then(Value::as_str) {
-                            declared.insert(id.to_string());
-                        }
-                    }
-                }
+fn repair_incomplete_tool_calls(messages: &mut Vec<ChatMessage>) {
+    // Collect all tool call IDs that have responses
+    let mut responded_ids: HashSet<String> = HashSet::new();
+    for message in messages.iter() {
+        if message.role == "tool" {
+            if let Some(id) = &message.tool_call_id {
+                responded_ids.insert(id.clone());
             }
-            "tool" => {
-                if let Some(id) = &message.tool_call_id {
-                    if !declared.contains(id) {
-                        start = idx + 1;
-                        declared.clear();
-                        for previous in &messages[start..=idx] {
-                            if previous.role == "assistant" {
-                                if let Some(tool_calls) = &previous.tool_calls {
-                                    for tool_call in tool_calls {
-                                        if let Some(prev_id) =
-                                            tool_call.get("id").and_then(Value::as_str)
-                                        {
-                                            declared.insert(prev_id.to_string());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
         }
     }
-    start
+
+    // Find and repair incomplete tool calls
+    let mut i = 0;
+    while i < messages.len() {
+        let message = &mut messages[i];
+        if message.role == "assistant" {
+            if let Some(tool_calls) = &message.tool_calls {
+                if !tool_calls.is_empty() {
+                    // Check if any tool call in this message is incomplete
+                    let has_incomplete = tool_calls.iter().any(|tool_call| {
+                        tool_call.get("id").and_then(|id| id.as_str()).map_or(false, |id| {
+                            !responded_ids.contains(id)
+                        })
+                    });
+
+                    if has_incomplete {
+                        // Repair: remove tool_calls but keep the message content
+                        // This preserves the conversation flow while making it valid
+                        message.tool_calls = None;
+                        
+                        // If there's no content, add a placeholder to maintain context
+                        if message.content.is_none() {
+                            message.content = Some(json!("[Tool call was interrupted or failed]"));
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
 }
 
 #[cfg(test)]
@@ -430,6 +433,287 @@ mod tests {
         let run_tests = summaries.iter().find(|s| s.key == "cli:proj:bbb").unwrap();
         assert_eq!(run_tests.context_tokens, None);
     }
+
+    #[test]
+    fn incomplete_tool_calls_are_trimmed_from_history() {
+        use super::Session;
+        use serde_json::json;
+
+        let mut s = Session::new("test-key");
+        
+        // Add a user message first (required by get_history)
+        s.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: Some(json!("initial question")),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            timestamp: None,
+            reasoning_content: None,
+            thinking_blocks: None,
+            metadata: None,
+        });
+
+        // Add a complete tool call sequence
+        s.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: None,
+            tool_calls: Some(vec![json!({"id": "call_1", "function": {"name": "test"}})]),
+            tool_call_id: None,
+            name: None,
+            timestamp: None,
+            reasoning_content: None,
+            thinking_blocks: None,
+            metadata: None,
+        });
+        s.messages.push(ChatMessage {
+            role: "tool".to_string(),
+            content: Some(json!("response")),
+            tool_calls: None,
+            tool_call_id: Some("call_1".to_string()),
+            name: None,
+            timestamp: None,
+            reasoning_content: None,
+            thinking_blocks: None,
+            metadata: None,
+        });
+
+        // Add an incomplete tool call (no response)
+        s.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: None,
+            tool_calls: Some(vec![json!({"id": "call_2", "function": {"name": "test"}})]),
+            tool_call_id: None,
+            name: None,
+            timestamp: None,
+            reasoning_content: None,
+            thinking_blocks: None,
+            metadata: None,
+        });
+
+        // Add more messages after the incomplete call
+        s.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: Some(json!("next question")),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            timestamp: None,
+            reasoning_content: None,
+            thinking_blocks: None,
+            metadata: None,
+        });
+
+        // Get history - should repair incomplete tool call but keep subsequent messages
+        let history = s.get_history(0);
+        
+        // With repair strategy, we keep all messages but the incomplete tool call is removed
+        // Should have all 5 messages: user, complete assistant+tool, incomplete assistant (repaired), user
+        assert_eq!(history.len(), 5);
+        assert_eq!(history[0].role, "user");
+        assert_eq!(history[1].role, "assistant");
+        assert_eq!(history[2].role, "tool");
+        // The repaired message should have no tool_calls
+        assert_eq!(history[3].role, "assistant");
+        assert!(history[3].tool_calls.is_none());
+        assert_eq!(history[4].role, "user");
+    }
+
+    #[test]
+    fn complete_tool_calls_are_kept_in_history() {
+        use super::Session;
+        use serde_json::json;
+
+        let mut s = Session::new("test-key");
+        
+        // Add a user message first
+        s.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: Some(json!("initial question")),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            timestamp: None,
+            reasoning_content: None,
+            thinking_blocks: None,
+            metadata: None,
+        });
+
+        // Add a complete tool call sequence
+        s.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: None,
+            tool_calls: Some(vec![json!({"id": "call_1", "function": {"name": "test"}})]),
+            tool_call_id: None,
+            name: None,
+            timestamp: None,
+            reasoning_content: None,
+            thinking_blocks: None,
+            metadata: None,
+        });
+        s.messages.push(ChatMessage {
+            role: "tool".to_string(),
+            content: Some(json!("response")),
+            tool_calls: None,
+            tool_call_id: Some("call_1".to_string()),
+            name: None,
+            timestamp: None,
+            reasoning_content: None,
+            thinking_blocks: None,
+            metadata: None,
+        });
+        s.messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: Some(json!("next question")),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            timestamp: None,
+            reasoning_content: None,
+            thinking_blocks: None,
+            metadata: None,
+        });
+
+        // Get history - should keep all messages since no incomplete calls
+        let history = s.get_history(0);
+        
+        // Should have all 4 messages
+        assert_eq!(history.len(), 4);
+        assert_eq!(history[0].role, "user");
+        assert_eq!(history[1].role, "assistant");
+        assert_eq!(history[2].role, "tool");
+        assert_eq!(history[3].role, "user");
+    }
+
+    #[test]
+    fn incomplete_tool_calls_are_repaired_not_trimmed() {
+        use super::Session;
+        use serde_json::json;
+
+        let mut s = Session::new("test-key");
+        
+        // Add initial conversation
+        s.messages.push(ChatMessage::text("user", "Hello"));
+        s.messages.push(ChatMessage::text("assistant", "Hi there!"));
+        
+        // Add a complete tool call sequence
+        s.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: None,
+            tool_calls: Some(vec![json!({"id": "call_complete", "function": {"name": "test"}})]),
+            tool_call_id: None,
+            name: None,
+            timestamp: None,
+            reasoning_content: None,
+            thinking_blocks: None,
+            metadata: None,
+        });
+        s.messages.push(ChatMessage {
+            role: "tool".to_string(),
+            content: Some(json!("response")),
+            tool_calls: None,
+            tool_call_id: Some("call_complete".to_string()),
+            name: None,
+            timestamp: None,
+            reasoning_content: None,
+            thinking_blocks: None,
+            metadata: None,
+        });
+        
+        // Add an incomplete tool call (no response)
+        s.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: None,
+            tool_calls: Some(vec![json!({"id": "call_incomplete", "function": {"name": "test"}})]),
+            tool_call_id: None,
+            name: None,
+            timestamp: None,
+            reasoning_content: None,
+            thinking_blocks: None,
+            metadata: None,
+        });
+        
+        // Add more messages after the incomplete call - these should be PRESERVED
+        s.messages.push(ChatMessage::text("assistant", "I encountered an error"));
+        s.messages.push(ChatMessage::text("user", "Can you try again?"));
+        s.messages.push(ChatMessage::text("assistant", "Sure, let me try"));
+
+        // Get history - should repair incomplete tool call but keep ALL subsequent messages
+        let history = s.get_history(0);
+        
+        // Messages before first user are stripped by get_history logic
+        // We have: user("Hello"), assistant("Hi"), complete pair, incomplete, 3 more = 8 messages after first user
+        assert_eq!(history.len(), 8);
+        
+        // Verify the incomplete tool call was repaired (tool_calls removed)
+        // After slicing from first user, incomplete is at index 4
+        let incomplete_msg = &history[4]; // The assistant message with incomplete call
+        assert_eq!(incomplete_msg.role, "assistant");
+        assert!(incomplete_msg.tool_calls.is_none(), "Incomplete tool call should be repaired");
+        
+        // Verify subsequent messages are preserved
+        assert_eq!(history[5].content_as_text(), Some("I encountered an error".to_string()));
+        assert_eq!(history[6].content_as_text(), Some("Can you try again?".to_string()));
+        assert_eq!(history[7].content_as_text(), Some("Sure, let me try".to_string()));
+    }
+
+    #[test]
+    fn multiple_incomplete_tool_calls_all_repaired() {
+        use super::Session;
+        use serde_json::json;
+
+        let mut s = Session::new("test-key");
+        
+        s.messages.push(ChatMessage::text("user", "Start"));
+        
+        // First incomplete
+        s.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: None,
+            tool_calls: Some(vec![json!({"id": "incomplete_1", "function": {"name": "a"}})]),
+            tool_call_id: None,
+            name: None,
+            timestamp: None,
+            reasoning_content: None,
+            thinking_blocks: None,
+            metadata: None,
+        });
+        
+        // Some conversation in between
+        s.messages.push(ChatMessage::text("assistant", "Something went wrong"));
+        s.messages.push(ChatMessage::text("user", "What happened?"));
+        
+        // Second incomplete
+        s.messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: None,
+            tool_calls: Some(vec![json!({"id": "incomplete_2", "function": {"name": "b"}})]),
+            tool_call_id: None,
+            name: None,
+            timestamp: None,
+            reasoning_content: None,
+            thinking_blocks: None,
+            metadata: None,
+        });
+        
+        // More conversation after
+        s.messages.push(ChatMessage::text("user", "Let's continue"));
+
+        let history = s.get_history(0);
+        
+        // All messages after first user should be preserved: 6 messages
+        assert_eq!(history.len(), 6);
+        
+        // Both incomplete tool calls should be repaired
+        let incomplete_1 = &history[1];
+        let incomplete_2 = &history[5];
+        
+        assert!(incomplete_1.tool_calls.is_none(), "First incomplete call should be repaired");
+        assert!(incomplete_2.tool_calls.is_none(), "Second incomplete call should be repaired");
+        
+        // All subsequent messages should be present
+        assert_eq!(history[5].content_as_text(), Some("Let's continue".to_string()));
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -582,6 +866,7 @@ impl SessionManager {
             updated_at: meta.updated_at,
             metadata: meta.metadata,
             last_consolidated: meta.last_consolidated,
+            system_prompt: None,
         }))
     }
 

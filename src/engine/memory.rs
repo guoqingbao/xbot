@@ -149,6 +149,37 @@ impl MemoryStore {
         })
     }
 
+    pub fn get_static_memory_context(&self) -> Result<String> {
+        // Static memory context - doesn't depend on the current topic
+        // This is used for the system prompt which should be cache-friendly
+        let current = self.read_long_term()?;
+        let (preface, entries) = split_memory_document(&current);
+        let preface = extract_preface_context(&preface);
+        
+        // For static context, we include all entries up to the byte limit
+        let mut parts = Vec::<String>::new();
+        if !preface.trim().is_empty() {
+            parts.push(preface);
+        }
+        
+        // Include entries but respect the max limit
+        let mut entry_bytes = 0;
+        let max_entries_bytes = self.max_memory_bytes / 2;
+        for entry in &entries {
+            if entry_bytes + entry.len() > max_entries_bytes && !parts.is_empty() {
+                break;
+            }
+            entry_bytes += entry.len();
+            parts.push(entry.clone());
+        }
+        
+        Ok(if parts.is_empty() {
+            String::new()
+        } else {
+            format!("## Long-term Memory\n{}", parts.join("\n\n"))
+        })
+    }
+
     pub fn archive_raw_messages(&self, messages: &[ChatMessage]) -> Result<()> {
         if messages.is_empty() {
             return Ok(());

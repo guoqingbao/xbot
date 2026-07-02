@@ -12,6 +12,32 @@ const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧
 const COMPOSER_HISTORY_LIMIT: usize = 10;
 const COMPOSER_HISTORY_FILE: &str = "tui_input_history.json";
 
+const IMAGE_EXTS: &[&str] = &["png", "jpeg", "jpg", "webp", "gif"];
+
+fn is_image_extension(path: &str) -> bool {
+    if let Some(ext) = std::path::Path::new(path).extension() {
+        ext.to_str().map(|e| IMAGE_EXTS.contains(&e.to_lowercase().as_str())).unwrap_or(false)
+    } else {
+        false
+    }
+}
+
+fn is_valid_image_path(path_str: &str) -> bool {
+    let p = std::path::Path::new(path_str);
+    p.exists() && p.is_file() && is_image_extension(path_str)
+}
+
+fn extract_image_from_paste(paste_text: &str) -> Option<String> {
+    // 1. Check if it's a direct file path (common in drag-and-drop to terminal)
+    let cleaned = paste_text.trim_matches(|c| c == '"' || c == '\'' || c == ' ');
+    
+    if is_valid_image_path(cleaned) {
+        return Some(cleaned.to_string());
+    }
+
+    None
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentState {
     Ready,
@@ -168,6 +194,7 @@ pub struct ToolActivity {
 pub struct QueuedPrompt {
     pub prompt: String,
     pub show_in_history: bool,
+    pub media: Vec<String>,
 }
 
 impl QueuedPrompt {
@@ -175,6 +202,15 @@ impl QueuedPrompt {
         Self {
             prompt,
             show_in_history: true,
+            media: Vec::new(),
+        }
+    }
+
+    pub fn user_with_media(prompt: String, media: Vec<String>) -> Self {
+        Self {
+            prompt,
+            show_in_history: true,
+            media,
         }
     }
 
@@ -182,6 +218,7 @@ impl QueuedPrompt {
         Self {
             prompt,
             show_in_history: false,
+            media: Vec::new(),
         }
     }
 }
@@ -327,6 +364,7 @@ pub struct ComposerState {
     pub history: Vec<String>,
     pub history_index: Option<usize>,
     pub draft: Option<String>,
+    pub media_attachments: Vec<String>,
 }
 
 impl ComposerState {
@@ -342,6 +380,7 @@ impl ComposerState {
             history: trim_composer_history(history),
             history_index: None,
             draft: None,
+            media_attachments: Vec::new(),
         }
     }
 
@@ -533,6 +572,7 @@ pub struct App {
     pub session_delete_queue: Vec<String>,
     pub available_sessions: Vec<xbot::storage::SessionSummary>,
     pub steer_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    pub pending_media: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -619,6 +659,7 @@ impl App {
             session_delete_queue: Vec::new(),
             available_sessions,
             steer_tx: None,
+            pending_media: Vec::new(),
         }
     }
 
@@ -632,13 +673,14 @@ impl App {
         self.needs_redraw = true;
     }
 
-    pub fn pop_next_prompt(&mut self) -> Option<String> {
-        let queued = self.pending.pop_front()?;
+    pub fn pop_next_prompt(&mut self) -> Option<(String, Vec<String>)> {
+        let mut queued = self.pending.pop_front()?;
         if queued.show_in_history {
             self.history.push(HistoryEntry::User(queued.prompt.clone()));
             self.auto_scroll = true;
         }
-        Some(queued.prompt)
+        let media = std::mem::take(&mut queued.media);
+        Some((queued.prompt, media))
     }
 
     #[allow(dead_code)]
@@ -1282,10 +1324,23 @@ impl App {
                 }
             }
             Event::Paste(text) => {
-                if !self.show_help {
-                    self.composer.insert_paste(&text);
-                    self.needs_redraw = true;
+                if self.show_help {
+                    return;
                 }
+
+                // Try to extract an image path from the pasted text
+                if let Some(image_path) = extract_image_from_paste(&text) {
+                    // If we found an image, attach it to the composer
+                    self.composer.media_attachments.push(image_path.clone());
+                    self.history.push(HistoryEntry::System(format!(
+                        "Image attached from paste: {}",
+                        image_path
+                    )));
+                } else {
+                    // Normal text paste (including URLs)
+                    self.composer.insert_paste(&text);
+                }
+                self.needs_redraw = true;
             }
             Event::Resize(_, _) => {
                 self.needs_redraw = true;
@@ -1553,7 +1608,8 @@ impl App {
                     return;
                 }
                 let prompt = self.take_composer_input();
-                self.pending.push_back(QueuedPrompt::user(prompt));
+                let media = std::mem::take(&mut self.composer.media_attachments);
+                self.pending.push_back(QueuedPrompt::user_with_media(prompt, media));
             }
             KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.composer.insert_newline();
@@ -1663,6 +1719,39 @@ impl App {
             }
             LocalCommand::Agent(text) => {
                 self.pending.push_back(QueuedPrompt::user(text));
+            }
+            LocalCommand::Image(path) => {
+                // Validate the image path and add it to the pending media
+                let image_path = std::path::Path::new(&path);
+                if image_path.exists() && image_path.is_file() {
+                    if is_image_extension(&path) {
+                        self.history.push(HistoryEntry::System(format!(
+                            "Image attached: {}",
+                            path
+                        )));
+                        // Store the image path for the next message
+                        self.composer.media_attachments.push(path);
+                    } else {
+                        self.history.push(HistoryEntry::System(
+                            "Error: File is not a supported image format.".into(),
+                        ));
+                    }
+                } else {
+                    self.history.push(HistoryEntry::System(
+                        "Error: Image file not found.".into(),
+                    ));
+                }
+            }
+            LocalCommand::Fetch(url) => {
+                // For now, just add a note that URL fetching requires async implementation
+                // In a full implementation, this would spawn a task to download the image
+                // and save it to a temp file, then attach the temp file path.
+                self.history.push(HistoryEntry::System(format!(
+                    "Fetching image from URL: {} (Note: Full async fetch implementation needed)",
+                    url
+                )));
+                // Add to pending_media for later processing
+                self.pending_media.push(url);
             }
         }
     }
@@ -1826,6 +1915,7 @@ fn trim_composer_history_in_place(history: &mut Vec<String>) {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum LocalCommand {
     Help,
     Exit,
@@ -1834,6 +1924,8 @@ enum LocalCommand {
     Agents,
     Sessions,
     Agent(String),
+    Image(String),
+    Fetch(String),
 }
 
 fn parse_local_command(input: &str) -> Option<LocalCommand> {
@@ -1847,7 +1939,21 @@ fn parse_local_command(input: &str) -> Option<LocalCommand> {
         "/agents" => Some(LocalCommand::Agents),
         "/session" | "/sessions" => Some(LocalCommand::Sessions),
         _ => {
-            if lower.starts_with("/memorize")
+            if lower.starts_with("/image ") || lower.starts_with("/upload ") {
+                let parts: Vec<&str> = t.splitn(2, ' ').collect();
+                if parts.len() == 2 {
+                    Some(LocalCommand::Image(parts[1].to_string()))
+                } else {
+                    None
+                }
+            } else if lower.starts_with("/fetch ") {
+                let parts: Vec<&str> = t.splitn(2, ' ').collect();
+                if parts.len() == 2 {
+                    Some(LocalCommand::Fetch(parts[1].to_string()))
+                } else {
+                    None
+                }
+            } else if lower.starts_with("/memorize")
                 || lower.starts_with("/model")
                 || lower.starts_with("/status")
             {
@@ -2213,7 +2319,7 @@ mod tests {
         app.pending
             .push_back(QueuedPrompt::user("queued user".into()));
 
-        assert_eq!(app.pop_next_prompt().as_deref(), Some("queued user"));
+        assert_eq!(app.pop_next_prompt().map(|(p, _)| p), Some("queued user".to_string()));
         assert_eq!(app.pending.len(), 0);
         assert!(matches!(
             app.history.as_slice(),
@@ -2226,7 +2332,7 @@ mod tests {
         let mut app = test_app();
         app.pending.push_back(QueuedPrompt::internal("/new".into()));
 
-        assert_eq!(app.pop_next_prompt().as_deref(), Some("/new"));
+        assert_eq!(app.pop_next_prompt().map(|(p, _)| p), Some("/new".to_string()));
         assert!(app.history.is_empty());
     }
 
@@ -2806,5 +2912,54 @@ mod tests {
         assert_eq!(truncate_mid("abcdef", 1), "…");
         assert_eq!(truncate_mid("abcdef", 2), "a…");
         assert_eq!(truncate_mid("abcdef", 3), "a…f");
+    }
+
+    #[test]
+    fn test_is_valid_image_path() {
+        // Test with a non-existent path
+        assert!(!is_valid_image_path("/tmp/does_not_exist.png"));
+        
+        // Test with valid extension but non-existent
+        assert!(!is_valid_image_path("/tmp/test.jpg"));
+    }
+
+    #[test]
+    fn test_extract_image_from_paste() {
+        // Test with valid existing file path
+        let temp_dir = tempfile::tempdir().unwrap();
+        let img_path = temp_dir.path().join("test.png");
+        std::fs::write(&img_path, b"fake png data").unwrap();
+        
+        let path_str = img_path.to_str().unwrap();
+        assert_eq!(extract_image_from_paste(path_str), Some(path_str.to_string()));
+        
+        // Test with quotes
+        let quoted = format!("\"{}\"", path_str);
+        assert_eq!(extract_image_from_paste(&quoted), Some(path_str.to_string()));
+        
+        // Test with spaces
+        let spaced = format!("  {}  ", path_str);
+        assert_eq!(extract_image_from_paste(&spaced), Some(path_str.to_string()));
+        
+        // Test with invalid extension
+        let txt_path = temp_dir.path().join("test.txt");
+        std::fs::write(&txt_path, b"txt data").unwrap();
+        let txt_str = txt_path.to_str().unwrap();
+        assert_eq!(extract_image_from_paste(txt_str), None);
+        
+        // Test with non-existent path
+        assert_eq!(extract_image_from_paste("/tmp/nonexistent.png"), None);
+    }
+
+    #[test]
+    fn test_parse_fetch_command() {
+        assert_eq!(
+            parse_local_command("/fetch https://example.com/image.png"),
+            Some(LocalCommand::Fetch("https://example.com/image.png".to_string()))
+        );
+        assert_eq!(
+            parse_local_command("/image /path/to/file.png"),
+            Some(LocalCommand::Image("/path/to/file.png".to_string()))
+        );
     }
 }

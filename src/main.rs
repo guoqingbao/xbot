@@ -316,6 +316,7 @@ async fn chat(
             &session_key,
             "cli",
             &built.chat_id,
+            None,
             Some(stream.callback()),
             Some(stream.reasoning_callback()),
         )
