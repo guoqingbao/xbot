@@ -223,6 +223,8 @@ pub struct WebToolsConfig {
     pub search: WebSearchConfig,
 }
 
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ExecToolConfig {
@@ -284,6 +286,8 @@ pub struct ToolsConfig {
     pub mcp_servers: BTreeMap<String, McpServerConfig>,
     #[serde(alias = "restrictToWorkspace")]
     pub restrict_to_workspace: bool,
+    #[serde(alias = "ssrfWhitelist")]
+    pub ssrf_whitelist: Vec<String>,  // Global whitelist for all tools
 }
 
 impl Default for ToolsConfig {
@@ -293,6 +297,7 @@ impl Default for ToolsConfig {
             exec: ExecToolConfig::default(),
             mcp_servers: BTreeMap::new(),
             restrict_to_workspace: false,
+            ssrf_whitelist: Vec::new(),
         }
     }
 }

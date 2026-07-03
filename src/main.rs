@@ -977,6 +977,14 @@ async fn build_agent_for_workspace(
         .clone()
         .unwrap_or_else(|| provider.default_model().to_string());
     let subagent = build_subagent_provider_from_config(config, provider.clone(), &main_model)?;
+    
+    // Parse global SSRF whitelist from config
+    let ssrf_whitelist = config
+        .tools
+        .ssrf_whitelist
+        .iter()
+        .filter_map(|s| s.parse::<ipnet::IpNet>().ok())
+        .collect::<Vec<_>>();
 
     AgentLoop::new_with_subagent_provider(
         provider,
@@ -995,6 +1003,7 @@ async fn build_agent_for_workspace(
         cron_service,
         memory_enabled,
         &config.tools.mcp_servers,
+        ssrf_whitelist,
     )
     .await
 }

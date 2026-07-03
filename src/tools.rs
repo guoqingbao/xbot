@@ -19,7 +19,7 @@ use walkdir::WalkDir;
 use crate::config::WebSearchConfig;
 use crate::cron::{CronSchedule, CronScheduleKind, CronService};
 use crate::engine::SubagentManager;
-use crate::security::{contains_internal_url, validate_resolved_url, validate_url_target};
+use crate::security::{contains_internal_url, is_private_ip, validate_resolved_url, validate_url_target};
 use crate::storage::OutboundMessage;
 use crate::util::{build_image_content_blocks, detect_image_mime, ensure_dir};
 
@@ -1309,7 +1309,7 @@ impl ExecTool {
                 );
             }
         }
-        if contains_internal_url(command) {
+        if contains_internal_url(command, &[]) {
             return Some(
                 "Error: Command blocked by safety guard (internal/private URL detected)"
                     .to_string(),
@@ -1637,11 +1637,32 @@ fn web_fetch_text_payload(
 pub struct WebFetchTool {
     max_chars: usize,
     proxy: Option<String>,
+    allowed_private_networks: Vec<ipnet::IpNet>,
 }
 
 impl WebFetchTool {
     pub fn new(max_chars: usize, proxy: Option<String>) -> Self {
-        Self { max_chars, proxy }
+        Self { 
+            max_chars, 
+            proxy,
+            allowed_private_networks: Vec::new(),  // Empty by default = strict mode
+        }
+    }
+    
+    /// Add a private network to the whitelist (e.g., 10.0.0.0/8, 192.168.1.0/24)
+    pub fn allow_private_network(mut self, network: ipnet::IpNet) -> Self {
+        self.allowed_private_networks.push(network);
+        self
+    }
+    
+    /// Check if an IP is allowed (either public or in whitelist)
+    fn is_ip_allowed(&self, ip: std::net::IpAddr) -> bool {
+        // Always allow public IPs
+        if !is_private_ip(ip) {
+            return true;
+        }
+        // For private IPs, check whitelist
+        self.allowed_private_networks.iter().any(|net| net.contains(&ip))
     }
 }
 
@@ -1670,7 +1691,7 @@ impl Tool for WebFetchTool {
         let max_chars = param_i64(&params, "maxChars")
             .unwrap_or(self.max_chars as i64)
             .max(100) as usize;
-        let (ok, err) = validate_url_target(&url);
+        let (ok, err) = validate_url_target(&url, &self.allowed_private_networks);
         if !ok {
             return ToolOutput::Text(
                 json!({"error": format!("URL validation failed: {err}"), "url": url}).to_string(),
@@ -1690,7 +1711,7 @@ impl Tool for WebFetchTool {
         {
             Ok(response) => {
                 let final_url = response.url().to_string();
-                let (ok, err) = validate_resolved_url(&final_url);
+                let (ok, err) = validate_resolved_url(&final_url, &self.allowed_private_networks);
                 if !ok {
                     return ToolOutput::Text(
                         json!({"error": format!("Redirect blocked: {err}"), "url": url})

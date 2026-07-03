@@ -98,6 +98,7 @@ pub struct AgentLoop {
     steer_tx: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>>>,
     message_rate_limiter: Arc<Mutex<BTreeMap<String, MessageRecord>>>,
     duplicate_message_window_seconds: u64,
+    ssrf_whitelist: Vec<ipnet::IpNet>,  // Allowed private network ranges
 }
 
 impl AgentLoop {
@@ -115,6 +116,7 @@ impl AgentLoop {
         restrict_to_workspace: bool,
         cron_service: Option<CronService>,
         mcp_servers: &BTreeMap<String, crate::config::McpServerConfig>,
+        ssrf_whitelist: Vec<ipnet::IpNet>,
     ) -> Result<Self> {
         Self::new_with_subagent_provider(
             provider,
@@ -133,6 +135,7 @@ impl AgentLoop {
             cron_service,
             true,
             mcp_servers,
+            ssrf_whitelist,
         )
         .await
     }
@@ -154,6 +157,7 @@ impl AgentLoop {
         cron_service: Option<CronService>,
         memory_enabled: bool,
         mcp_servers: &BTreeMap<String, crate::config::McpServerConfig>,
+        ssrf_whitelist: Vec<ipnet::IpNet>,
     ) -> Result<Self> {
         let workspace = workspace.as_ref().to_path_buf();
         let context = ContextBuilder::new(&workspace, max_memory_bytes)?;
@@ -286,6 +290,7 @@ impl AgentLoop {
             steer_tx: Arc::new(Mutex::new(None)),
             message_rate_limiter: Arc::new(Mutex::new(BTreeMap::new())),
             duplicate_message_window_seconds: 2, // Default value, can be overridden by config
+            ssrf_whitelist,
         })
     }
 

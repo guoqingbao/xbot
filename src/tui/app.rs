@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
 use serde_json::Value;
+use tokio::sync::mpsc;
+use uuid::Uuid;
 
 use xbot::util::{ensure_dir, tool_emoji, workspace_state_dir};
 
@@ -1743,17 +1745,70 @@ impl App {
                 }
             }
             LocalCommand::Fetch(url) => {
-                // For now, just add a note that URL fetching requires async implementation
-                // In a full implementation, this would spawn a task to download the image
-                // and save it to a temp file, then attach the temp file path.
-                self.history.push(HistoryEntry::System(format!(
-                    "Fetching image from URL: {} (Note: Full async fetch implementation needed)",
-                    url
-                )));
-                // Add to pending_media for later processing
-                self.pending_media.push(url);
+                // Use synchronous blocking download for TUI context
+                match self.fetch_image_synchronous(&url) {
+                    Ok(temp_path) => {
+                        self.history.push(HistoryEntry::System(format!(
+                            "✅ Image fetched: {}",
+                            temp_path.display()
+                        )));
+                        // Attach to composer for next message
+                        self.composer.media_attachments.push(
+                            temp_path.to_str().unwrap_or("").to_string()
+                        );
+                    }
+                    Err(e) => {
+                        self.history.push(HistoryEntry::System(format!(
+                            "❌ Failed to fetch image: {}",
+                            e
+                        )));
+                    }
+                }
             }
         }
+    }
+
+    fn fetch_image_synchronous(&self, url: &str) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+        use std::io::Write;
+        
+        // No SSRF validation for human-driven TUI command
+        // Use reqwest async client with current thread runtime
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        
+        rt.block_on(async {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .user_agent("xbot-tui/0.1")
+                .build()?;
+            
+            let response = client.get(url).send().await?;
+            let content_type = response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            
+            // Validate it's an image
+            if !content_type.starts_with("image/") {
+                return Err("URL does not point to an image".into());
+            }
+            
+            let bytes = response.bytes().await?;
+            
+            // Create temp file
+            let temp_dir = std::env::temp_dir();
+            let extension = content_type.split('/').last().unwrap_or("bin");
+            let filename = format!("xbot_fetch_{}.{}", Uuid::new_v4(), extension);
+            let temp_path = temp_dir.join(filename);
+            
+            let mut file = std::fs::File::create(&temp_path)?;
+            file.write_all(&bytes)?;
+            
+            Ok::<_, Box<dyn std::error::Error>>(temp_path)
+        })
     }
 
     pub fn scroll_up(&mut self, lines: usize) {
@@ -2961,5 +3016,35 @@ mod tests {
             parse_local_command("/image /path/to/file.png"),
             Some(LocalCommand::Image("/path/to/file.png".to_string()))
         );
+    }
+
+    #[test]
+    fn test_fetch_image_validates_url() {
+        let app = App::new(
+            "test-model".to_string(),
+            "test-provider".to_string(),
+            PathBuf::from("/tmp/test"),
+            0,
+            "".to_string(),
+            None,
+            "Test Session".to_string(),
+            "test-key".to_string(),
+            vec![],
+        );
+
+        // Test private IP blocking (should fail with default settings)
+        let result = app.fetch_image_synchronous("http://192.168.1.1/test.png");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("private"));
+
+        // Test localhost blocking
+        let result = app.fetch_image_synchronous("http://localhost/test.png");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("private"));
+
+        // Test invalid scheme
+        let result = app.fetch_image_synchronous("file:///tmp/test.png");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("http"));
     }
 }

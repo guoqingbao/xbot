@@ -38,6 +38,105 @@ The screenshot highlights one of `xbot`'s core advantages: the main agent can us
 - [🧵 Hybrid Remote Main + Local Subagents](./docs/HYBRID_MODELS.md)
 - [🏗️ Architecture](./docs/ARCHITECTURE.md)
 - [⚙️ Operations Guide](./docs/OPERATIONS.md)
+- [🔒 Security: SSRF Protection](#ssrf-protection)
+
+## 🔒 Security: SSRF Protection
+
+xbot includes Server-Side Request Forgery (SSRF) protection to prevent unauthorized access to internal networks when fetching URLs.
+
+### Configuration
+
+Add allowed private network ranges to your `~/.xbot/config.json`:
+
+```json
+{
+  "tools": {
+    "ssrfWhitelist": [
+      "10.0.0.0/8",
+      "192.168.0.0/16",
+      "172.16.0.0/12"
+    ]
+  }
+}
+```
+
+### How It Works
+
+- **Default **(Strict) Empty or missing `ssrfWhitelist` blocks ALL private IP addresses
+- **Whitelisted Networks**: Only explicitly listed CIDR ranges are allowed  
+- **Applied Globally**: Protection applies to all agent tools:
+  - `web_fetch` tool (used by LLM agents)
+  - Discord/Telegram media uploads
+  - Exec tool command arguments
+- **TUI `/fetch` Command**: No SSRF protection - human-driven command allows any URL
+
+### Security Notes
+
+The TUI `/fetch` command intentionally has no SSRF protection because:
+- It's directly controlled by human operators, not LLM agents
+- Users need full freedom to fetch internal resources for debugging
+- The risk profile is different from automated agent tools
+
+For agent-triggered URL fetching, SSRF protection remains active and configurable via the global whitelist.
+
+### Security Examples
+
+**Block all private networks **(default)
+```json
+{
+  "tools": {
+    "ssrfWhitelist": []
+  }
+}
+```
+
+**Allow OpenStack private VLANs**:
+```json
+{
+  "tools": {
+    "ssrfWhitelist": [
+      "10.0.0.0/8",
+      "172.16.0.0/12",
+      "192.168.0.0/16"
+    ]
+  }
+}
+```
+
+**Allow Kubernetes cluster networks**:
+```json
+{
+  "tools": {
+    "ssrfWhitelist": [
+      "10.96.0.0/12",
+      "172.17.0.0/16"
+    ]
+  }
+}
+```
+
+### Validation
+
+- ✅ Supports CIDR notation (e.g., `192.168.0.0/16`)
+- ✅ IPv4 and IPv6 ranges
+- ✅ Invalid ranges are silently ignored
+- ✅ DNS resolution happens before IP checking
+- ✅ Redirect targets are re-validated
+
+### Blocked Ranges
+
+By default, SSRF protection blocks these private ranges (unless whitelisted):
+
+- `0.0.0.0/8` - Invalid source addresses
+- `10.0.0.0/8` - Private VLAN
+- `100.64.0.0/10` - Carrier-Shared Addresses (CGNAT)
+- `127.0.0.0/8` - Loopback
+- `169.254.0.0/16` - Link-local
+- `172.16.0.0/12` - RFC 1918 private
+- `192.168.0.0/16` - RFC 1918 private
+- `::1/128` - IPv6 loopback
+- `fc00::/7` - IPv6 unique local
+- `fe80::/10` - IPv6 link-local
 
 ## 🚀 Quick Start
 
