@@ -1549,6 +1549,7 @@ mod tests {
             false,
             None,
             &Default::default(),
+            vec![],  // ssrf_whitelist
         )
         .await
         .unwrap();

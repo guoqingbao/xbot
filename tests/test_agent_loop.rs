@@ -66,6 +66,7 @@ async fn agent_loop_executes_tool_then_returns_final_answer() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -133,6 +134,7 @@ async fn zero_max_tool_iterations_means_unbounded_until_completion() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -217,6 +219,7 @@ async fn provider_errors_still_persist_the_user_turn() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -275,6 +278,7 @@ async fn agent_loop_stops_on_repeated_tool_calls() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -322,6 +326,7 @@ async fn agent_loop_stops_on_repeated_tool_calls_even_with_new_ids() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -379,6 +384,7 @@ async fn agent_loop_does_not_stop_when_tool_arguments_change() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -430,6 +436,7 @@ async fn agent_loop_breaks_semantic_loop_after_repeated_nudges() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -515,6 +522,7 @@ async fn agent_loop_honors_stop_command() {
             false,
             None,
             &Default::default(),
+            vec![],
         )
         .await
         .unwrap(),
@@ -586,6 +594,7 @@ async fn stop_command_does_not_block_the_next_prompt() {
             false,
             None,
             &Default::default(),
+            vec![],
         )
         .await
         .unwrap(),
@@ -651,6 +660,7 @@ async fn runtime_stop_command_sends_threaded_ack_and_completion() {
             false,
             None,
             &Default::default(),
+            vec![],
         )
         .await
         .unwrap(),
@@ -756,6 +766,7 @@ async fn clear_command_clears_session_and_preserves_history_file() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -832,6 +843,7 @@ async fn completed_tasks_append_task_summary_to_memory() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -886,6 +898,7 @@ async fn disabled_auto_task_summary_skips_memory_write_and_tool_hint() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -942,6 +955,7 @@ async fn disabled_memory_skips_memorize_and_memory_files() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -1025,6 +1039,7 @@ async fn near_context_limit_compresses_context_before_next_request() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -1107,6 +1122,7 @@ async fn provider_usage_emits_realtime_context_update() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -1209,6 +1225,7 @@ async fn completed_task_memory_emits_backend_tool_hint_without_context_entry() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -1291,6 +1308,7 @@ async fn memorize_command_appends_user_memory_entry() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -1335,6 +1353,7 @@ async fn help_command_preserves_inbound_metadata() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -1413,6 +1432,7 @@ async fn model_command_lists_available_models() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -1462,6 +1482,7 @@ async fn model_command_switches_session_model_and_status_uses_provider_context()
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -1521,6 +1542,7 @@ async fn model_command_persists_selected_model_and_context() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -1583,6 +1605,7 @@ async fn status_refreshes_resumed_session_context_from_provider_models() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -1679,6 +1702,7 @@ async fn backend_announces_new_session_once_per_runtime_session() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -1792,6 +1816,7 @@ async fn backend_announces_when_resuming_existing_session() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -1867,6 +1892,7 @@ async fn reasoning_content_preserved_in_session_after_turn() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -1948,6 +1974,7 @@ async fn reasoning_only_assistant_message_preserved_in_session() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -2038,6 +2065,7 @@ async fn session_persisted_incrementally_during_tool_loop() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -2117,6 +2145,7 @@ async fn persist_session_safe_keeps_complete_history_intact() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
