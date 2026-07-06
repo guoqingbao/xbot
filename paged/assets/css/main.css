@@ -317,6 +317,8 @@ ol.steps{list-style:none;counter-reset:step;padding:0}
 .footer-col a{display:block;font-size:0.875rem;color:var(--text-secondary);margin-bottom:10px;transition:all var(--transition)}
 .footer-col a:hover{color:var(--primary);transform:translateX(3px)}
 .footer-bottom{text-align:center;padding-top:24px;border-top:1px solid var(--border);font-size:0.8rem;color:var(--text-tertiary);display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.footer-bottom a{color:inherit;transition:color var(--transition)}
+.footer-bottom a:hover{color:var(--primary)}
 
 /* Reveal */
 .reveal{opacity:0;transform:translateY(24px);transition:opacity 0.55s,transform 0.55s}
