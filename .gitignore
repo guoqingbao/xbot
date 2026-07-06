@@ -22,3 +22,4 @@ XBOT.md
 npm_pub.sh
 install.sh
 .cursor
+dist/

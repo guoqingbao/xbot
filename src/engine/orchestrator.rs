@@ -1687,36 +1687,7 @@ impl AgentLoop {
             .clone();
         let Some(callback) = callback else { return };
 
-        let (success, summary) = match output {
-            ToolOutput::Text(text) => {
-                let is_error = text.starts_with("Error");
-                let all_lines: Vec<&str> = text.lines().collect();
-                let preview = if all_lines.len() <= 8 {
-                    all_lines
-                        .iter()
-                        .map(|l| truncate_chars_ellipsis(l, 100))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                } else {
-                    let head: Vec<String> = all_lines[..4]
-                        .iter()
-                        .map(|l| truncate_chars_ellipsis(l, 100))
-                        .collect();
-                    let tail: Vec<String> = all_lines[all_lines.len() - 4..]
-                        .iter()
-                        .map(|l| truncate_chars_ellipsis(l, 100))
-                        .collect();
-                    format!(
-                        "{}\n  … {} lines …\n{}",
-                        head.join("\n"),
-                        all_lines.len() - 8,
-                        tail.join("\n")
-                    )
-                };
-                (!is_error, preview)
-            }
-            ToolOutput::Blocks(_) => (true, "completed".to_string()),
-        };
+        let (success, summary) = summarize_tool_result_progress(output);
 
         let mut outbound = target.outbound(String::new());
         outbound
@@ -2989,6 +2960,39 @@ fn format_tool_hint(tool_call: &crate::providers::ToolCallRequest) -> String {
     }
 }
 
+fn summarize_tool_result_progress(output: &ToolOutput) -> (bool, String) {
+    match output {
+        ToolOutput::Text(text) => {
+            let is_error = text.starts_with("Error");
+            let all_lines: Vec<&str> = text.lines().collect();
+            let preview = if all_lines.len() <= 8 {
+                all_lines
+                    .iter()
+                    .map(|l| truncate_chars_ellipsis(l, 100))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                let head: Vec<String> = all_lines[..4]
+                    .iter()
+                    .map(|l| truncate_chars_ellipsis(l, 100))
+                    .collect();
+                let tail: Vec<String> = all_lines[all_lines.len() - 4..]
+                    .iter()
+                    .map(|l| truncate_chars_ellipsis(l, 100))
+                    .collect();
+                format!(
+                    "{}\n  … {} lines …\n{}",
+                    head.join("\n"),
+                    all_lines.len() - 8,
+                    tail.join("\n")
+                )
+            };
+            (!is_error, preview)
+        }
+        ToolOutput::Blocks(_) => (true, "completed".to_string()),
+    }
+}
+
 fn summarize_tool_arguments(arguments: &Value) -> String {
     match arguments {
         Value::Object(map) => {
@@ -3204,10 +3208,12 @@ fn strip_runtime_context_text(text: &str) -> String {
 mod tests {
     use super::{
         build_iteration_limit_message, build_repeated_tool_loop_message,
-        sanitize_message_for_storage, strip_runtime_context_text, truncate_for_diagnostic,
+        sanitize_message_for_storage, strip_runtime_context_text, summarize_tool_result_progress,
+        truncate_for_diagnostic,
     };
     use crate::engine::ContextBuilder;
     use crate::storage::ChatMessage;
+    use crate::tools::ToolOutput;
     use serde_json::json;
 
     #[test]
@@ -3263,6 +3269,37 @@ mod tests {
         let truncated = truncate_for_diagnostic(&text, 32);
         assert_eq!(truncated.len(), 35);
         assert!(truncated.ends_with("..."));
+    }
+
+    #[test]
+    fn tool_result_progress_summary_truncates_multibyte_boundary() {
+        let text = format!("{}{}{}", "a".repeat(97), "─", "b".repeat(8));
+        let (success, summary) = summarize_tool_result_progress(&ToolOutput::Text(text));
+
+        assert!(success);
+        assert!(summary.ends_with('…'));
+        assert!(summary.is_char_boundary(summary.len()));
+    }
+
+    #[test]
+    fn tool_result_progress_summary_truncates_multiline_multibyte_boundary() {
+        let boundary_line = format!("{}{}{}", "a".repeat(97), "─", "b".repeat(8));
+        let text = (0..9)
+            .map(|idx| {
+                if idx == 8 {
+                    boundary_line.clone()
+                } else {
+                    format!("line {idx}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (success, summary) = summarize_tool_result_progress(&ToolOutput::Text(text));
+
+        assert!(success);
+        assert!(summary.contains("… 1 lines …"));
+        assert!(summary.ends_with('…'));
+        assert!(summary.is_char_boundary(summary.len()));
     }
 
     #[test]

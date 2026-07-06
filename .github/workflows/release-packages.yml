@@ -66,10 +66,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - rust_target: x86_64-unknown-linux-gnu
+          - rust_target: x86_64-unknown-linux-musl
             npm_target: linux-x64
             deb_arch: amd64
-          - rust_target: aarch64-unknown-linux-gnu
+          - rust_target: aarch64-unknown-linux-musl
             npm_target: linux-arm64
             deb_arch: arm64
     steps:
@@ -79,35 +79,6 @@ jobs:
           targets: ${{ matrix.rust_target }}
       - uses: taiki-e/install-action@cross
       - uses: taiki-e/install-action@cargo-deb
-      - name: Install ARM64 Debian packaging dependencies
-        if: matrix.rust_target == 'aarch64-unknown-linux-gnu'
-        run: |
-          set -eux
-          sudo dpkg --add-architecture arm64
-          . /etc/os-release
-          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
-            sudo sed -i '/^Architectures:/d' /etc/apt/sources.list.d/ubuntu.sources
-            sudo sed -i 's/^Components:/Architectures: amd64\nComponents:/' /etc/apt/sources.list.d/ubuntu.sources
-          fi
-
-          cat <<EOF | sudo tee /etc/apt/sources.list.d/ubuntu-arm64.sources
-          Types: deb
-          URIs: http://ports.ubuntu.com/ubuntu-ports/
-          Suites: ${VERSION_CODENAME} ${VERSION_CODENAME}-updates ${VERSION_CODENAME}-backports ${VERSION_CODENAME}-security
-          Components: main restricted universe multiverse
-          Architectures: arm64
-          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-          EOF
-
-          sudo apt-get update
-          sudo apt-get install -y \
-            gcc-aarch64-linux-gnu \
-            binutils-aarch64-linux-gnu \
-            libc6:arm64 \
-            libc6-dev:arm64 \
-            libgcc-s1:arm64 \
-            dpkg-dev
-
       - name: Build binary
         run: cross build --release --target ${{ matrix.rust_target }}
       - name: Package tarball
@@ -119,17 +90,24 @@ jobs:
         env:
           DEB_HOST_ARCH: ${{ matrix.deb_arch }}
         run: |
-          if [ "${{ matrix.rust_target }}" = "aarch64-unknown-linux-gnu" ]; then
-            cargo deb \
-              --no-build \
-              --no-strip \
-              --target ${{ matrix.rust_target }} \
-              --output "dist/xbot-${{ matrix.npm_target }}.deb"
-          else
-            cargo deb \
-              --no-build \
-              --target ${{ matrix.rust_target }} \
-              --output "dist/xbot-${{ matrix.npm_target }}.deb"
+          cargo deb \
+            --no-build \
+            --no-strip \
+            --target ${{ matrix.rust_target }} \
+            --output "dist/xbot-${{ matrix.npm_target }}.deb"
+      - name: Verify Linux binary and Debian package are glibc-independent
+        run: |
+          set -eu
+          if readelf -l "target/${{ matrix.rust_target }}/release/xbot" | grep -q 'INTERP'; then
+            echo "Musl Linux binary must not require a dynamic ELF interpreter" >&2
+            exit 1
+          fi
+
+          depends="$(dpkg-deb -f "dist/xbot-${{ matrix.npm_target }}.deb" Depends)"
+          echo "Debian dependencies: ${depends}"
+          if printf '%s\n' "${depends}" | grep -q 'libc6'; then
+            echo "Musl Linux package must not depend on glibc/libc6" >&2
+            exit 1
           fi
 
       - uses: actions/upload-artifact@v4
