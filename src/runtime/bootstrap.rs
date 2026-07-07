@@ -199,13 +199,16 @@ pub fn validate_run_config(config: &Config, model: &str) -> Result<()> {
         } else {
             server.transport.as_str()
         };
-        if transport != "stdio" {
+        if transport != "stdio" && transport != "http" && transport != "streamableHttp" && transport != "sse" {
             bail!(
-                "MCP server '{name}' uses unsupported transport '{transport}'; only stdio is currently supported"
+                "MCP server '{name}' uses unsupported transport '{transport}'; only stdio, http, streamableHttp, and sse are supported"
             );
         }
-        if server.command.trim().is_empty() {
+        if transport == "stdio" && server.command.trim().is_empty() {
             bail!("MCP server '{name}' is enabled but command is empty");
+        }
+        if (transport == "http" || transport == "streamableHttp" || transport == "sse") && server.url.is_none() {
+            bail!("MCP server '{name}' uses HTTP transport but no URL is configured");
         }
     }
 
@@ -493,7 +496,7 @@ mod tests {
                 "mcpServers": {
                     "github": {
                         "enabled": true,
-                        "type": "streamableHttp",
+                        "type": "grpc",
                         "url": "http://localhost:8001/mcp"
                     }
                 }
@@ -504,7 +507,7 @@ mod tests {
         let err = validate_run_config(&config, "openai/gpt-4.1-mini").unwrap_err();
         assert!(
             err.to_string()
-                .contains("only stdio is currently supported")
+                .contains("unsupported transport")
         );
     }
 }

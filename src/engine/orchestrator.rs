@@ -19,6 +19,7 @@ use crate::engine::{
     SkillsLoader, SubagentManager,
 };
 use crate::integrations::mcp::register_mcp_tools;
+use crate::integrations::mcp_http::register_http_mcp_tools;
 use crate::providers::{LlmResponse, ProviderModelInfo, SharedProvider, TextStreamCallback};
 use crate::storage::{
     ChatMessage, InboundMessage, MessageBus, OutboundMessage, Session, SessionManager,
@@ -229,6 +230,7 @@ impl AgentLoop {
             tools.register(cron_tool.clone());
         }
         register_mcp_tools(&mut tools, mcp_servers).await?;
+        register_http_mcp_tools(&mut tools, mcp_servers).await?;
 
         let tool_semaphore = Arc::new(Semaphore::new(max_concurrent_tools.max(1)));
 
