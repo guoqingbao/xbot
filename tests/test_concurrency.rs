@@ -125,6 +125,7 @@ async fn new_test_agent(
             false,
             None,
             &Default::default(),
+            vec![],
         )
         .await
         .expect("agent"),

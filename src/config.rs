@@ -28,6 +28,8 @@ pub struct AgentDefaults {
     pub memory_max_bytes: usize,
     #[serde(alias = "maxConcurrentRequests")]
     pub max_concurrent_requests: usize,
+    #[serde(alias = "duplicateMessageWindowSeconds")]
+    pub duplicate_message_window_seconds: u64,
 }
 
 impl Default for AgentDefaults {
@@ -43,6 +45,7 @@ impl Default for AgentDefaults {
             max_concurrent_tools: 5,
             memory_max_bytes: 32 * 1024,
             max_concurrent_requests: 3,
+            duplicate_message_window_seconds: 2,
         }
     }
 }
@@ -220,6 +223,8 @@ pub struct WebToolsConfig {
     pub search: WebSearchConfig,
 }
 
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ExecToolConfig {
@@ -281,6 +286,8 @@ pub struct ToolsConfig {
     pub mcp_servers: BTreeMap<String, McpServerConfig>,
     #[serde(alias = "restrictToWorkspace")]
     pub restrict_to_workspace: bool,
+    #[serde(alias = "ssrfWhitelist")]
+    pub ssrf_whitelist: Vec<String>,  // Global whitelist for all tools
 }
 
 impl Default for ToolsConfig {
@@ -290,6 +297,7 @@ impl Default for ToolsConfig {
             exec: ExecToolConfig::default(),
             mcp_servers: BTreeMap::new(),
             restrict_to_workspace: false,
+            ssrf_whitelist: Vec::new(),
         }
     }
 }

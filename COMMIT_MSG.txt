@@ -1,0 +1,37 @@
+add /plain TUI command for borderless text export
+
+Implement toggleable plain mode removing all TUI chrome.
+Preserves conversation content while stripping borders,
+colors, and formatting for clean copy-paste workflows.
+
+Plain mode renders transcript without decorative elements.
+Header shows minimal streaming status or "ready" text.
+Composer displays plain text input without framing borders.
+Footer status line hidden entirely in plain mode.
+Toggle persists via boolean state flag across session.
+
+Enables clean export of conversation text without artifacts.
+Supports copy-paste workflows where styling interferes.
+Maintains full rich mode when plain mode disabled.
+No impact on agent behavior - presentation layer only.
+
+Type /plain in TUI composer to enable borderless display.
+Type /plain again to restore rich formatting.
+Status message confirms mode change in system history.
+Compatible with all existing TUI commands and features.
+
+App struct gains plain_mode boolean field defaulting false.
+LocalCommand enum extends with Plain variant for toggle.
+handle_local_command flips state flag on Plain case.
+render_header short-circuits to minimal output when set.
+render_transcript conditionally omits Block widget borders.
+render_composer and render_footer respect plain_mode gating.
+
+Implementation adds single state field and four render guards.
+No new dependencies - uses existing ratatui conditional logic.
+Backward compatible - rich mode remains default behavior.
+Performance neutral - same text rendering, different styling.
+
+Tests verify plain mode toggle doesn't break transcript flow.
+Integration tests confirm command parsing registers /plain.
+Unit tests validate header/composer/footer conditional rendering.

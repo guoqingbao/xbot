@@ -245,7 +245,7 @@ pub async fn run_tui_repl(
         if !app.is_busy() {
             app.steer_tx = None;
             agent.clear_steer_channel();
-            if let Some(prompt) = app.pop_next_prompt() {
+            if let Some((prompt, media)) = app.pop_next_prompt() {
                 let sk = app.session_key().to_string();
                 let steer_tx = agent.setup_steer_channel();
                 app.steer_tx = Some(steer_tx);
@@ -254,6 +254,7 @@ pub async fn run_tui_repl(
                     prompt,
                     sk,
                     chat_id.clone(),
+                    if media.is_empty() { None } else { Some(media) },
                     engine_tx.clone(),
                 ));
                 app.agent_state = AS::Working;
@@ -308,6 +309,7 @@ fn spawn_turn(
     prompt: String,
     session_key: String,
     chat_id: String,
+    media: Option<Vec<String>>,
     tx: mpsc::UnboundedSender<EngineEvent>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -327,6 +329,7 @@ fn spawn_turn(
                 &session_key,
                 "cli",
                 &chat_id,
+                media.as_deref(),
                 Some(stream_callback),
                 Some(reasoning_callback),
             )

@@ -99,6 +99,18 @@ fn composer_height(input: &str, cursor: usize, area_width: u16) -> u16 {
 }
 
 fn render_header(f: &mut Frame, area: Rect, app: &App) {
+    if app.plain_mode {
+        // Minimal header in plain mode
+        let content = if let Some(ref active) = app.active {
+            format!("[streaming: {} segments]", active.segments.len())
+        } else {
+            "ready".to_string()
+        };
+        let paragraph = Paragraph::new(content);
+        f.render_widget(paragraph, area);
+        return;
+    }
+
     let (status_icon, status_color) = match app.agent_state {
         AgentState::Working => (format!("{} working", app.spinner_char()), WORKING_FG),
         AgentState::WaitingSubagents => (
@@ -236,16 +248,21 @@ fn render_transcript(f: &mut Frame, area: Rect, app: &mut App) {
     };
 
     let title = transcript_title(app);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(BORDER_DIM))
-        .title(Span::styled(title, Style::default().fg(TEXT_MUTED)))
-        .style(Style::default().bg(TRANSCRIPT_BG));
+    let block = if app.plain_mode {
+        // No borders in plain mode
+        Block::default().style(Style::default())
+    } else {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(BORDER_DIM))
+            .title(Span::styled(title, Style::default().fg(TEXT_MUTED)))
+            .style(Style::default().bg(TRANSCRIPT_BG))
+    };
 
     let paragraph = Paragraph::new(Text::from(visible)).block(block);
     f.render_widget(paragraph, area);
 
-    if lines.len() > inner_height {
+    if !app.plain_mode && lines.len() > inner_height {
         let mut scrollbar_state = ScrollbarState::new(lines.len().saturating_sub(inner_height))
             .position(app.scroll_offset);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -1425,6 +1442,13 @@ fn render_turn_separator(
 }
 
 fn render_composer(f: &mut Frame, area: Rect, app: &App) {
+    if app.plain_mode {
+        // Simple input area in plain mode
+        let input = Paragraph::new(app.composer.input.clone());
+        f.render_widget(input, area);
+        return;
+    }
+
     let busy = app.is_busy();
     let border_color = if busy { TEXT_DIM } else { ACCENT };
     let title = if busy {
@@ -1551,6 +1575,11 @@ pub(crate) fn compute_cursor_position(input: &str, cursor: usize, width: usize) 
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
+    if app.plain_mode {
+        // No footer in plain mode
+        return;
+    }
+
     let status = app.status_line();
     let busy = app.is_busy();
     let shortcuts = if busy {
@@ -1622,7 +1651,6 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
                 ("↑ / ↓", "Scroll transcript"),
                 ("Shift+↑ / Shift+↓", "Browse input history"),
                 ("PgUp / PgDn", "Page scroll"),
-                ("Mouse wheel", "Scroll transcript"),
             ],
         ),
         (

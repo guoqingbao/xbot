@@ -396,6 +396,7 @@ async fn admin_gateway_exposes_overview_and_metrics() {
             false,
             None,
             &Default::default(),
+            vec![],
         )
         .await
         .unwrap(),

@@ -19,7 +19,7 @@ use walkdir::WalkDir;
 use crate::config::WebSearchConfig;
 use crate::cron::{CronSchedule, CronScheduleKind, CronService};
 use crate::engine::SubagentManager;
-use crate::security::{contains_internal_url, validate_resolved_url, validate_url_target};
+use crate::security::{contains_internal_url, is_private_ip, validate_resolved_url, validate_url_target};
 use crate::storage::OutboundMessage;
 use crate::util::{build_image_content_blocks, detect_image_mime, ensure_dir};
 
@@ -457,9 +457,12 @@ impl Tool for ReadFileTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "read_file".to_string(),
-            description: "Read file contents with line numbers. Use offset and limit to read \
-                specific sections — prefer reading only the lines you need after using \
-                grep_files to locate relevant code. Default limit is 2000 lines."
+            description: "Read file contents with line numbers. To read an entire file at once, \
+                omit offset and limit parameters (defaults: offset=1, limit=2000). For files \
+                larger than 2000 lines, use offset to paginate: first call with offset=1, \
+                limit=2000, then offset=2001, limit=2000, etc. Use grep_files to locate specific \
+                code patterns before reading files. Default limit is 2000 lines; max limit is \
+                10000 lines per call."
                 .to_string(),
             parameters: json!({
                 "type": "object",
@@ -471,12 +474,12 @@ impl Tool for ReadFileTool {
                     "offset": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "Starting line number (1-indexed)"
+                        "description": "Starting line number (1-indexed). Omit to start from line 1. Use with limit for pagination: read lines 1-2000 (offset=1, limit=2000), then 2001-4000 (offset=2001, limit=2000), etc. For entire files under 2000 lines, omit both offset and limit."
                     },
                     "limit": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "Max lines to read (default: 2000)"
+                        "description": "Max lines to read (default: 2000). Set to a large value (e.g., 10000) to read entire large files in one call. For files larger than limit, use offset pagination. Omit to read up to 2000 lines from offset."
                     }
                 },
                 "required": ["path"]
@@ -607,12 +610,15 @@ impl Tool for WriteFileTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "write_file".to_string(),
-            description: "Write content to a file.".to_string(),
+            description: "Write content to a file. Creates the file if it does not exist, or \
+                overwrites it if it does. IMPORTANT: Parent directory must exist. Use list_dir \
+                to verify directory structure before writing. For new files, ensure the parent \
+                directory exists first.".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string"},
-                    "content": {"type": "string"}
+                    "path": {"type": "string", "description": "File path to write. Parent directory must exist."},
+                    "content": {"type": "string", "description": "File content to write"}
                 },
                 "required": ["path", "content"]
             }),
@@ -714,14 +720,18 @@ impl Tool for EditFileTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "edit_file".to_string(),
-            description: "Replace old_text with new_text in a file.".to_string(),
+            description: "Replace old_text with new_text in a file. IMPORTANT: Always read the \
+                file first using read_file to understand its content and locate the exact text \
+                to replace. The old_text must match exactly (including whitespace and newlines). \
+                Set replace_all=true to replace all occurrences; otherwise only the first match \
+                is replaced. Use small, focused changes rather than large rewrites.".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string"},
-                    "old_text": {"type": "string"},
-                    "new_text": {"type": "string"},
-                    "replace_all": {"type": "boolean"}
+                    "path": {"type": "string", "description": "File path to edit"},
+                    "old_text": {"type": "string", "description": "Exact text to find and replace. Must match including whitespace and newlines. Read the file first to locate this text."},
+                    "new_text": {"type": "string", "description": "Text to replace old_text with"},
+                    "replace_all": {"type": "boolean", "description": "If true, replace all occurrences. If false (default), replace only the first match."}
                 },
                 "required": ["path", "old_text", "new_text"]
             }),
@@ -830,7 +840,10 @@ impl Tool for ListDirTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "list_dir".to_string(),
-            description: "List directory contents.".to_string(),
+            description: "List directory contents. Use recursive=true to traverse subdirectories. \
+                Set max_entries to control output size (default: 200). Use this to explore \
+                project structure before reading or editing files. Results show FILE or DIR \
+                prefixes for easy identification.".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -934,6 +947,7 @@ impl Tool for ListDirTool {
 pub struct GrepFilesTool {
     workspace: Option<PathBuf>,
     allowed_dir: Option<PathBuf>,
+    blocked_dirs: Vec<PathBuf>,
 }
 
 impl GrepFilesTool {
@@ -944,7 +958,13 @@ impl GrepFilesTool {
         Self {
             workspace,
             allowed_dir,
+            blocked_dirs: Vec::new(),
         }
+    }
+
+    pub fn with_blocked_dirs(mut self, blocked_dirs: Vec<PathBuf>) -> Self {
+        self.blocked_dirs = blocked_dirs;
+        self
     }
 
     fn search_file(
@@ -956,6 +976,9 @@ impl GrepFilesTool {
         max_results: usize,
     ) {
         if results.len() >= max_results {
+            return;
+        }
+        if is_blocked_path(path, &self.blocked_dirs) {
             return;
         }
         let metadata = match fs::metadata(path) {
@@ -1094,9 +1117,10 @@ impl Tool for GrepFilesTool {
         ToolSpec {
             name: "grep_files".to_string(),
             description: "Fast content search using regex. Returns file paths, line numbers, \
-                and matching lines sorted by modification time. Use to find code patterns, \
-                definitions, imports, or any text across the codebase. For open-ended searches \
-                that may require multiple rounds, delegate to a sub-agent via `spawn` instead."
+                and matching lines. PRIMARY USE: Search for code patterns, definitions, imports, \
+                or any text across the codebase BEFORE reading files. Always use grep_files first \
+                to locate relevant code, then read_file for context. For open-ended searches that \
+                may require multiple rounds, delegate to a sub-agent via spawn instead."
                 .to_string(),
             parameters: json!({
                 "type": "object",
@@ -1285,7 +1309,7 @@ impl ExecTool {
                 );
             }
         }
-        if contains_internal_url(command) {
+        if contains_internal_url(command, &[]) {
             return Some(
                 "Error: Command blocked by safety guard (internal/private URL detected)"
                     .to_string(),
@@ -1613,11 +1637,32 @@ fn web_fetch_text_payload(
 pub struct WebFetchTool {
     max_chars: usize,
     proxy: Option<String>,
+    allowed_private_networks: Vec<ipnet::IpNet>,
 }
 
 impl WebFetchTool {
     pub fn new(max_chars: usize, proxy: Option<String>) -> Self {
-        Self { max_chars, proxy }
+        Self { 
+            max_chars, 
+            proxy,
+            allowed_private_networks: Vec::new(),  // Empty by default = strict mode
+        }
+    }
+    
+    /// Add a private network to the whitelist (e.g., 10.0.0.0/8, 192.168.1.0/24)
+    pub fn allow_private_network(mut self, network: ipnet::IpNet) -> Self {
+        self.allowed_private_networks.push(network);
+        self
+    }
+    
+    /// Check if an IP is allowed (either public or in whitelist)
+    fn is_ip_allowed(&self, ip: std::net::IpAddr) -> bool {
+        // Always allow public IPs
+        if !is_private_ip(ip) {
+            return true;
+        }
+        // For private IPs, check whitelist
+        self.allowed_private_networks.iter().any(|net| net.contains(&ip))
     }
 }
 
@@ -1646,7 +1691,7 @@ impl Tool for WebFetchTool {
         let max_chars = param_i64(&params, "maxChars")
             .unwrap_or(self.max_chars as i64)
             .max(100) as usize;
-        let (ok, err) = validate_url_target(&url);
+        let (ok, err) = validate_url_target(&url, &self.allowed_private_networks);
         if !ok {
             return ToolOutput::Text(
                 json!({"error": format!("URL validation failed: {err}"), "url": url}).to_string(),
@@ -1666,7 +1711,7 @@ impl Tool for WebFetchTool {
         {
             Ok(response) => {
                 let final_url = response.url().to_string();
-                let (ok, err) = validate_resolved_url(&final_url);
+                let (ok, err) = validate_resolved_url(&final_url, &self.allowed_private_networks);
                 if !ok {
                     return ToolOutput::Text(
                         json!({"error": format!("Redirect blocked: {err}"), "url": url})

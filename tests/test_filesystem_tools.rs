@@ -1,6 +1,6 @@
 use serde_json::json;
 use tempfile::tempdir;
-use xbot::tools::{EditFileTool, ListDirTool, ReadFileTool, Tool, ToolOutput, find_match};
+use xbot::tools::{EditFileTool, GrepFilesTool, ListDirTool, ReadFileTool, Tool, ToolOutput, find_match};
 
 #[tokio::test]
 async fn read_file_has_line_numbers() {
@@ -151,6 +151,108 @@ async fn list_dir_recursive_ignores_noise() {
             assert!(normalized.contains("README.md"));
             assert!(!normalized.contains(".git"));
             assert!(!normalized.contains("node_modules"));
+        }
+        other => panic!("unexpected output: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn blocked_dirs_prevents_access_to_sessions_and_history() {
+    let dir = tempdir().unwrap();
+    let xbot_dir = dir.path().join(".xbot");
+    let sessions_dir = xbot_dir.join("sessions");
+    let history_file = xbot_dir.join("tui_input_history.json");
+    
+    // Create the directories and files
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+    std::fs::write(&sessions_dir.join("session1.json"), "session data").unwrap();
+    std::fs::write(&history_file, "history data").unwrap();
+    
+    // Create a blocked_dirs list with sessions and history file
+    let blocked_dirs = vec![sessions_dir.clone(), history_file.clone()];
+    
+    // Test that read_file is blocked
+    let tool = ReadFileTool::new(
+        Some(dir.path().to_path_buf()),
+        Some(dir.path().to_path_buf()),
+        vec![],
+    ).with_blocked_dirs(blocked_dirs.clone());
+    
+    let result = tool
+        .execute(json!({"path": history_file.display().to_string()}))
+        .await;
+    match result {
+        ToolOutput::Text(text) => {
+            assert!(text.contains("Access to") && text.contains("is disabled"));
+        }
+        other => panic!("unexpected output: {other:?}"),
+    }
+    
+    // Test that reading a file inside sessions directory is also blocked
+    let session_file = sessions_dir.join("session1.json");
+    let result = tool
+        .execute(json!({"path": session_file.display().to_string()}))
+        .await;
+    match result {
+        ToolOutput::Text(text) => {
+            assert!(text.contains("Access to") && text.contains("is disabled"));
+        }
+        other => panic!("unexpected output: {other:?}"),
+    }
+    
+    // Test that list_dir is blocked on sessions directory
+    let tool = ListDirTool::new(
+        Some(dir.path().to_path_buf()),
+        Some(dir.path().to_path_buf()),
+    ).with_blocked_dirs(blocked_dirs);
+    
+    let result = tool
+        .execute(json!({"path": sessions_dir.display().to_string()}))
+        .await;
+    match result {
+        ToolOutput::Text(text) => {
+            assert!(text.contains("Access to") && text.contains("is disabled"));
+        }
+        other => panic!("unexpected output: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn grep_files_respects_blocked_dirs() {
+    let dir = tempdir().unwrap();
+    let xbot_dir = dir.path().join(".xbot");
+    let sessions_dir = xbot_dir.join("sessions");
+    let history_file = xbot_dir.join("tui_input_history.json");
+    
+    // Create the directories and files
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+    std::fs::write(&sessions_dir.join("session1.json"), "session data with keyword").unwrap();
+    std::fs::write(&history_file, "history data with keyword").unwrap();
+    
+    // Create a normal file that should be searchable
+    let normal_file = dir.path().join("normal.txt");
+    std::fs::write(&normal_file, "normal data with keyword").unwrap();
+    
+    // Create a blocked_dirs list
+    let blocked_dirs = vec![sessions_dir.clone(), history_file.clone()];
+    
+    // Test that grep_files respects blocked directories
+    let tool = GrepFilesTool::new(
+        Some(dir.path().to_path_buf()),
+        Some(dir.path().to_path_buf()),
+    ).with_blocked_dirs(blocked_dirs);
+    
+    let result = tool
+        .execute(json!({"pattern": "keyword", "path": dir.path().display().to_string()}))
+        .await;
+    
+    match result {
+        ToolOutput::Text(text) => {
+            // Should find the normal file
+            assert!(text.contains("normal.txt"));
+            // Should NOT find files in blocked directories
+            assert!(!text.contains("session1.json"));
+            assert!(!text.contains("tui_input_history.json"));
         }
         other => panic!("unexpected output: {other:?}"),
     }

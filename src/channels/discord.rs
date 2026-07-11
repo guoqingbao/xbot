@@ -543,7 +543,7 @@ impl DiscordChannel {
         field_index: usize,
     ) -> Result<()> {
         let bytes = if file_path.starts_with("http://") || file_path.starts_with("https://") {
-            let (ok, err) = validate_url_target(file_path);
+            let (ok, err) = validate_url_target(file_path, &[]);
             if !ok {
                 return Err(anyhow!("blocked url: {err}"));
             }
@@ -728,7 +728,7 @@ impl Channel for DiscordChannel {
             first_reply = None;
 
             if media.starts_with("http://") || media.starts_with("https://") {
-                let (ok, err) = validate_url_target(media);
+                let (ok, err) = validate_url_target(media, &[]);
                 if !ok {
                     let label = media.rsplit('/').next().unwrap_or("attachment");
                     self.post_message_json(

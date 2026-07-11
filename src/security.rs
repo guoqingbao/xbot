@@ -4,6 +4,23 @@ use ipnet::IpNet;
 use regex::Regex;
 use url::Url;
 
+/// Check if an IP is in private ranges (RFC 1918 + loopback + link-local)
+pub fn is_private_ip(addr: IpAddr) -> bool {
+    match addr {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.octets()[0] == 10
+                || (v4.octets()[0] == 172 && (v4.octets()[1] >= 16 && v4.octets()[1] <= 31))
+                || (v4.octets()[0] == 192 && v4.octets()[1] == 168)
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || (v6.octets()[0] >= 0xfc && v6.octets()[0] <= 0xfd)
+                || (v6.octets()[0] == 0xfe && (v6.octets()[1] & 0xc0) == 0x80)
+        }
+    }
+}
+
 fn blocked_networks() -> Vec<IpNet> {
     [
         "0.0.0.0/8",
@@ -22,10 +39,9 @@ fn blocked_networks() -> Vec<IpNet> {
     .collect()
 }
 
-fn is_private(addr: IpAddr) -> bool {
-    blocked_networks()
-        .into_iter()
-        .any(|net| net.contains(&addr))
+/// Check if IP is in blocked private ranges
+pub fn is_in_blocked_network(addr: IpAddr) -> bool {
+    blocked_networks().iter().any(|net| net.contains(&addr))
 }
 
 fn resolve_host(host: &str) -> Result<Vec<IpAddr>, String> {
@@ -35,7 +51,7 @@ fn resolve_host(host: &str) -> Result<Vec<IpAddr>, String> {
     Ok(addrs.map(|addr| addr.ip()).collect())
 }
 
-pub fn validate_url_target(url: &str) -> (bool, String) {
+pub fn validate_url_target(url: &str, allowed_networks: &[IpNet]) -> (bool, String) {
     let parsed = match Url::parse(url) {
         Ok(url) => url,
         Err(err) => return (false, err.to_string()),
@@ -54,17 +70,21 @@ pub fn validate_url_target(url: &str) -> (bool, String) {
         Err(err) => return (false, err),
     };
     for addr in resolved {
-        if is_private(addr) {
-            return (
-                false,
-                format!("Blocked: {host} resolves to private/internal address {addr}"),
-            );
+        // Check if IP is in blocked ranges
+        if is_in_blocked_network(addr) {
+            // Allow if it's in the whitelist
+            if !allowed_networks.iter().any(|net| net.contains(&addr)) {
+                return (
+                    false,
+                    format!("Blocked: {host} resolves to private address {addr}"),
+                );
+            }
         }
     }
     (true, String::new())
 }
 
-pub fn validate_resolved_url(url: &str) -> (bool, String) {
+pub fn validate_resolved_url(url: &str, allowed_networks: &[IpNet]) -> (bool, String) {
     let Ok(parsed) = Url::parse(url) else {
         return (true, String::new());
     };
@@ -72,7 +92,7 @@ pub fn validate_resolved_url(url: &str) -> (bool, String) {
         return (true, String::new());
     };
     if let Ok(addr) = host.parse::<IpAddr>() {
-        if is_private(addr) {
+        if is_in_blocked_network(addr) && !allowed_networks.iter().any(|net| net.contains(&addr)) {
             return (
                 false,
                 format!("Redirect target is a private address: {addr}"),
@@ -83,7 +103,7 @@ pub fn validate_resolved_url(url: &str) -> (bool, String) {
     match resolve_host(host) {
         Ok(addrs) => {
             for addr in addrs {
-                if is_private(addr) {
+                if is_in_blocked_network(addr) && !allowed_networks.iter().any(|net| net.contains(&addr)) {
                     return (
                         false,
                         format!("Redirect target {host} resolves to private address {addr}"),
@@ -96,10 +116,10 @@ pub fn validate_resolved_url(url: &str) -> (bool, String) {
     }
 }
 
-pub fn contains_internal_url(command: &str) -> bool {
+pub fn contains_internal_url(command: &str, allowed_networks: &[IpNet]) -> bool {
     let re = Regex::new(r#"https?://[^\s"'`;|<>]+"#).expect("valid URL regex");
     for m in re.find_iter(command) {
-        let (ok, _) = validate_url_target(m.as_str());
+        let (ok, _) = validate_url_target(m.as_str(), allowed_networks);
         if !ok {
             return true;
         }

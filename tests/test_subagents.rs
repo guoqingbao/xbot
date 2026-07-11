@@ -323,6 +323,7 @@ async fn runtime_routes_completed_subagent_back_to_origin_chat() {
             false,
             None,
             &Default::default(),
+            vec![],
         )
         .await
         .unwrap(),
@@ -375,6 +376,7 @@ async fn runtime_saves_completed_subagent_result_to_origin_session_history() {
             false,
             None,
             &Default::default(),
+            vec![],
         )
         .await
         .unwrap(),
@@ -461,6 +463,7 @@ async fn main_turn_can_wait_for_subagent_results_in_same_context() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -499,6 +502,7 @@ async fn subagent_iteration_budget_gets_final_synthesis_not_tool_snippets() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -534,6 +538,7 @@ async fn subagent_write_file_uses_approval_callback_with_source() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -608,6 +613,7 @@ async fn stop_command_cancels_active_subagent_tasks() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -662,6 +668,7 @@ async fn clear_command_resets_active_subagent_tasks() {
         false,
         None,
         &Default::default(),
+            vec![],
     )
     .await
     .unwrap();
@@ -728,6 +735,7 @@ async fn runtime_stop_command_acknowledges_and_confirms_subagent_cancellation() 
             false,
             None,
             &Default::default(),
+            vec![],
         )
         .await
         .unwrap(),

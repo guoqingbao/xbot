@@ -753,7 +753,7 @@ impl Channel for TelegramChannel {
         let api = self.api().await?;
         for media in &msg.media {
             if media.starts_with("http://") || media.starts_with("https://") {
-                let (ok, err) = validate_url_target(media);
+                let (ok, err) = validate_url_target(media, &[]);
                 if !ok {
                     let label = media.rsplit('/').next().unwrap_or("attachment");
                     self.send_text(

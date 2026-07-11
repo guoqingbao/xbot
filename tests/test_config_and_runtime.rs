@@ -147,6 +147,7 @@ async fn runtime_processes_bus_messages_and_message_tool_delivers_outbound() {
             false,
             None,
             &Default::default(),
+            vec![],
         )
         .await
         .unwrap(),
