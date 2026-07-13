@@ -1344,6 +1344,7 @@ mod tests {
 
     #[test]
     fn formats_run_welcome_header_with_runtime_summary() {
+        unsafe { std::env::set_var("NO_COLOR", "1"); }
         let mut config = Config::default();
         config.agents.defaults.max_tokens = 16_384;
         config.agents.defaults.context_window_tokens = 32768;

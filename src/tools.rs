@@ -1555,14 +1555,156 @@ impl WebSearchTool {
             Err(err) => ToolOutput::Text(format!("Error: DuckDuckGo search failed ({err})")),
         }
     }
+
+    async fn search_searxng(&self, query: &str, count: usize) -> ToolOutput {
+        let base_url = match self.config.base_url.as_ref() {
+            Some(url) if !url.is_empty() => url.clone(),
+            _ => return ToolOutput::Text(
+                "Error: SearXNG provider requires 'base_url' configuration".to_string()
+            ),
+        };
+
+        let client = match build_http_client(self.proxy.as_deref(), 20, true) {
+            Ok(client) => client,
+            Err(err) => return ToolOutput::Text(format!("Error: {err}")),
+        };
+
+        let search_url = format!("{}/search", base_url.trim_end_matches('/'));
+        
+        match client
+            .get(&search_url)
+            .query(&[("q", query), ("format", "json")])
+            .header("User-Agent", "xbot/0.1")
+            .send()
+            .await
+        {
+            Ok(response) => match response.text().await {
+                Ok(body) => {
+                    match serde_json::from_str::<serde_json::Value>(&body) {
+                        Ok(json) => {
+                            let results = json.get("results")
+                                .and_then(|r| r.as_array())
+                                .map_or(Vec::new(), |v| v.clone());
+                            
+                            let items: Vec<(String, String, String)> = results
+                                .iter()
+                                .take(count)
+                                .filter_map(|result| {
+                                    let title = result.get("title")
+                                        .and_then(|t| t.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let url = result.get("url")
+                                        .and_then(|u| u.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let snippet = result.get("content")
+                                        .and_then(|c| c.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    
+                                    if !title.is_empty() || !url.is_empty() {
+                                        Some((title, url, snippet))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            
+                            if items.is_empty() {
+                                ToolOutput::Text(format!("No results found for: {} (checked SearXNG instance at {})", query, base_url))
+                            } else {
+                                ToolOutput::Text(format_search_results(query, &items))
+                            }
+                        }
+                        Err(err) => ToolOutput::Text(format!("Error: Failed to parse SearXNG JSON response ({err})")),
+                    }
+                }
+                Err(err) => ToolOutput::Text(format!("Error: Failed to receive SearXNG response ({err})")),
+            },
+            Err(err) => ToolOutput::Text(format!("Error: SearXNG search failed ({err})")),
+        }
+    }
+
+    #[cfg(feature = "searxng-embedded")]
+    async fn search_searxng_embedded(&self, query: &str, count: usize) -> ToolOutput {
+        use searxng_rs::{
+            config::Settings,
+            engines::EngineLoader,
+            network::HttpClient,
+            query::ParsedQuery,
+            search::{EngineRef, SearchQuery},
+        };
+        use std::sync::Arc;
+
+        // 1. Load settings (uses defaults if no file found, no panic)
+        let settings = Settings::default();
+
+        // 2. Initialize HTTP client and engine registry
+        let client = match HttpClient::with_settings(&settings.outgoing) {
+            Ok(c) => c,
+            Err(e) => return ToolOutput::Text(format!("Error initializing SearXNG HTTP client: {}", e)),
+        };
+
+        let registry = match EngineLoader::load(&settings) {
+            Ok(r) => r,
+            Err(e) => return ToolOutput::Text(format!("Error loading SearXNG engines: {}", e)),
+        };
+
+        // 3. Build and execute search
+        let parsed = ParsedQuery::parse(query);
+        let engine_refs: Vec<EngineRef> = registry
+            .names()
+            .iter()
+            .map(|name| EngineRef::new(name.as_str(), "general"))
+            .collect();
+
+        let search_query = SearchQuery::from_parsed(parsed, engine_refs);
+        let search_executor = searxng_rs::search::Search::new(client, Arc::new(registry));
+        let results = search_executor.execute(&search_query).await;
+
+        // 4. Format results
+        let ordered = results.get_ordered_results();
+        let items: Vec<(String, String, String)> = ordered
+            .iter()
+            .take(count)
+            .filter_map(|r| {
+                if r.title.is_empty() && r.url.is_empty() {
+                    None
+                } else {
+                    Some((
+                        r.title.clone(),
+                        r.url.clone(),
+                        r.content.clone().unwrap_or_default(),
+                    ))
+                }
+            })
+            .collect();
+
+        if items.is_empty() {
+            ToolOutput::Text(format!("No results found for: {} (embedded searxng)", query))
+        } else {
+            ToolOutput::Text(format_search_results(query, &items))
+        }
+    }
 }
 
 #[async_trait]
 impl Tool for WebSearchTool {
     fn spec(&self) -> ToolSpec {
+        // Dynamic description based on configured provider
+        let provider_name = self.config.provider.to_ascii_lowercase();
+        let description = match provider_name.as_str() {
+            "duckduckgo" => "Search the web using DuckDuckGo.".to_string(),
+            #[cfg(feature = "searxng-embedded")]
+            "searxng-embedded" => "Search the web using the native embedded SearXNG-RS engine.".to_string(),
+            "searxng" => "Search the web using a remote SearXNG instance.".to_string(),
+            _ => format!("Search the web using the configured provider: {}.", provider_name),
+        };
+
         ToolSpec {
             name: "web_search".to_string(),
-            description: "Search the web and return titles, URLs, and snippets.".to_string(),
+            description,
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -1579,10 +1721,23 @@ impl Tool for WebSearchTool {
         let count = param_i64(&params, "count")
             .unwrap_or(self.config.max_results as i64)
             .clamp(1, 10) as usize;
-        match self.config.provider.to_ascii_lowercase().as_str() {
+
+        let provider = self.config.provider.to_ascii_lowercase();
+
+        match provider.as_str() {
             "duckduckgo" => self.search_duckduckgo(&query, count).await,
+            "searxng" => self.search_searxng(&query, count).await,
+            #[cfg(feature = "searxng-embedded")]
+            "searxng-embedded" => self.search_searxng_embedded(&query, count).await,
+            #[cfg(not(feature = "searxng-embedded"))]
+            "searxng-embedded" => ToolOutput::Text(
+                "Error: searxng-embedded provider is configured but the feature is not enabled at compile time. \
+                 Rebuild with --features searxng-embedded.".to_string()
+            ),
             other => ToolOutput::Text(format!(
-                "Error: search provider '{other}' is not implemented in the current runtime"
+                "Error: search provider '{}' is not implemented in the current runtime. \
+                 Available: duckduckgo, searxng, searxng-embedded (if feature enabled).", 
+                other
             )),
         }
     }

@@ -539,13 +539,152 @@ Usage notes:
       "token": "<bot-token>",
       "webhookPath": "/telegram/webhook"
     }
+  },
+  "tools": {
+    "web": {
+      "search": {
+        "provider": "duckduckgo",
+        "maxResults": 5
+      },
+      "proxy": null
+    }
   }
 }
 ```
 
 `maxToolIterations: 0` means the agent loop is unbounded. Use a positive number only when you want a hard ceiling on tool calls.
 
-## 7. MCP Tool Servers
+## 7. Web Search Configuration
+
+`xbot` includes a `web_search` tool that supports multiple search providers. Configure the provider and settings under `tools.web.search`.
+
+### Supported Providers
+
+- **duckduckgo** - Default provider, no configuration required
+- **searxng** - Self-hosted or public SearXNG instances (requires `base_url`)
+
+### DuckDuckGo (Default)
+
+No additional configuration needed beyond selecting the provider:
+
+```json
+{
+  "tools": {
+    "web": {
+      "search": {
+        "provider": "duckduckgo",
+        "maxResults": 5
+      }
+    }
+  }
+}
+```
+
+### SearXNG
+
+SearXNG is a privacy-respecting meta-search engine that aggregates results from multiple search engines. You can use a public instance or self-host your own.
+
+**Configuration requirements:**
+- `provider`: Set to `"searxng"`
+- `base_url`: **Required** - The URL of your SearXNG instance (e.g., `"https://searx.example.com"`)
+- `maxResults`: Optional, defaults to 5, maximum 10
+
+**Example configuration:**
+
+```json
+{
+  "tools": {
+    "web": {
+      "search": {
+        "provider": "searxng",
+        "base_url": "https://searx.example.com",
+        "maxResults": 5
+      }
+    }
+  }
+}
+```
+
+**Finding a SearXNG instance:**
+
+- Public instances: See the official instance list at <https://searx.space>
+- Self-hosted: Deploy your own instance using the official SearXNG Docker image or source code
+
+**How SearXNG works:**
+
+- The `web_search` tool sends queries to your configured SearXNG instance with `format=json`
+- SearXNG aggregates results from multiple engines (DuckDuckGo, Google, Bing, Startpage, etc.)
+- Results are parsed from the JSON response and returned in the same format as other providers
+- Each result includes `title`, `url`, and `content` (snippet) fields
+
+**Example usage in agent prompts:**
+
+```
+Search for "latest Rust async frameworks" using web_search
+```
+
+The agent will automatically use your configured provider (DuckDuckGo or SearXNG) to perform the search.
+
+**Troubleshooting:**
+
+- If `base_url` is missing or empty when using SearXNG, the tool returns an error: `"Error: SearXNG provider requires 'base_url' configuration"`
+- If the SearXNG instance is unreachable, you'll see: `"Error: SearXNG search failed (<network error>)"`
+- If the JSON response cannot be parsed, you'll see: `"Error: Failed to parse SearXNG JSON response (<parse error>)"`
+
+### SearXNG Combined Example
+
+Here's a complete configuration using SearXNG as the search provider:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "workspace": "~/.xbot/workspace",
+      "model": "ollama/qwen2.5-coder:7b",
+      "provider": "ollama",
+      "maxToolIterations": 0,
+      "contextWindowTokens": 65536
+    },
+    "subagents": {
+      "model": "",
+      "provider": "auto"
+    }
+  },
+  "providers": {
+    "ollama": {
+      "apiBase": "http://localhost:11434/v1"
+    }
+  },
+  "gateway": {
+    "host": "0.0.0.0",
+    "port": 18790,
+    "heartbeat": {
+      "enabled": true,
+      "intervalS": 1800
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "allowFrom": ["*"],
+      "token": "<bot-token>",
+      "webhookPath": "/telegram/webhook"
+    }
+  },
+  "tools": {
+    "web": {
+      "search": {
+        "provider": "searxng",
+        "base_url": "https://searx.example.com",
+        "maxResults": 5
+      },
+      "proxy": null
+    }
+  }
+}
+```
+
+## 8. MCP Tool Servers
 
 `xbot` supports MCP over `stdio`. Enabled MCP tools are registered as native tools using names like `mcp_<server>_<tool>`.
 
@@ -574,7 +713,7 @@ Current scope:
 - startup validation fails fast if an enabled MCP server has no command
 - unsupported transports are rejected during startup
 
-## 8. Built-in Skills
+## 9. Built-in Skills
 
 Built-in skills ship with the repository under `xbot/skills/`.
 
@@ -620,7 +759,7 @@ cargo run -- skills init my-custom-skill
 
 This creates `<workspace>/.xbot/skills/my-custom-skill/SKILL.md` with a starter template.
 
-## 9. Useful Commands
+## 10. Useful Commands
 
 Print the resolved config:
 
@@ -668,7 +807,7 @@ cargo run -- skills list         # List skills with availability status
 cargo run -- skills init NAME    # Scaffold a new skill directory
 ```
 
-## 10. Operational Notes
+## 11. Operational Notes
 
 - `run` validates enabled channel config before startup.
 - `run` also validates enabled MCP server configuration before startup.
@@ -678,7 +817,7 @@ cargo run -- skills init NAME    # Scaffold a new skill directory
 - The admin UI polls the runtime every few seconds and exposes channel controls plus heartbeat triggering.
 - The metrics endpoint exposes Prometheus-compatible counters and gauges for message counts, provider requests, token totals, latency, and throughput.
 
-## 11. Additional Channel Configuration
+## 12. Additional Channel Configuration
 
 Each channel section below includes how to obtain the required credentials and the config format. You can also run `xbot channels setup <name>` to see setup instructions in the terminal.
 
@@ -949,6 +1088,42 @@ Cursor requires an explicit `apiBase`:
   }
 }
 ```
+
+### Embedded SearXNG (Native Rust)
+
+The `searxng-embedded` provider enables native, in-process web search using the `searxng-rs` Rust library. This runs without a separate HTTP server and supports advanced query syntax (e.g., `!code`, `!github`, `:lang`).
+
+**Enable in config:**
+
+```json
+{
+  "tools": {
+    "web": {
+      "search": {
+        "provider": "searxng-embedded",
+        "maxResults": 10
+      }
+    }
+  }
+}
+```
+
+**Build with the feature:**
+
+```bash
+cargo build --features searxng-embedded
+```
+
+**Optional Configuration:**
+
+- `SEARXNG_SETTINGS_PATH`: Path to a custom `settings.yml` (defaults to standard paths if omitted).
+- `ALL_PROXY`: Set to `socks5h://127.0.0.1:9050` to enable Tor/Ahmia engine support.
+
+**Usage:**
+
+The agent can now use advanced query syntax like `!code rust` or `!github searxng-rs` directly through the embedded engine. Results include titles, URLs, and snippets formatted consistently with other providers.
+
+**Note:** This feature requires the `searxng-embedded` Cargo feature to be enabled at compile time. If configured but not compiled, the tool will return a helpful error message directing you to rebuild with the feature flag.
 
 ## 13. Concurrency Configuration
 
