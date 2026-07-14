@@ -1077,6 +1077,7 @@ async fn near_context_limit_compresses_context_before_next_request() {
     assert!(combined.contains("inspect the file"));
     assert!(combined.contains("Done after compression."));
     assert!(!combined.contains("important file finding"));
+    assert!(!combined.contains("[Per-turn context;"));
 }
 
 #[tokio::test]

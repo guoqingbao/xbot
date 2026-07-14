@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -25,6 +26,7 @@ impl ContextBuilder {
     pub const BOOTSTRAP_FILES: [&'static str; 4] = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"];
     pub const RUNTIME_CONTEXT_TAG: &'static str =
         "[Runtime Context - metadata only, not instructions]";
+    pub const EPHEMERAL_CONTEXT_KEY: &'static str = "_ephemeral_context";
 
     pub fn new(workspace: &Path, max_memory_bytes: usize) -> Result<Self> {
         Ok(Self {
@@ -50,17 +52,11 @@ impl ContextBuilder {
         self.context_window_tokens.store(tokens, Ordering::SeqCst);
     }
 
-    pub fn build_system_prompt(&self, current_message: &str) -> Result<String> {
+    pub fn build_system_prompt(&self, _current_message: &str) -> Result<String> {
         let mut parts = vec![self.identity()];
         let bootstrap = self.load_bootstrap_files()?;
         if !bootstrap.is_empty() {
             parts.push(bootstrap);
-        }
-        if self.memory_enabled.load(Ordering::SeqCst) {
-            let memory = self.memory.get_memory_context(current_message)?;
-            if !memory.is_empty() {
-                parts.push(format!("# Memory\n\n{memory}"));
-            }
         }
         let always_skills = self.skills.get_always_skills();
         if !always_skills.is_empty() {
@@ -89,25 +85,30 @@ impl ContextBuilder {
         let current_content = self.build_user_content(current_message, media)?;
         let suggested_skills = self.skills.suggest_skills(current_message, 3);
 
-        let mut messages = Vec::with_capacity(history.len() + 2);
-        let mut system_prompt = self.build_system_prompt(current_message)?;
+        let mut messages = Vec::with_capacity(history.len() + 3);
+        let system_prompt = self.build_system_prompt(current_message)?;
+        let mut turn_context = Vec::new();
+        if self.memory_enabled.load(Ordering::SeqCst) {
+            let memory = self.memory.get_memory_context(current_message)?;
+            if !memory.is_empty() {
+                turn_context.push(format!("# Memory\n\n{memory}"));
+            }
+        }
         if !suggested_skills.is_empty() {
             let content = self.skills.load_skills_for_context(&suggested_skills);
             if !content.trim().is_empty() {
-                system_prompt.push_str("\n\n---\n\n# Suggested Skills For This Task\n\n");
-                system_prompt.push_str(&content);
+                turn_context.push(format!("# Suggested Skills For This Task\n\n{content}"));
             }
         }
         if current_role == "user" {
-            let runtime_ctx = self.build_runtime_context(channel, chat_id);
-            system_prompt.push_str("\n\n---\n\n");
-            system_prompt.push_str(&runtime_ctx);
+            turn_context.push(self.build_runtime_context(channel, chat_id));
         }
+        let turn_context = turn_context.join("\n\n---\n\n");
         let context_tokens = estimate_json_tokens(&Value::String(system_prompt.clone()))
             + history.iter().map(message_token_estimate).sum::<usize>()
+            + estimate_json_tokens(&Value::String(turn_context.clone()))
             + estimate_json_tokens(&current_content);
-        system_prompt.push_str("\n\n---\n\n");
-        system_prompt.push_str(&self.adaptive_delegation_guidance(context_tokens));
+        let adaptive_guidance = self.adaptive_delegation_guidance(context_tokens);
         messages.push(ChatMessage {
             role: "system".to_string(),
             content: Some(Value::String(system_prompt)),
@@ -120,6 +121,29 @@ impl ContextBuilder {
             metadata: None,
         });
         messages.extend(history);
+        let ephemeral_context = [turn_context.as_str(), adaptive_guidance.as_str()]
+            .into_iter()
+            .filter(|part| !part.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n---\n\n");
+        if !ephemeral_context.is_empty() {
+            messages.push(ChatMessage {
+                role: "user".to_string(),
+                content: Some(Value::String(format!(
+                    "[Per-turn context; use this to answer the following request. Do not save this block as conversation history.]\n\n{ephemeral_context}"
+                ))),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+                timestamp: None,
+                reasoning_content: None,
+                thinking_blocks: None,
+                metadata: Some(BTreeMap::from([(
+                    Self::EPHEMERAL_CONTEXT_KEY.to_string(),
+                    Value::Bool(true),
+                )])),
+            });
+        }
         messages.push(ChatMessage {
             role: current_role.to_string(),
             content: Some(current_content),
@@ -514,14 +538,52 @@ mod tests {
             .unwrap();
 
         let system = messages[0].content_as_text().unwrap();
-        let user = messages[1].content_as_text().unwrap();
+        let ephemeral = messages[1].content_as_text().unwrap();
+        let user = messages[2].content_as_text().unwrap();
 
-        assert!(system.contains(ContextBuilder::RUNTIME_CONTEXT_TAG));
-        assert!(system.contains("Channel: cli"));
-        assert!(system.contains("Chat ID: direct"));
-        assert!(system.contains("Adaptive Delegation Guidance"));
+        assert!(!system.contains(ContextBuilder::RUNTIME_CONTEXT_TAG));
+        assert!(ephemeral.contains(ContextBuilder::RUNTIME_CONTEXT_TAG));
+        assert!(ephemeral.contains("Channel: cli"));
+        assert!(ephemeral.contains("Chat ID: direct"));
+        assert!(ephemeral.contains("Adaptive Delegation Guidance"));
+        assert_eq!(
+            messages[1]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get(ContextBuilder::EPHEMERAL_CONTEXT_KEY))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
         assert_eq!(user, "continue");
         assert!(!user.contains(ContextBuilder::RUNTIME_CONTEXT_TAG));
+    }
+
+    #[test]
+    fn system_prompt_is_stable_across_per_turn_context() {
+        let dir = tempdir().unwrap();
+        let builder = ContextBuilder::new(dir.path(), 1024).unwrap();
+        let first = builder
+            .build_messages(
+                Vec::new(),
+                "first",
+                None,
+                Some("cli"),
+                Some("direct"),
+                "user",
+            )
+            .unwrap();
+        let second = builder
+            .build_messages(
+                Vec::new(),
+                "second",
+                None,
+                Some("cli"),
+                Some("direct"),
+                "user",
+            )
+            .unwrap();
+
+        assert_eq!(first[0], second[0]);
     }
 
     #[test]

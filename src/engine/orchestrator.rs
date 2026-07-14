@@ -2247,7 +2247,11 @@ impl AgentLoop {
     }
 
     fn save_turn(&self, session: &mut Session, messages: &[ChatMessage]) -> Result<()> {
-        let skip = 1 + session.get_history(0).len();
+        let ephemeral_count = messages
+            .iter()
+            .filter(|message| is_ephemeral_context_message(message))
+            .count();
+        let skip = 1 + session.get_history(0).len() + ephemeral_count;
         for message in messages.iter().skip(skip) {
             if let Some(stored) = self.prepare_message_for_session_storage(message) {
                 session.messages.push(stored);
@@ -2269,6 +2273,9 @@ impl AgentLoop {
     }
 
     fn prepare_message_for_session_storage(&self, message: &ChatMessage) -> Option<ChatMessage> {
+        if is_ephemeral_context_message(message) {
+            return None;
+        }
         let has_reasoning = message
             .reasoning_content
             .as_ref()
@@ -2867,7 +2874,7 @@ fn build_compression_transcript(messages: &[ChatMessage], max_chars: usize) -> S
     let mut entries = Vec::new();
     let mut used = 0_usize;
     for (idx, message) in messages.iter().enumerate().rev() {
-        if idx == 0 || Some(idx) == latest_user_idx {
+        if idx == 0 || Some(idx) == latest_user_idx || is_ephemeral_context_message(message) {
             continue;
         }
         let Some(text) = message.content_as_text() else {
@@ -2901,11 +2908,18 @@ fn rebuild_messages_with_context_summary(
         return messages;
     }
     let latest_user_idx = latest_user_message_index(&messages);
+    let ephemeral_context = messages
+        .iter()
+        .find(|message| is_ephemeral_context_message(message))
+        .cloned();
     let mut compacted = vec![messages[0].clone()];
     compacted.push(ChatMessage::text(
         "assistant",
         format!("[Compressed Context]\n{}", summary.trim()),
     ));
+    if let Some(ephemeral_context) = ephemeral_context {
+        compacted.push(ephemeral_context);
+    }
     if let Some(idx) = latest_user_idx {
         compacted.push(messages[idx].clone());
         if let Some(assistant) = latest_plain_assistant_after(&messages, idx) {
@@ -2913,6 +2927,15 @@ fn rebuild_messages_with_context_summary(
         }
     }
     compacted
+}
+
+fn is_ephemeral_context_message(message: &ChatMessage) -> bool {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(ContextBuilder::EPHEMERAL_CONTEXT_KEY))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn build_local_context_summary(messages: &[ChatMessage]) -> String {
@@ -2928,7 +2951,7 @@ fn latest_user_message_index(messages: &[ChatMessage]) -> Option<usize> {
         .iter()
         .enumerate()
         .rev()
-        .find(|(_, message)| message.role == "user")
+        .find(|(_, message)| message.role == "user" && !is_ephemeral_context_message(message))
         .map(|(idx, _)| idx)
 }
 
