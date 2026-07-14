@@ -38,6 +38,7 @@ const SUBAGENT_RUNNING: Color = Color::Rgb(100, 180, 230);
 const SUBAGENT_DONE: Color = Color::Rgb(80, 200, 120);
 const SUBAGENT_FAIL: Color = Color::Rgb(230, 80, 80);
 const SESSION_HINT_FG: Color = Color::Rgb(120, 205, 255);
+const THINKING_MARKDOWN_STYLE: Style = Style::new().fg(TEXT_DIM).add_modifier(Modifier::ITALIC);
 
 const SIDEBAR_MIN_WIDTH: u16 = 100;
 const SIDEBAR_WIDTH: u16 = 28;
@@ -407,18 +408,6 @@ fn transcript_title(app: &App) -> String {
     }
 }
 
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
-    if text.is_empty() {
-        return vec![String::new()];
-    }
-    if UnicodeWidthStr::width(text) <= width {
-        return vec![text.to_string()];
-    }
-    let mut result = Vec::new();
-    push_hard_wrapped(text, width, &mut result);
-    result
-}
-
 fn char_display_width(ch: char) -> usize {
     if ch == '\t' {
         4
@@ -629,18 +618,10 @@ fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                         Style::default().fg(TEXT_DIM).add_modifier(Modifier::ITALIC),
                     ),
                 ]));
-                let wrap_width = w.saturating_sub(6).max(20);
-                for tline in content.lines() {
-                    for wrapped in wrap_text(tline, wrap_width) {
-                        lines.push(Line::from(vec![
-                            Span::styled("    ", Style::default()),
-                            Span::styled(
-                                wrapped,
-                                Style::default().fg(TEXT_DIM).add_modifier(Modifier::ITALIC),
-                            ),
-                        ]));
-                    }
-                }
+                lines.extend(thinking_markdown_lines(
+                    content,
+                    w.saturating_sub(4).max(20),
+                ));
             }
             HistoryEntry::ToolCall {
                 name,
@@ -772,20 +753,37 @@ fn render_reasoning_block(lines: &mut Vec<Line<'static>>, reasoning: Option<&str
         ),
     ]));
     let max_lines = 30;
-    let total = reasoning.lines().count();
-    for (i, rline) in reasoning.lines().enumerate() {
-        if i >= max_lines {
-            lines.push(Line::from(Span::styled(
-                format!("    … ({} more lines)", total - max_lines),
-                Style::default().fg(TEXT_DIM),
-            )));
-            break;
-        }
+    let thinking_lines = thinking_markdown_lines(reasoning, 72);
+    for line in thinking_lines.iter().take(max_lines) {
+        lines.push(line.clone());
+    }
+    if thinking_lines.len() > max_lines {
         lines.push(Line::from(Span::styled(
-            format!("    {rline}"),
-            Style::default().fg(TEXT_DIM).add_modifier(Modifier::ITALIC),
+            format!(
+                "    … ({} more lines)",
+                thinking_lines.len().saturating_sub(max_lines)
+            ),
+            Style::default().fg(TEXT_DIM),
         )));
     }
+}
+
+fn thinking_markdown_lines(content: &str, width: usize) -> Vec<Line<'static>> {
+    markdown::markdown_to_lines(content, width)
+        .into_iter()
+        .map(|line| {
+            if line.spans.is_empty() {
+                return Line::from("");
+            }
+            let mut spans = vec![Span::styled("    ", THINKING_MARKDOWN_STYLE)];
+            spans.extend(
+                line.spans.into_iter().map(|span| {
+                    Span::styled(span.content, span.style.patch(THINKING_MARKDOWN_STYLE))
+                }),
+            );
+            Line::from(spans)
+        })
+        .collect()
 }
 
 fn render_subagent_card(
@@ -904,18 +902,10 @@ fn build_active_lines(
                         Style::default().fg(TEXT_DIM).add_modifier(Modifier::ITALIC),
                     ),
                 ]));
-                let wrap_width = w.saturating_sub(6).max(20);
-                for tline in content.lines() {
-                    for wrapped in wrap_text(tline, wrap_width) {
-                        lines.push(Line::from(vec![
-                            Span::styled("    ", Style::default()),
-                            Span::styled(
-                                wrapped,
-                                Style::default().fg(TEXT_DIM).add_modifier(Modifier::ITALIC),
-                            ),
-                        ]));
-                    }
-                }
+                lines.extend(thinking_markdown_lines(
+                    content,
+                    w.saturating_sub(4).max(20),
+                ));
             }
             StreamSegment::Tool(tool) => {
                 push_blank(&mut lines);
@@ -1227,6 +1217,29 @@ pub mod tests {
             plain,
             vec!["  ▼ Thinking Process", "    checking", "  answer", "  ▍"]
         );
+    }
+
+    #[test]
+    fn thinking_keeps_markdown_structure_with_thinking_style() {
+        let lines = thinking_markdown_lines("## Heading\n\n**bold** `code`\n- item", 60);
+        let plain = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(plain.contains("Heading"));
+        assert!(plain.contains("bold"));
+        assert!(plain.contains("code"));
+        assert!(plain.contains("• item"));
+
+        let bold = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content == "bold")
+            .expect("bold markdown span");
+        assert!(bold.style.add_modifier.contains(Modifier::BOLD));
+        assert!(bold.style.add_modifier.contains(Modifier::ITALIC));
     }
 }
 
@@ -1989,13 +2002,10 @@ fn render_subagent_overlay(f: &mut Frame, area: Rect, app: &mut super::app::App)
             Style::default().fg(TEXT_DIM).add_modifier(Modifier::BOLD),
         )));
         for chunk in &agent.reasoning_chunks {
-            overlay_push_wrapped(
-                &mut content_lines,
+            content_lines.extend(thinking_markdown_lines(
                 chunk,
-                inner_w,
-                Style::default().fg(TEXT_DIM).add_modifier(Modifier::ITALIC),
-                "    ",
-            );
+                inner_w.saturating_sub(4).max(20),
+            ));
         }
     }
 
