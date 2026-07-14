@@ -171,6 +171,66 @@ pub fn estimate_json_tokens(value: &Value) -> usize {
     estimate_text_tokens(&value.to_string())
 }
 
+pub const TOOL_RESULT_MAX_CHARS: usize = 32 * 1024;
+
+pub fn tool_result_limit_chars(context_window_tokens: usize) -> usize {
+    if context_window_tokens == 0 {
+        return TOOL_RESULT_MAX_CHARS;
+    }
+    TOOL_RESULT_MAX_CHARS.min(
+        context_window_tokens
+            .saturating_mul(4)
+            .saturating_div(5)
+            .max(1),
+    )
+}
+
+pub fn truncate_tool_result(value: Value, context_window_tokens: usize) -> Value {
+    let serialized = value.to_string();
+    let original_chars = serialized.chars().count();
+    let limit = tool_result_limit_chars(context_window_tokens);
+    if original_chars <= limit {
+        return value;
+    }
+
+    let preview = match value {
+        Value::String(text) => text,
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|block| {
+                block.get("text").and_then(Value::as_str).or_else(|| {
+                    block
+                        .get("_meta")
+                        .and_then(|meta| meta.get("path"))
+                        .and_then(Value::as_str)
+                })
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => serialized,
+    };
+    let marker = format!(
+        "\n\n[Tool result was very long: {original_chars} characters; truncated to {limit}.]\n\
+[Use targeted grep/search with a narrow pattern and path/offset/limit to extract only the relevant content; do not request the full output blindly.]\n\n"
+    );
+    let available = limit.saturating_sub(marker.chars().count());
+    if available == 0 {
+        return Value::String(marker.chars().take(limit).collect());
+    }
+    let head_len = available / 2;
+    let tail_len = available - head_len;
+    let head = preview.chars().take(head_len).collect::<String>();
+    let tail = preview
+        .chars()
+        .rev()
+        .take(tail_len)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    Value::String(format!("{head}{marker}{tail}"))
+}
+
 pub fn tool_emoji(tool_name: &str) -> &'static str {
     match tool_name {
         "read_file" => "📖",

@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -8,7 +8,8 @@ use serde_json::{Value, json};
 use crate::engine::{MemoryStore, SkillsLoader};
 use crate::storage::ChatMessage;
 use crate::util::{
-    build_image_content_blocks, current_time_str, detect_image_mime, workspace_state_dir,
+    build_image_content_blocks, current_time_str, detect_image_mime, estimate_json_tokens,
+    truncate_tool_result, workspace_state_dir,
 };
 
 pub struct ContextBuilder {
@@ -17,6 +18,7 @@ pub struct ContextBuilder {
     skills: SkillsLoader,
     memory_enabled: AtomicBool,
     task_summary_guidance_enabled: AtomicBool,
+    context_window_tokens: AtomicUsize,
 }
 
 impl ContextBuilder {
@@ -31,6 +33,7 @@ impl ContextBuilder {
             skills: SkillsLoader::new(workspace, None),
             memory_enabled: AtomicBool::new(true),
             task_summary_guidance_enabled: AtomicBool::new(true),
+            context_window_tokens: AtomicUsize::new(0),
         })
     }
 
@@ -41,6 +44,10 @@ impl ContextBuilder {
     pub fn set_task_summary_guidance_enabled(&self, enabled: bool) {
         self.task_summary_guidance_enabled
             .store(enabled, Ordering::SeqCst);
+    }
+
+    pub fn set_context_window_tokens(&self, tokens: usize) {
+        self.context_window_tokens.store(tokens, Ordering::SeqCst);
     }
 
     pub fn build_system_prompt(&self, current_message: &str) -> Result<String> {
@@ -96,6 +103,11 @@ impl ContextBuilder {
             system_prompt.push_str("\n\n---\n\n");
             system_prompt.push_str(&runtime_ctx);
         }
+        let context_tokens = estimate_json_tokens(&Value::String(system_prompt.clone()))
+            + history.iter().map(message_token_estimate).sum::<usize>()
+            + estimate_json_tokens(&current_content);
+        system_prompt.push_str("\n\n---\n\n");
+        system_prompt.push_str(&self.adaptive_delegation_guidance(context_tokens));
         messages.push(ChatMessage {
             role: "system".to_string(),
             content: Some(Value::String(system_prompt)),
@@ -129,6 +141,8 @@ impl ContextBuilder {
         tool_name: &str,
         result: Value,
     ) {
+        let result =
+            truncate_tool_result(result, self.context_window_tokens.load(Ordering::SeqCst));
         messages.push(ChatMessage {
             role: "tool".to_string(),
             content: Some(result),
@@ -200,15 +214,25 @@ You are xbot, an autonomous AI agent runtime for software engineering, research,
 
 ## Decomposition Philosophy
 
-You are a "managed genius" — you excel at individual tasks, but your superpower is decomposing \
-complex work. Always decompose before you act.
+Use the main agent directly by default. Use as few sub-agents as possible: most small, \
+focused, or sequential tasks benefit from zero sub-agents. Decide dynamically whether to use \
+0, 1, 2, or 3 sub-agents; 3 is only a concurrency maximum, never a target.
+
+At the start of a task, first make a quick preview and keep the work in the main agent unless \
+the task is genuinely difficult, broad, or has independent work that benefits from delegation. \
+When the estimated context reaches roughly 50% of the model context window, consider spawning \
+one or more sub-agents for independent exploration or heavy work. This is a recommendation, \
+not a requirement: do not spawn them if delegation would add overhead or the task is easy.
+
+For difficult work, decompose only as far as useful. Keep the main agent responsible for \
+coordination, synthesis, and cross-cutting edits.
 
 **PREVIEW** — Before diving into a large task, survey the terrain. Use `list_dir` and \
 `grep_files` to scan structure, file headers, module trees. Identify boundaries and estimate \
 complexity. A 30-second preview prevents hours of wrong-path exploration.
 
-**CHUNK** — When a task exceeds single-pass capacity: split into independent sub-tasks, \
-process each independently (parallel where possible via `spawn`), then synthesize.
+**CHUNK** — When a task exceeds single-pass capacity and delegation will help: split into \
+independent sub-tasks, process each independently (parallel where useful via `spawn`), then synthesize.
 
 **RECURSIVE** — When sub-tasks reveal sub-problems: decompose recursively until each leaf \
 is tractable. Propagate findings upward when sub-problems resolve.
@@ -287,7 +311,8 @@ When in doubt: synthesize first, search more only if the synthesis reveals a spe
 
 ## Sub-Agent Strategy (at most 3 subagents in parallel)
 
-Sub-agents run independently with their own context. Use them for:
+Sub-agents run independently with their own context. Use the smallest number that materially \
+helps. Good reasons include:
 - **Parallel investigation**: understanding 3+ independent files or modules simultaneously
 - **Parallel implementation**: after planning, delegate independent leaf tasks
 - **Heavy computation**: tasks that would consume too much main context
@@ -332,6 +357,21 @@ Be concise and direct. State what you're doing, not how you feel about it.
             platform = std::env::consts::OS,
             memory_section = memory_section,
         )
+    }
+
+    fn adaptive_delegation_guidance(&self, context_tokens: usize) -> String {
+        let window = self.context_window_tokens.load(Ordering::SeqCst);
+        let guidance = if window > 0
+            && context_tokens.saturating_mul(100) >= window.saturating_mul(50)
+        {
+            format!(
+                "The estimated context is {context_tokens}/{window} tokens (about {}%). Consider delegating only independent, context-heavy work to the smallest useful number of sub-agents.",
+                context_tokens.saturating_mul(100) / window
+            )
+        } else {
+            "The task is at its initial or moderate context size. Prefer the main agent and use zero sub-agents unless the task is clearly difficult or independently parallelizable.".to_string()
+        };
+        format!("# Adaptive Delegation Guidance\n\n{guidance}")
     }
 
     fn load_bootstrap_files(&self) -> Result<String> {
@@ -401,9 +441,23 @@ Be concise and direct. State what you're doing, not how you feel about it.
     }
 }
 
+fn message_token_estimate(message: &ChatMessage) -> usize {
+    4 + message
+        .content
+        .as_ref()
+        .map(estimate_json_tokens)
+        .unwrap_or_default()
+        + message
+            .tool_calls
+            .as_ref()
+            .map(|calls| calls.iter().map(estimate_json_tokens).sum::<usize>())
+            .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::ContextBuilder;
+    use serde_json::Value;
     use std::fs;
     use tempfile::tempdir;
 
@@ -427,6 +481,24 @@ mod tests {
     }
 
     #[test]
+    fn tool_results_are_truncated_with_targeted_search_guidance() {
+        let dir = tempdir().unwrap();
+        let builder = ContextBuilder::new(dir.path(), 1024).unwrap();
+        builder.set_context_window_tokens(100_000);
+        let mut messages = Vec::new();
+        builder.add_tool_result(
+            &mut messages,
+            "call",
+            "grep_files",
+            Value::String("x".repeat(40_000)),
+        );
+        let text = messages[0].content_as_text().unwrap();
+        assert!(text.chars().count() <= 32 * 1024);
+        assert!(text.contains("Tool result was very long"));
+        assert!(text.contains("targeted grep/search"));
+    }
+
+    #[test]
     fn build_messages_places_runtime_context_at_end_of_system_prompt() {
         let dir = tempdir().unwrap();
         let builder = ContextBuilder::new(dir.path(), 1024).unwrap();
@@ -446,7 +518,8 @@ mod tests {
 
         assert!(system.contains(ContextBuilder::RUNTIME_CONTEXT_TAG));
         assert!(system.contains("Channel: cli"));
-        assert!(system.ends_with("Chat ID: direct"));
+        assert!(system.contains("Chat ID: direct"));
+        assert!(system.contains("Adaptive Delegation Guidance"));
         assert_eq!(user, "continue");
         assert!(!user.contains(ContextBuilder::RUNTIME_CONTEXT_TAG));
     }

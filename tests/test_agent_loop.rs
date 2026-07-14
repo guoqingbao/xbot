@@ -1054,6 +1054,14 @@ async fn near_context_limit_compresses_context_before_next_request() {
     assert!(progress.iter().any(|msg| {
         msg.metadata.get("_tool_name").and_then(Value::as_str) == Some("context_compression_done")
     }));
+    assert!(progress.iter().any(|msg| {
+        msg.metadata.get("_context_update").and_then(Value::as_bool) == Some(true)
+            && msg
+                .metadata
+                .get("_context")
+                .and_then(Value::as_str)
+                .is_some_and(|context| context.contains("/100"))
+    }));
     drop(progress);
 
     let mut sessions = SessionManager::new(dir.path()).unwrap();

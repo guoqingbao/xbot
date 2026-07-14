@@ -15,7 +15,7 @@ use crate::tools::{
     ApprovalCallback, EditFileTool, ExecTool, GrepFilesTool, ListDirTool, ReadFileTool, ToolOutput,
     ToolRegistry, WebFetchTool, WebSearchTool, WriteFileTool,
 };
-use crate::util::workspace_state_dir;
+use crate::util::{truncate_tool_result, workspace_state_dir};
 
 #[derive(Debug, Clone)]
 pub enum SubagentNotification {
@@ -528,7 +528,7 @@ impl SubagentManager {
                     };
                     messages.push(ChatMessage {
                         role: "tool".to_string(),
-                        content: Some(output.into_value()),
+                        content: Some(truncate_tool_result(output.into_value(), ctx_window)),
                         tool_calls: None,
                         tool_call_id: Some(tool_call.id),
                         name: Some(tool_call.name),

@@ -28,7 +28,9 @@ use crate::tools::{
     ReadFileTool, SpawnTool, ToolOutput, ToolRegistry, WaitSubagentsTool, WebFetchTool,
     WebSearchTool, WriteFileTool,
 };
-use crate::util::{build_status_content, truncate_chars_ellipsis, workspace_state_dir};
+use crate::util::{
+    build_status_content, estimate_json_tokens, truncate_chars_ellipsis, workspace_state_dir,
+};
 
 pub type ModelSwitchCallback = Arc<dyn Fn(String, Option<usize>) -> Result<()> + Send + Sync>;
 
@@ -163,6 +165,7 @@ impl AgentLoop {
             .ok()
             .and_then(|models| find_model_context_window_tokens(&models, &resolved_model))
             .unwrap_or(context_window_tokens);
+        context.set_context_window_tokens(resolved_context_window_tokens);
         let subagents = SubagentManager::new(
             subagent_provider.unwrap_or_else(|| provider.clone()),
             workspace.clone(),
@@ -815,6 +818,8 @@ impl AgentLoop {
             let mut sessions = self.sessions.lock().expect("session manager lock poisoned");
             sessions.get_or_create(&session_key)?.get_history(0)
         };
+        self.context
+            .set_context_window_tokens(context_window_tokens);
         let initial_messages = self.context.build_messages(
             history,
             &msg.content,
@@ -963,6 +968,8 @@ impl AgentLoop {
             let session = sessions.get_or_create(&session_key)?;
             self.session_context_window_tokens(&session)
         };
+        self.context
+            .set_context_window_tokens(context_window_tokens);
         let initial_messages = self.context.build_messages(
             history,
             &msg.content,
@@ -1500,6 +1507,10 @@ impl AgentLoop {
             }
         };
         let compacted = rebuild_messages_with_context_summary(messages, summary);
+        let compacted_tokens = estimate_messages_prompt_tokens(&compacted);
+        self.record_context_estimate(compacted_tokens);
+        self.send_context_update_for_tokens(target, compacted_tokens, context_window_tokens, 0)
+            .await;
 
         self.send_backend_tool_hint(
             target,
@@ -1807,6 +1818,22 @@ impl AgentLoop {
         context_window_tokens: usize,
     ) {
         let prompt_tokens = response.usage.prompt_tokens;
+        self.send_context_update_for_tokens(
+            target,
+            prompt_tokens,
+            context_window_tokens,
+            response.usage.cached_prompt_tokens,
+        )
+        .await;
+    }
+
+    async fn send_context_update_for_tokens(
+        &self,
+        target: Option<&ProgressTarget>,
+        prompt_tokens: usize,
+        context_window_tokens: usize,
+        cached: usize,
+    ) {
         if prompt_tokens == 0 {
             return;
         }
@@ -1824,7 +1851,6 @@ impl AgentLoop {
         let Some(callback) = callback else {
             return;
         };
-        let cached = response.usage.cached_prompt_tokens;
         let context = format_context_usage(prompt_tokens, context_window_tokens, cached);
         let mut outbound = target.outbound(String::new());
         outbound
@@ -2200,6 +2226,15 @@ impl AgentLoop {
                 .last_context_prompt_tokens
                 .lock()
                 .expect("context prompt lock poisoned") = response.usage.prompt_tokens;
+        }
+    }
+
+    fn record_context_estimate(&self, context_tokens: usize) {
+        if context_tokens > 0 {
+            *self
+                .last_context_prompt_tokens
+                .lock()
+                .expect("context prompt lock poisoned") = context_tokens;
         }
     }
 
@@ -2779,6 +2814,24 @@ fn format_context_usage(
     } else {
         format!("{context_tokens}/{context_window_tokens} ({pct}%)")
     }
+}
+
+fn estimate_messages_prompt_tokens(messages: &[ChatMessage]) -> usize {
+    messages
+        .iter()
+        .map(|message| {
+            4 + message
+                .content
+                .as_ref()
+                .map(estimate_json_tokens)
+                .unwrap_or_default()
+                + message
+                    .tool_calls
+                    .as_ref()
+                    .map(|calls| calls.iter().map(estimate_json_tokens).sum::<usize>())
+                    .unwrap_or_default()
+        })
+        .sum()
 }
 
 fn build_context_compression_prompt(messages: &[ChatMessage], target_tokens: usize) -> String {

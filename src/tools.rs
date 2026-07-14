@@ -2018,7 +2018,9 @@ impl Tool for SpawnTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "spawn".to_string(),
-            description: "Spawn a background sub-agent for independent parallel work. The \
+            description: "Spawn a background sub-agent for independent parallel work. Use the \
+                smallest number of sub-agents that materially helps; most easy or sequential \
+                tasks need none. The \
                 sub-agent runs autonomously with its own context and tools (grep_files, \
                 read_file, edit_file, exec, etc). Use for: parallel investigation of 3+ \
                 independent files/modules, heavy exploration that would consume main context, \
