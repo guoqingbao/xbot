@@ -1,12 +1,15 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use base64::Engine;
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use serde_json::Value;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use xbot::util::{ensure_dir, tool_emoji, workspace_state_dir};
 
@@ -547,6 +550,11 @@ pub struct App {
     pub steer_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     scrollbar_geometry: Option<ScrollbarGeometry>,
     scrollbar_drag_offset: Option<u16>,
+    mouse_hint: Option<String>,
+    transcript_snapshot: Option<TranscriptSnapshot>,
+    text_selection: Option<ActiveTextSelection>,
+    clipboard_notice: Option<String>,
+    clipboard_notice_until: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -563,6 +571,27 @@ struct HeldTurn {
     reasoning: Option<String>,
     summary: Option<TurnSummary>,
     note: Option<String>,
+}
+
+#[derive(Clone)]
+struct TranscriptSnapshot {
+    origin_x: u16,
+    origin_y: u16,
+    visible_height: usize,
+    scroll_offset: usize,
+    lines: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct SelectionPoint {
+    line: usize,
+    column: usize,
+}
+
+struct ActiveTextSelection {
+    snapshot: TranscriptSnapshot,
+    start: SelectionPoint,
+    end: SelectionPoint,
 }
 
 impl App {
@@ -635,6 +664,11 @@ impl App {
             steer_tx: None,
             scrollbar_geometry: None,
             scrollbar_drag_offset: None,
+            mouse_hint: None,
+            transcript_snapshot: None,
+            text_selection: None,
+            clipboard_notice: None,
+            clipboard_notice_until: None,
         }
     }
 
@@ -686,6 +720,14 @@ impl App {
         self.animation_frame = self.animation_frame.wrapping_add(1);
         let has_animation = self.is_busy() || self.running_subagent_count() > 0;
         if has_animation && (prev / 3) != (self.animation_frame / 3) {
+            self.needs_redraw = true;
+        }
+        if self
+            .clipboard_notice_until
+            .is_some_and(|until| Instant::now() >= until)
+        {
+            self.clipboard_notice_until = None;
+            self.clipboard_notice = None;
             self.needs_redraw = true;
         }
     }
@@ -1290,18 +1332,45 @@ impl App {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
                 self.handle_key(key);
             }
-            Event::Mouse(mouse) => match mouse.kind {
-                MouseEventKind::ScrollUp => self.scroll_up(3),
-                MouseEventKind::ScrollDown => self.scroll_down(3),
-                MouseEventKind::Down(MouseButton::Left) => {
-                    self.begin_scrollbar_drag(mouse.column, mouse.row)
+            Event::Mouse(mouse) => {
+                if mouse.modifiers.contains(KeyModifiers::SHIFT) {
+                    match mouse.kind {
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            self.begin_text_selection(mouse.column, mouse.row);
+                        }
+                        MouseEventKind::Drag(MouseButton::Left) => {
+                            self.update_text_selection(mouse.column, mouse.row);
+                        }
+                        MouseEventKind::Up(MouseButton::Left) => {
+                            self.finish_text_selection(mouse.column, mouse.row);
+                        }
+                        _ => {}
+                    }
+                    return;
                 }
-                MouseEventKind::Drag(MouseButton::Left) => self.drag_scrollbar(mouse.row),
-                MouseEventKind::Up(MouseButton::Left) => {
-                    self.scrollbar_drag_offset = None;
+
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => self.scroll_up(3),
+                    MouseEventKind::ScrollDown => self.scroll_down(3),
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        if !self.begin_scrollbar_drag(mouse.column, mouse.row) {
+                            self.begin_text_selection(mouse.column, mouse.row);
+                        }
+                    }
+                    MouseEventKind::Drag(MouseButton::Left) => {
+                        if self.text_selection.is_some() {
+                            self.update_text_selection(mouse.column, mouse.row);
+                        } else {
+                            self.drag_scrollbar(mouse.row);
+                        }
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        self.scrollbar_drag_offset = None;
+                        self.finish_text_selection(mouse.column, mouse.row);
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
             Event::Paste(text) => {
                 if !self.show_help {
                     self.composer.insert_paste(&text);
@@ -1334,6 +1403,12 @@ impl App {
 
     fn handle_key(&mut self, key: KeyEvent) {
         self.needs_redraw = true;
+
+        if key.code == KeyCode::Esc && (self.text_selection.is_some() || self.mouse_hint.is_some())
+        {
+            self.cancel_text_selection();
+            return;
+        }
 
         if self.approval_dialog.is_some() {
             match key.code {
@@ -1707,16 +1782,123 @@ impl App {
         }
     }
 
-    fn begin_scrollbar_drag(&mut self, x: u16, y: u16) {
-        let Some(geometry) = self.scrollbar_geometry else {
+    pub fn set_transcript_snapshot(
+        &mut self,
+        origin_x: u16,
+        origin_y: u16,
+        visible_height: usize,
+        lines: Vec<String>,
+    ) {
+        self.transcript_snapshot = Some(TranscriptSnapshot {
+            origin_x,
+            origin_y,
+            visible_height,
+            scroll_offset: self.scroll_offset,
+            lines,
+        });
+    }
+
+    pub fn mouse_hint(&self) -> Option<&str> {
+        self.mouse_hint.as_deref()
+    }
+
+    pub fn clipboard_notice(&self) -> Option<&str> {
+        self.clipboard_notice.as_deref()
+    }
+
+    pub fn selection_columns(&self, line: usize) -> Option<(usize, usize)> {
+        let selection = self.text_selection.as_ref()?;
+        let (start, end) = ordered_selection_points(selection.start, selection.end);
+        if line < start.line || line > end.line {
+            return None;
+        }
+        let line_width = selection
+            .snapshot
+            .lines
+            .get(line)
+            .map(|line| UnicodeWidthStr::width(line.as_str()))
+            .unwrap_or(0);
+        let start_column = if line == start.line { start.column } else { 0 };
+        let end_column = if line == end.line {
+            end.column
+        } else {
+            line_width
+        };
+        Some((start_column.min(line_width), end_column.min(line_width)))
+    }
+
+    fn begin_text_selection(&mut self, x: u16, y: u16) {
+        let Some(snapshot) = self.transcript_snapshot.clone() else {
+            self.mouse_hint = Some("Drag to select and copy (Press ESC to cancel)".into());
+            self.needs_redraw = true;
             return;
+        };
+        let Some(point) = selection_point(&snapshot, x, y) else {
+            return;
+        };
+        self.text_selection = Some(ActiveTextSelection {
+            snapshot,
+            start: point,
+            end: point,
+        });
+        self.mouse_hint = Some("Drag to select and copy (Press ESC to cancel)".into());
+        self.clipboard_notice = None;
+        self.clipboard_notice_until = None;
+        self.needs_redraw = true;
+    }
+
+    fn cancel_text_selection(&mut self) {
+        self.text_selection = None;
+        self.mouse_hint = None;
+        self.needs_redraw = true;
+    }
+
+    fn update_text_selection(&mut self, x: u16, y: u16) {
+        let Some(selection) = self.text_selection.as_mut() else {
+            return;
+        };
+        let Some(point) = selection_point(&selection.snapshot, x, y) else {
+            return;
+        };
+        selection.end = point;
+        self.needs_redraw = true;
+    }
+
+    fn finish_text_selection(&mut self, x: u16, y: u16) {
+        if self.text_selection.is_none() {
+            if self.mouse_hint.take().is_some() {
+                self.needs_redraw = true;
+            }
+            return;
+        }
+        self.update_text_selection(x, y);
+        let selected = selected_text(self.text_selection.as_ref().unwrap());
+        self.text_selection = None;
+        self.mouse_hint = None;
+        self.needs_redraw = true;
+
+        let Some(selected) = selected.filter(|text| !text.is_empty()) else {
+            return;
+        };
+        let copied = copy_to_clipboard(&selected);
+        self.clipboard_notice = Some(if copied {
+            "Copied to clipboard".into()
+        } else {
+            "Clipboard copy unavailable".into()
+        });
+        self.clipboard_notice_until = Some(Instant::now() + Duration::from_secs(3));
+    }
+
+    fn begin_scrollbar_drag(&mut self, x: u16, y: u16) -> bool {
+        let Some(geometry) = self.scrollbar_geometry else {
+            return false;
         };
         if x != geometry.x
             || y < geometry.y
             || y >= geometry.y.saturating_add(geometry.height)
             || geometry.max_scroll == 0
         {
-            return;
+            return false;
         }
 
         let thumb_end = geometry.thumb_start.saturating_add(geometry.thumb_length);
@@ -1727,6 +1909,7 @@ impl App {
         };
         self.scrollbar_drag_offset = Some(offset);
         self.set_scrollbar_position(y.saturating_sub(offset), geometry);
+        true
     }
 
     fn drag_scrollbar(&mut self, y: u16) {
@@ -1843,6 +2026,88 @@ impl App {
             summary
         })
     }
+}
+
+fn selection_point(snapshot: &TranscriptSnapshot, x: u16, y: u16) -> Option<SelectionPoint> {
+    if x < snapshot.origin_x || y < snapshot.origin_y {
+        return None;
+    }
+    let row = y.saturating_sub(snapshot.origin_y) as usize;
+    if row >= snapshot.visible_height {
+        return None;
+    }
+    let line = snapshot.scroll_offset.saturating_add(row);
+    let text = snapshot.lines.get(line)?;
+    let column =
+        (x.saturating_sub(snapshot.origin_x) as usize).min(UnicodeWidthStr::width(text.as_str()));
+    Some(SelectionPoint { line, column })
+}
+
+fn ordered_selection_points(
+    start: SelectionPoint,
+    end: SelectionPoint,
+) -> (SelectionPoint, SelectionPoint) {
+    if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    }
+}
+
+fn selected_text(selection: &ActiveTextSelection) -> Option<String> {
+    let (start, end) = ordered_selection_points(selection.start, selection.end);
+    if start == end {
+        return None;
+    }
+
+    let mut result = String::new();
+    for line_index in start.line..=end.line {
+        if line_index > start.line {
+            result.push('\n');
+        }
+        let line = selection.snapshot.lines.get(line_index)?;
+        let line_width = UnicodeWidthStr::width(line.as_str());
+        let from = if line_index == start.line {
+            start.column
+        } else {
+            0
+        };
+        let to = if line_index == end.line {
+            end.column
+        } else {
+            line_width
+        };
+        result.push_str(&slice_display_columns(
+            line,
+            from.min(line_width),
+            to.min(line_width),
+        ));
+    }
+    Some(result)
+}
+
+fn slice_display_columns(text: &str, from: usize, to: usize) -> String {
+    let mut result = String::new();
+    let mut column: usize = 0;
+    for ch in text.chars() {
+        let width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        let next_column = column.saturating_add(width);
+        if next_column > from && column < to {
+            result.push(ch);
+        }
+        column = next_column;
+    }
+    result
+}
+
+fn copy_to_clipboard(text: &str) -> bool {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+    let sequence = format!("\x1b]52;c;{encoded}\x07");
+    let mut stdout = io::stdout();
+    stdout
+        .write_all(sequence.as_bytes())
+        .and_then(|_| stdout.flush())
+        .is_ok()
 }
 
 fn is_agents_overlay_shortcut(key: &KeyEvent) -> bool {
@@ -2288,6 +2553,128 @@ mod tests {
 
         assert_eq!(app.scroll_offset, 87);
         assert!(!app.auto_scroll);
+    }
+
+    #[test]
+    fn shift_mouse_events_do_not_move_scrollbar() {
+        let mut app = test_app();
+        app.set_scrollbar_geometry(Some(ScrollbarGeometry {
+            x: 10,
+            y: 2,
+            height: 10,
+            thumb_start: 2,
+            thumb_length: 2,
+            max_scroll: 100,
+        }));
+
+        app.handle_crossterm_event(Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 10,
+            row: 3,
+            modifiers: KeyModifiers::SHIFT,
+        }));
+        app.handle_crossterm_event(Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::SHIFT,
+        }));
+        app.handle_crossterm_event(Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::SHIFT,
+        }));
+
+        assert_eq!(app.scroll_offset, 0);
+        assert!(app.scrollbar_drag_offset.is_none());
+        assert!(app.mouse_hint.is_none());
+    }
+
+    #[test]
+    fn main_view_mouse_drag_shows_selection_hint_until_release() {
+        let mut app = test_app();
+        app.set_scrollbar_geometry(Some(ScrollbarGeometry {
+            x: 10,
+            y: 2,
+            height: 10,
+            thumb_start: 2,
+            thumb_length: 2,
+            max_scroll: 100,
+        }));
+
+        app.handle_crossterm_event(Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert_eq!(
+            app.mouse_hint(),
+            Some("Drag to select and copy (Press ESC to cancel)")
+        );
+
+        app.handle_crossterm_event(Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(app.mouse_hint().is_none());
+    }
+
+    #[test]
+    fn escape_cancels_active_text_selection_without_copying() {
+        let mut app = test_app();
+        app.set_transcript_snapshot(1, 1, 4, vec!["first line".into(), "second line".into()]);
+
+        app.handle_crossterm_event(Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        }));
+        app.handle_crossterm_event(Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 7,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(app.text_selection.is_some());
+
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(app.text_selection.is_none());
+        assert!(app.mouse_hint().is_none());
+        assert!(app.clipboard_notice().is_none());
+    }
+
+    #[test]
+    fn selected_text_preserves_multiline_transcript_content() {
+        let selection = ActiveTextSelection {
+            snapshot: TranscriptSnapshot {
+                origin_x: 1,
+                origin_y: 1,
+                visible_height: 4,
+                scroll_offset: 0,
+                lines: vec!["alpha line".into(), "beta line".into()],
+            },
+            start: SelectionPoint { line: 0, column: 6 },
+            end: SelectionPoint { line: 1, column: 4 },
+        };
+
+        assert_eq!(selected_text(&selection).as_deref(), Some("line\nbeta"));
+    }
+
+    #[test]
+    fn clipboard_notice_expires_after_its_deadline() {
+        let mut app = test_app();
+        app.clipboard_notice = Some("Copied to clipboard".into());
+        app.clipboard_notice_until = Some(Instant::now() - Duration::from_secs(1));
+
+        app.tick_animation();
+
+        assert!(app.clipboard_notice().is_none());
     }
 
     #[test]

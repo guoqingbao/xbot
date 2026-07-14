@@ -283,7 +283,7 @@ document.addEventListener('DOMContentLoaded', function() {
       { text: '  Workspace: ~/.xbot/workspace  ✓', html: '  Workspace: <span class="token-string">~/.xbot/workspace</span>  <span class="token-value">✓</span>' },
       { text: '', html: '' },
       { text: '$ xbot repl', html: '<span class="token-flag">$</span> <span class="token-keyword">xbot</span> repl' },
-      { text: '  xbot v0.1.8 · 26 providers · 12 tools · 18 skills', html: '  <span class="token-comment">xbot v0.1.8</span> · <span class="token-func">26</span> providers · <span class="token-func">12</span> tools · <span class="token-func">18</span> skills' },
+      { text: '  xbot v0.1.9 · 26 providers · 12 tools · 18 skills', html: '  <span class="token-comment">xbot v0.1.9</span> · <span class="token-func">26</span> providers · <span class="token-func">12</span> tools · <span class="token-func">18</span> skills' },
       { text: '', html: '' },
       { text: '  > refactor auth module with tests', html: '  <span class="token-flag">&gt;</span> <span class="token-string">refactor auth module with tests</span>' },
       { text: '  Spawning 3 subagents...', html: '  Spawning <span class="token-func">3</span> subagents...' },

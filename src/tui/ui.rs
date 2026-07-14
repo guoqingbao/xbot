@@ -33,6 +33,7 @@ const SUMMARIZE_FG: Color = Color::Rgb(180, 140, 230);
 const SEPARATOR_FG: Color = Color::Rgb(55, 65, 85);
 const COMPOSER_BG: Color = Color::Rgb(16, 20, 30);
 const TRANSCRIPT_BG: Color = Color::Rgb(12, 14, 22);
+const SELECTION_BG: Color = Color::Rgb(45, 65, 95);
 const SIDEBAR_BG: Color = Color::Rgb(14, 17, 26);
 const SUBAGENT_RUNNING: Color = Color::Rgb(100, 180, 230);
 const SUBAGENT_DONE: Color = Color::Rgb(80, 200, 120);
@@ -90,6 +91,10 @@ pub fn render(f: &mut Frame, app: &mut App) {
     if app.show_session_overlay {
         render_session_overlay(f, area, app);
     }
+
+    if let Some(notice) = app.clipboard_notice() {
+        render_clipboard_notice(f, area, notice);
+    }
 }
 
 fn composer_height(input: &str, cursor: usize, area_width: u16) -> u16 {
@@ -112,11 +117,22 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
 
     let sep = Span::styled(" │ ", Style::default().fg(BORDER_DIM));
 
-    let mut spans = vec![
-        Span::styled(
-            " ■ xbot ",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ),
+    let mut spans = vec![Span::styled(
+        " ■ xbot ",
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+    )];
+
+    if let Some(hint) = app.mouse_hint() {
+        spans.push(sep.clone());
+        spans.push(Span::styled(
+            hint,
+            Style::default()
+                .fg(SUMMARIZE_FG)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    spans.extend([
         sep.clone(),
         Span::styled(
             format!("main {}", app.model),
@@ -131,7 +147,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
         ),
         sep.clone(),
         Span::styled(status_icon, Style::default().fg(status_color)),
-    ];
+    ]);
 
     let subagent_models = distinct_subagent_models(app);
     if !subagent_models.is_empty() {
@@ -227,11 +243,31 @@ fn render_transcript(f: &mut Frame, area: Rect, app: &mut App) {
 
     app.total_lines = lines.len();
     app.clamp_scroll(inner_height);
+    app.set_transcript_snapshot(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        inner_height,
+        lines.iter().map(transcript_line_text).collect(),
+    );
 
     let visible_start = app.scroll_offset;
     let visible_end = (visible_start + inner_height).min(lines.len());
     let visible: Vec<Line<'static>> = if visible_start < lines.len() {
-        lines[visible_start..visible_end].to_vec()
+        lines[visible_start..visible_end]
+            .iter()
+            .enumerate()
+            .map(|(offset, line)| {
+                let line_index = visible_start + offset;
+                if app
+                    .selection_columns(line_index)
+                    .is_some_and(|(from, to)| from < to)
+                {
+                    line.clone().patch_style(Style::default().bg(SELECTION_BG))
+                } else {
+                    line.clone()
+                }
+            })
+            .collect()
     } else {
         Vec::new()
     };
@@ -737,6 +773,13 @@ fn build_transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     }
 
     lines
+}
+
+fn transcript_line_text(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
 }
 
 fn render_reasoning_block(lines: &mut Vec<Line<'static>>, reasoning: Option<&str>) {
@@ -1655,7 +1698,8 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
                 ("↑ / ↓", "Scroll transcript"),
                 ("Shift+↑ / Shift+↓", "Browse input history"),
                 ("PgUp / PgDn", "Page scroll"),
-                ("Mouse wheel", "Scroll transcript"),
+                ("Mouse wheel / drag", "Scroll transcript"),
+                ("Drag", "Select and copy text (Esc cancels)"),
             ],
         ),
         (
@@ -1710,6 +1754,35 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
 
     let help = Paragraph::new(Text::from(text_lines)).block(block);
     f.render_widget(help, popup);
+}
+
+fn render_clipboard_notice(f: &mut Frame, area: Rect, notice: &str) {
+    let text_width = UnicodeWidthStr::width(notice).min(area.width.saturating_sub(8) as usize);
+    let width = (text_width as u16)
+        .saturating_add(4)
+        .min(area.width.saturating_sub(2));
+    let height = 3.min(area.height);
+    if width == 0 || height == 0 {
+        return;
+    }
+    let popup = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SUCCESS_FG))
+        .style(Style::default().bg(HEADER_BG));
+    let paragraph = Paragraph::new(Line::from(Span::styled(
+        notice,
+        Style::default().fg(SUCCESS_FG).add_modifier(Modifier::BOLD),
+    )))
+    .alignment(Alignment::Center)
+    .block(block);
+    f.render_widget(Clear, popup);
+    f.render_widget(paragraph, popup);
 }
 
 fn render_approval_overlay(f: &mut Frame, area: Rect, app: &super::app::App) {
