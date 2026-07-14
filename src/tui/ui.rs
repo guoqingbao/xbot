@@ -10,8 +10,8 @@ use ratatui::widgets::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::app::{
-    ActiveStreaming, AgentState, App, EditDiff, HistoryEntry, StreamSegment, SubagentStatus,
-    SubagentTokenUsage,
+    ActiveStreaming, AgentState, App, EditDiff, HistoryEntry, ScrollbarGeometry, StreamSegment,
+    SubagentStatus, SubagentTokenUsage,
 };
 use super::markdown;
 
@@ -246,8 +246,10 @@ fn render_transcript(f: &mut Frame, area: Rect, app: &mut App) {
     f.render_widget(paragraph, area);
 
     if lines.len() > inner_height {
-        let mut scrollbar_state = ScrollbarState::new(lines.len().saturating_sub(inner_height))
-            .position(app.scroll_offset);
+        let max_scroll = lines.len().saturating_sub(inner_height);
+        let mut scrollbar_state = ScrollbarState::new(max_scroll.saturating_add(1))
+            .position(app.scroll_offset)
+            .viewport_content_length(inner_height);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("▲"))
             .end_symbol(Some("▼"))
@@ -261,7 +263,25 @@ fn render_transcript(f: &mut Frame, area: Rect, app: &mut App) {
             width: 1,
             height: area.height.saturating_sub(2),
         };
+        let track_y = scrollbar_area.y.saturating_add(1);
+        let track_height = scrollbar_area.height.saturating_sub(2);
+        let thumb_length = ((track_height as usize * inner_height) / lines.len())
+            .max(1)
+            .min(track_height as usize) as u16;
+        let travel = track_height.saturating_sub(thumb_length) as usize;
+        let thumb_start = track_y
+            .saturating_add((travel.saturating_mul(app.scroll_offset) / max_scroll.max(1)) as u16);
+        app.set_scrollbar_geometry(Some(ScrollbarGeometry {
+            x: scrollbar_area.x,
+            y: track_y,
+            height: track_height,
+            thumb_start,
+            thumb_length,
+            max_scroll,
+        }));
         f.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+    } else {
+        app.set_scrollbar_geometry(None);
     }
 }
 

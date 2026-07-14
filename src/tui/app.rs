@@ -3,7 +3,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
 use serde_json::Value;
 
 use xbot::util::{ensure_dir, tool_emoji, workspace_state_dir};
@@ -168,6 +170,16 @@ pub struct ToolActivity {
 pub struct QueuedPrompt {
     pub prompt: String,
     pub show_in_history: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScrollbarGeometry {
+    pub x: u16,
+    pub y: u16,
+    pub height: u16,
+    pub thumb_start: u16,
+    pub thumb_length: u16,
+    pub max_scroll: usize,
 }
 
 impl QueuedPrompt {
@@ -533,6 +545,8 @@ pub struct App {
     pub session_delete_queue: Vec<String>,
     pub available_sessions: Vec<xbot::storage::SessionSummary>,
     pub steer_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    scrollbar_geometry: Option<ScrollbarGeometry>,
+    scrollbar_drag_offset: Option<u16>,
 }
 
 #[derive(Clone)]
@@ -619,6 +633,8 @@ impl App {
             session_delete_queue: Vec::new(),
             available_sessions,
             steer_tx: None,
+            scrollbar_geometry: None,
+            scrollbar_drag_offset: None,
         }
     }
 
@@ -1274,13 +1290,18 @@ impl App {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
                 self.handle_key(key);
             }
-            Event::Mouse(mouse) => {
-                if matches!(mouse.kind, MouseEventKind::ScrollUp) {
-                    self.scroll_up(3);
-                } else if matches!(mouse.kind, MouseEventKind::ScrollDown) {
-                    self.scroll_down(3);
+            Event::Mouse(mouse) => match mouse.kind {
+                MouseEventKind::ScrollUp => self.scroll_up(3),
+                MouseEventKind::ScrollDown => self.scroll_down(3),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.begin_scrollbar_drag(mouse.column, mouse.row)
                 }
-            }
+                MouseEventKind::Drag(MouseButton::Left) => self.drag_scrollbar(mouse.row),
+                MouseEventKind::Up(MouseButton::Left) => {
+                    self.scrollbar_drag_offset = None;
+                }
+                _ => {}
+            },
             Event::Paste(text) => {
                 if !self.show_help {
                     self.composer.insert_paste(&text);
@@ -1676,6 +1697,55 @@ impl App {
     pub fn scroll_down(&mut self, lines: usize) {
         self.scroll_offset = self.scroll_offset.saturating_add(lines);
         self.auto_scroll = false;
+        self.needs_redraw = true;
+    }
+
+    pub fn set_scrollbar_geometry(&mut self, geometry: Option<ScrollbarGeometry>) {
+        self.scrollbar_geometry = geometry;
+        if self.scrollbar_geometry.is_none() {
+            self.scrollbar_drag_offset = None;
+        }
+    }
+
+    fn begin_scrollbar_drag(&mut self, x: u16, y: u16) {
+        let Some(geometry) = self.scrollbar_geometry else {
+            return;
+        };
+        if x != geometry.x
+            || y < geometry.y
+            || y >= geometry.y.saturating_add(geometry.height)
+            || geometry.max_scroll == 0
+        {
+            return;
+        }
+
+        let thumb_end = geometry.thumb_start.saturating_add(geometry.thumb_length);
+        let offset = if y >= geometry.thumb_start && y < thumb_end {
+            y - geometry.thumb_start
+        } else {
+            geometry.thumb_length / 2
+        };
+        self.scrollbar_drag_offset = Some(offset);
+        self.set_scrollbar_position(y.saturating_sub(offset), geometry);
+    }
+
+    fn drag_scrollbar(&mut self, y: u16) {
+        let (Some(geometry), Some(offset)) = (self.scrollbar_geometry, self.scrollbar_drag_offset)
+        else {
+            return;
+        };
+        self.set_scrollbar_position(y.saturating_sub(offset), geometry);
+    }
+
+    fn set_scrollbar_position(&mut self, thumb_start: u16, geometry: ScrollbarGeometry) {
+        let travel = geometry.height.saturating_sub(geometry.thumb_length) as usize;
+        let relative = thumb_start.saturating_sub(geometry.y).min(travel as u16) as usize;
+        self.scroll_offset = if travel == 0 {
+            0
+        } else {
+            relative.saturating_mul(geometry.max_scroll) / travel
+        };
+        self.auto_scroll = self.scroll_offset >= geometry.max_scroll;
         self.needs_redraw = true;
     }
 
@@ -2189,6 +2259,35 @@ mod tests {
             elapsed: Duration::from_millis(1),
             subagent_summaries: Vec::new(),
         }
+    }
+
+    #[test]
+    fn scrollbar_mouse_drag_updates_transcript_position() {
+        let mut app = test_app();
+        app.set_scrollbar_geometry(Some(ScrollbarGeometry {
+            x: 10,
+            y: 2,
+            height: 10,
+            thumb_start: 2,
+            thumb_length: 2,
+            max_scroll: 100,
+        }));
+
+        app.handle_crossterm_event(Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 10,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        }));
+        app.handle_crossterm_event(Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        }));
+
+        assert_eq!(app.scroll_offset, 87);
+        assert!(!app.auto_scroll);
     }
 
     #[test]

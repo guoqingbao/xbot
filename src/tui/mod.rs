@@ -10,7 +10,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+};
 use crossterm::terminal::{
     Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, ScrollUp, disable_raw_mode,
     enable_raw_mode,
@@ -62,6 +64,7 @@ impl Drop for TerminalGuard {
         let _ = execute!(
             stdout,
             DisableBracketedPaste,
+            DisableMouseCapture,
             LeaveAlternateScreen,
             cursor::Show
         );
@@ -95,6 +98,7 @@ pub async fn run_tui_repl(
         Clear(ClearType::Purge),
         cursor::MoveTo(0, 0),
         EnableBracketedPaste,
+        EnableMouseCapture,
         cursor::Hide
     )?;
     let _guard = TerminalGuard;
