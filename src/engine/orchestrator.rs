@@ -2527,7 +2527,9 @@ fn parse_model_command(trimmed: &str) -> Option<Option<String>> {
             return Some(None);
         }
         if trimmed.len() > prefix.len()
-            && trimmed[..prefix.len()].eq_ignore_ascii_case(prefix)
+            && trimmed
+                .get(..prefix.len())
+                .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
             && trimmed[prefix.len()..].starts_with(char::is_whitespace)
         {
             return Some(Some(trimmed[prefix.len()..].trim().to_string()));
@@ -3298,7 +3300,7 @@ fn strip_runtime_context_text(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_iteration_limit_message, build_repeated_tool_loop_message,
+        build_iteration_limit_message, build_repeated_tool_loop_message, parse_model_command,
         sanitize_message_for_storage, strip_runtime_context_text, summarize_tool_result_progress,
         truncate_for_diagnostic,
     };
@@ -3306,6 +3308,39 @@ mod tests {
     use crate::storage::ChatMessage;
     use crate::tools::ToolOutput;
     use serde_json::json;
+
+    #[test]
+    fn model_command_ignores_unicode_messages() {
+        // Exercise two-, three- and four-byte characters across both prefix lengths.
+        for ch in ['é', '│', '🦀'] {
+            for padding in 0..=6 {
+                let message = format!("{}{ch} output", "x".repeat(padding));
+                assert_eq!(parse_model_command(&message), None, "{message:?}");
+            }
+        }
+        for message in ["", "/mod", "models", "/models", "modelé", "/model🦀"] {
+            assert_eq!(parse_model_command(message), None, "{message:?}");
+        }
+    }
+
+    #[test]
+    fn model_command_preserves_case_whitespace_and_unicode_arguments() {
+        for command in ["/model", "model", "/MODEL", "MoDeL"] {
+            assert_eq!(parse_model_command(command), Some(None));
+            for separator in [" ", "\t", "\n", "\u{2003}"] {
+                let input = format!("{command}{separator}模型/🦀  ");
+                assert_eq!(
+                    parse_model_command(&input),
+                    Some(Some("模型/🦀".to_string())),
+                    "{input:?}"
+                );
+            }
+            assert_eq!(
+                parse_model_command(&format!("{command} ")),
+                Some(Some(String::new()))
+            );
+        }
+    }
 
     #[test]
     fn iteration_limit_message_includes_recent_tool_output() {

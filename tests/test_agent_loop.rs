@@ -86,6 +86,56 @@ async fn agent_loop_executes_tool_then_returns_final_answer() {
 }
 
 #[tokio::test]
+async fn agent_loop_accepts_opentofu_output_with_unicode_borders() {
+    let dir = tempdir().unwrap();
+    let provider = Arc::new(QueuedProvider::new(
+        "test-model",
+        vec![LlmResponse {
+            content: Some("The resource could not be created.".to_string()),
+            tool_calls: Vec::new(),
+            finish_reason: "stop".to_string(),
+            usage: LlmUsage::default(),
+            reasoning_content: None,
+            thinking_blocks: None,
+        }],
+    ));
+    let agent = AgentLoop::new(
+        provider,
+        dir.path(),
+        Some("test-model".to_string()),
+        8,
+        5,
+        8_000,
+        32 * 1024,
+        Default::default(),
+        None,
+        ExecToolConfig {
+            enable: false,
+            timeout: 60,
+            path_append: String::new(),
+        },
+        false,
+        None,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+    let pasted_output = "╷\n│ Error: Failed to create resource\n╵";
+    let response = agent
+        .process_direct(pasted_output, "cli:direct", "cli", "direct")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(response.content, "The resource could not be created.");
+
+    let mut sessions = SessionManager::new(dir.path()).unwrap();
+    let session = sessions.get_or_create("cli:direct").unwrap();
+    assert!(session.messages.iter().any(|message| {
+        message.role == "user" && message.content == Some(json!(pasted_output))
+    }));
+}
+
+#[tokio::test]
 async fn zero_max_tool_iterations_means_unbounded_until_completion() {
     let dir = tempdir().unwrap();
     let file = dir.path().join("note.txt");
